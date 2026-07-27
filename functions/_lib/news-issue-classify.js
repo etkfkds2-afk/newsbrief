@@ -61,17 +61,22 @@ function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = fals
   const groups = [];
   for (const entry of parsed) {
     const title = String(entry?.title || '').trim().slice(0, 40);
-    const indices = Array.isArray(entry?.indices)
+    const rawIndices = Array.isArray(entry?.indices)
       ? [...new Set(entry.indices)].filter(i => Number.isInteger(i) && i >= 0 && i < articles.length && !used.has(i))
       : [];
+    // Keep named baduk events out of broad AI-created groups. They are added
+    // as deterministic standalone tiles below, even when only one exists.
+    const indices = allowStandaloneEvents
+      ? rawIndices.filter(i => !isStandaloneEventArticle(articles[i]))
+      : rawIndices;
     if (!title || !indices.length) continue;
     // A match against an existing issue title is kept at any size (it's
     // extending an already-established story); a brand-new title still
     // needs 2+ articles to justify its own tile.
-    const standaloneEvent = allowStandaloneEvents && indices.length === 1 && isStandaloneEventArticle(articles[indices[0]]);
-    if (!existingTitles.has(title) && indices.length < 2 && !standaloneEvent) continue;
+    if (!existingTitles.has(title) && indices.length < 2) continue;
     indices.forEach(i => used.add(i));
-    groups.push({ title, url_keys: indices.map(i => articles[i].url_key) });
+    const genericMisc = /^(?:기타|그 밖의)(?:\s*(?:바둑\s*)?(?:소식|뉴스|이슈))?$/u.test(title);
+    groups.push({ title: genericMisc ? '기타' : title, url_keys: indices.map(i => articles[i].url_key), misc: genericMisc });
   }
   const leftover = articles.map((_, i) => i).filter(i => !used.has(i));
   const standaloneLeftover = allowStandaloneEvents

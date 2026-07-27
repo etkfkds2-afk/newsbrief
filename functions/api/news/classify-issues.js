@@ -58,8 +58,7 @@ export async function onRequestPost({ request, env }) {
       .map(group => ({
         ...group,
         url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)
-          && !((group.misc || String(group.key || '').endsWith('|ai:misc'))
-            && category === '바둑' && standaloneEventKeys.has(key)))
+          && !(category === '바둑' && standaloneEventKeys.has(key)))
       }))
       .filter(group => group.url_keys.length > 0);
 
