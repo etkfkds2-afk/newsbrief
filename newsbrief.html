@@ -105,7 +105,8 @@ function render(){
   const savedLabel=state.section==='baduk'?['저장한 바둑 뉴스','']:['저장한 뉴스',''];
   const base=sub==='saved'?savedLabel:(periodLabels[sub]||['뉴스','']);
   const selectedIssue=state.issueKey?state.issueItems.find(i=>i.key===state.issueKey):null;
-  const label=selectedIssue?[selectedIssue.title,'']:(state.section==='general'&&state.category?[`${state.category} 최신 뉴스`,'']:base);
+  const categoryPeriod=sub==='weekly'?'주간':sub==='monthly'?'월간':'';
+  const label=selectedIssue?[selectedIssue.title,'']:(state.section==='general'&&state.category?[`${categoryPeriod} ${state.category} 3줄 요약`.trim(),'']:base);
   $('sectionTitle').innerHTML=`${esc(label[0])}${label[1]?`<span class="sectionDesc">${esc(label[1])}</span>`:''}`;
   const visible=state.items;
   $('cards').innerHTML=visible.length?visible.map(cardHtml).join(''):'<div class="empty">조건에 맞는 뉴스가 아직 없습니다.</div>';

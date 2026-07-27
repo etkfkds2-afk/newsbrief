@@ -192,6 +192,8 @@ test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
   assert.match(html, /if\(sub!=='saved'&&!state\.category\)p\.set\('issues','1'\)/);
+  assert.match(html, /sub==='weekly'\?'주간':sub==='monthly'\?'월간'/);
+  assert.match(html, /\$\{categoryPeriod\} \$\{state\.category\} 3줄 요약/);
 });
 
 test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공한다', async () => {
