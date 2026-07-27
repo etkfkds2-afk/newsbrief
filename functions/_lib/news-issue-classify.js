@@ -1,4 +1,5 @@
 const CLASSIFY_MODEL = 'claude-sonnet-5';
+const WORKERS_AI_CLASSIFY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function buildInstructions(hasExisting) {
   return `당신은 한국 뉴스 데스크의 편집자다. ${hasExisting ? '이미 분류된 기존 이슈 목록과, ' : ''}아직 분류되지 않은 새 기사 목록을 준다.
@@ -100,14 +101,37 @@ async function classifyWithAnthropic(env, articles, existingIssues) {
   };
 }
 
+async function classifyWithWorkersAi(env, articles, existingIssues) {
+  const result = await env.AI.run(WORKERS_AI_CLASSIFY_MODEL, {
+    messages: [
+      { role: 'system', content: buildInstructions(existingIssues.length > 0) },
+      { role: 'user', content: buildPrompt(articles, existingIssues) }
+    ],
+    max_tokens: 4096,
+    temperature: 0
+  });
+  const text = result?.response || result?.result?.response || '';
+  const parsed = extractJsonArray(text);
+  if (!parsed) throw new Error(`Cloudflare AI 응답을 JSON으로 해석하지 못했습니다: ${text.slice(0, 300)}`);
+  return toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)));
+}
+
 // existingIssues: [{key, title}] — issues already in the cache, so the
 // caller can send only genuinely new articles and have them merged in
 // instead of re-classifying everything from scratch every run.
 export async function classifyIssues(env, articles, existingIssues = []) {
   if (!articles.length) return { groups: [], provider: 'none' };
+  let cloudflareError = '';
+  if (env?.AI) {
+    try {
+      return { groups: await classifyWithWorkersAi(env, articles, existingIssues), provider: 'cloudflare' };
+    } catch (error) {
+      cloudflareError = String(error?.message || error).slice(0, 300);
+    }
+  }
   if (env?.ANTHROPIC_API_KEY) {
     const result = await classifyWithAnthropic(env, articles, existingIssues);
-    return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL };
+    return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL, cloudflare_error: cloudflareError };
   }
-  return { groups: [], provider: 'none' };
+  return { groups: [], provider: cloudflareError ? 'cloudflare-failed' : 'none', cloudflare_error: cloudflareError };
 }

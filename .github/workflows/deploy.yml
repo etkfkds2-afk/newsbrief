@@ -21,8 +21,8 @@ on:
     # Collect and refresh all news views every three hours. URL keys in D1 make
     # each collection idempotent, so a slower cadence avoids needless requests.
     - cron: '0 */3 * * *'
-    # Once a day, update both issue-keyword caches with Claude. Keep this off
-    # the 3-hour collection cadence.
+    # Once a day, use any remaining Workers AI call for issue keywords, then
+    # fall back to Claude. Keep this off the 3-hour collection cadence.
     - cron: '0 21 * * *'
 
 jobs:
@@ -149,7 +149,7 @@ jobs:
        (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *'))
     runs-on: ubuntu-latest
     steps:
-      - name: Classify issue keywords with Claude
+      - name: Classify issue keywords with remaining Workers AI or Claude
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           CLASSIFY_CATEGORY: ${{ inputs.classify_category }}

@@ -1,7 +1,9 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
 import { classifyIssues } from '../../_lib/news-issue-classify.js';
-import { canUseClaude, recordClaudeUsage } from '../../_lib/news-ai-budget.js';
+import {
+  blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
+} from '../../_lib/news-ai-budget.js';
 
 const SUPPORTED_CATEGORIES = new Set(['바둑', '일반']);
 const MAX_NEW_ARTICLES_PER_RUN = 40;
@@ -69,20 +71,36 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
-    const budget = await canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD);
-    if (!budget.allowed) return json({
+    const [cloudflare, budget] = await Promise.all([
+      reserveCloudflareCall(env),
+      canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD)
+    ]);
+    if (!cloudflare.allowed && !budget.allowed) return json({
       ok: true, category, count: articles.length, new_count: newArticles.length,
       provider: 'budget-blocked', monthly_micro_usd: budget.spent,
       issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
     const existingIssues = existingPayload.filter(group => !group.misc && !String(group.key || '').endsWith('|ai:misc'));
-    const { groups, provider, model, usage } = await classifyIssues(
-      env,
+    const { groups, provider, model, usage, cloudflare_error } = await classifyIssues(
+      {
+        ...env,
+        AI: cloudflare.allowed ? env.AI : undefined,
+        ANTHROPIC_API_KEY: budget.allowed ? env.ANTHROPIC_API_KEY : undefined
+      },
       newArticles,
       existingIssues.map(group => ({ key: group.key, title: group.title }))
     );
+    if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
+      await blockCloudflareForToday(env);
+    }
     const recorded = provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent };
+
+    if (!groups.length && provider === 'cloudflare-failed') return json({
+      ok: true, category, count: articles.length, new_count: newArticles.length,
+      provider, cloudflare_error, monthly_micro_usd: budget.spent,
+      issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+    });
 
     const byKey = new Map(existingPayload.map(group => [group.key, group]));
     let nextIndex = existingPayload.reduce((max, group) => {
@@ -119,6 +137,8 @@ export async function onRequestPost({ request, env }) {
       count: articles.length,
       new_count: newArticles.length,
       provider,
+      cloudflare_calls_today: cloudflare.used,
+      cloudflare_error,
       usage,
       cost_micro_usd: recorded.cost,
       monthly_micro_usd: recorded.spent,

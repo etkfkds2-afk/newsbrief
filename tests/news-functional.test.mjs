@@ -36,9 +36,10 @@ test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
 
 test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(source, /DAILY_AI_CALL_LIMIT = 4/);
-  assert.match(source, /ai_budget_day/);
-  assert.match(source, /ai_blocked/);
+  const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
+  assert.match(budget, /CLOUDFLARE_DAILY_CALL_LIMIT = 4/);
+  assert.match(budget, /ai_budget_day/);
+  assert.match(budget, /ai_blocked/);
 });
 
 test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
@@ -142,12 +143,13 @@ test('자동 수집과 화면 갱신은 3시간 주기로 동작한다', async (
   assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),10800000\)/);
 });
 
-test('일일 이슈 분류는 바둑과 일반을 모두 Claude 전용으로 처리한다', async () => {
+test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallback한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
   assert.match(workflow, /categories=\("바둑" "일반"\)/);
-  assert.match(workflow, /Classify issue keywords with Claude/);
-  assert.doesNotMatch(classifier, /env\.AI\.run/);
+  assert.match(workflow, /remaining Workers AI or Claude/);
+  assert.match(classifier, /env\.AI\.run/);
+  assert.match(classifier, /WORKERS_AI_CLASSIFY_MODEL/);
   assert.match(classifier, /classifyWithAnthropic/);
 });
 

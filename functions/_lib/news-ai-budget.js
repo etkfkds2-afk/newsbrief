@@ -1,5 +1,6 @@
 export const CLAUDE_MONTHLY_TARGET_MICRO_USD = 1_700_000;
 export const CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 1_900_000;
+export const CLOUDFLARE_DAILY_CALL_LIMIT = 4;
 
 const PRICES = {
   'claude-haiku-4-5-20251001': { input: 1, output: 5 },
@@ -51,4 +52,30 @@ export async function recordClaudeUsage(env, model, usage = {}) {
     .bind(cost).run();
   const row = await env.DB.prepare("SELECT value FROM news_state WHERE key='claude_monthly_micro_usd'").first();
   return { cost, spent: Number(row?.value || 0) };
+}
+
+export async function reserveCloudflareCall(env) {
+  if (!env?.AI) return { allowed: false, used: 0, reason: 'not-bound' };
+  const day = new Date().toISOString().slice(0, 10);
+  const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='ai_budget_day'").first();
+  if (String(dayRow?.value || '') !== day) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_blocked',0) ON CONFLICT(key) DO UPDATE SET value=0")
+    ]);
+  }
+  const [blockedRow, callsRow] = await Promise.all([
+    env.DB.prepare("SELECT value FROM news_state WHERE key='ai_blocked'").first(),
+    env.DB.prepare("SELECT value FROM news_state WHERE key='ai_calls_today'").first()
+  ]);
+  const used = Number(callsRow?.value || 0);
+  if (Number(blockedRow?.value || 0)) return { allowed: false, used, reason: 'blocked' };
+  if (used >= CLOUDFLARE_DAILY_CALL_LIMIT) return { allowed: false, used, reason: 'daily-limit' };
+  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
+  return { allowed: true, used: used + 1, reason: '' };
+}
+
+export async function blockCloudflareForToday(env) {
+  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_blocked',1) ON CONFLICT(key) DO UPDATE SET value=1").run();
 }

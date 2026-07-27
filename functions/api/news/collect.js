@@ -3,7 +3,9 @@ import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, sha256
 } from '../../_lib/news-db.js';
-import { canUseClaude, recordClaudeUsage } from '../../_lib/news-ai-budget.js';
+import {
+  blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
+} from '../../_lib/news-ai-budget.js';
 
 const SEARCHES = [
   ['바둑', '바둑 대회 프로기사'],
@@ -24,7 +26,6 @@ const BADUK_SEARCHES = [
 ];
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
-const DAILY_AI_CALL_LIMIT = 4;
 const DAILY_ANTHROPIC_CALL_LIMIT = 6;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
@@ -288,25 +289,13 @@ async function collectPopularity(slot = 0) {
 }
 
 async function reserveAiCall(env, diagnostics) {
-  const day = new Date().toISOString().slice(0, 10);
-  const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='ai_budget_day'").first();
-  if (String(dayRow?.value || '') !== day) {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_blocked',0) ON CONFLICT(key) DO UPDATE SET value=0")
-    ]);
-  }
-  const blocked = await env.DB.prepare("SELECT value FROM news_state WHERE key='ai_blocked'").first();
-  const calls = await env.DB.prepare("SELECT value FROM news_state WHERE key='ai_calls_today'").first();
-  const used = Number(calls?.value || 0);
-  if (Number(blocked?.value || 0) || used >= DAILY_AI_CALL_LIMIT) {
+  const reservation = await reserveCloudflareCall(env);
+  if (!reservation.allowed) {
     diagnostics.ai_budget_exhausted = true;
-    diagnostics.ai_calls_today = used;
+    diagnostics.ai_calls_today = reservation.used;
     return false;
   }
-  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
-  diagnostics.ai_calls_today = used + 1;
+  diagnostics.ai_calls_today = reservation.used;
   return true;
 }
 
@@ -337,7 +326,7 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
 }
 
 async function blockAiForToday(env, diagnostics) {
-  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('ai_blocked',1) ON CONFLICT(key) DO UPDATE SET value=1").run();
+  await blockCloudflareForToday(env);
   diagnostics.ai_budget_exhausted = true;
   diagnostics.ai_provider_limited = true;
 }
