@@ -194,8 +194,8 @@ async function repairGeneralArticleTimes(env, limit = 10) {
   const cursor = Number(cursorRow?.value || 0);
   const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
     WHERE id>? AND category<>'바둑' AND summary_quality='full'
-      AND published_at GLOB '????-??-??'
-      AND datetime(published_at)>=datetime('now','-30 days')
+      AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
     ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];
   if (!candidates.length) {
@@ -773,7 +773,8 @@ async function collect(env, {
       if (exists.summary_quality === 'full') {
         const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
         const hasDateOnly = isPopular && /^\d{4}-\d{2}-\d{2}$/.test(String(exists.published_at || ''));
-        if (!exists.image_url || hasSyntheticTime || hasDateOnly) {
+        const hasMissingTime = !String(exists.published_at || '').trim();
+        if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime) {
           const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);

@@ -165,13 +165,14 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
   assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 
-test('날짜만 남은 일반기사는 원문 발행시각을 묶음 복구한다', async () => {
+test('날짜만 있거나 발행시간이 빈 일반기사는 원문 발행시각을 묶음 복구한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(collector, /repairGeneralArticleTimes/);
-  assert.match(collector, /published_at GLOB '....-..-..'/);
+  assert.match(collector, /TRIM\(published_at\)='' OR published_at GLOB '....-..-..'/);
   assert.match(collector, /general_time_repair_cursor/);
   assert.match(collector, /hasDateOnly/);
+  assert.match(collector, /hasMissingTime/);
   assert.match(workflow, /repair_times=1/);
 });
 
@@ -285,10 +286,10 @@ test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시�
   assert.match(source, /COALESCE\(f\.attempts,0\), COALESCE\(f\.last_attempt,'1970-01-01'\)/);
 });
 
-test('이미 정상 요약인 기사는 이미지가 없어도 AI 요약을 다시 호출하지 않는다', async () => {
+test('이미 정상 요약인 기사는 메타데이터만 보강하고 AI 요약을 다시 호출하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
-  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly\)/);
+  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly \|\| hasMissingTime\)/);
   assert.match(source, /return 0;\s*}\s*if \(!hasPublicationCapacity/);
 });
 
@@ -355,6 +356,8 @@ test('일반 뉴스 카드는 인기 기사 선별 후 발행시간 최신순으
   assert.match(html, /const sortByArticleTime=items=>\[\.\.\.\(items\|\|\[\]\)\]\.sort/);
   assert.match(html, /state\.items=isBaduk\?\(home\.items\|\|\[\]\):sortByArticleTime\(home\.items\)/);
   assert.match(html, /state\.items=isBaduk\?\(d\.items\|\|\[\]\):sortByArticleTime\(d\.items\)/);
+  assert.match(html, /state\.heroItems=state\.items\.slice\(0,6\)/);
+  assert.doesNotMatch(html, /fmt\(x\.published_at\|\|x\.fetched_at\)/);
 });
 
 test('보조 공급자 장애 중 신규 기사가 등록되면 경고만 남긴다', async () => {
