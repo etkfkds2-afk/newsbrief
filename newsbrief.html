@@ -21,6 +21,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const USER_KEY='newsbrief_user_id_v1';
 const userId=(()=>{let id=localStorage.getItem(USER_KEY);if(!id){id=crypto.randomUUID();localStorage.setItem(USER_KEY,id)}return id})();
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
+let activeLoadController=null,lastSuccessfulLoad=0;
 const parseTime=v=>new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(v||''))?`${v.replace(' ','T')}Z`:v);
 const sortByArticleTime=items=>[...(items||[])].sort((a,b)=>{
   const right=+parseTime(b.published_at||'');
@@ -39,8 +40,9 @@ const relTime=ms=>{
 let toastTimer;
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1800)}
 async function fetchTimed(url,options={},timeout=12000){
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
-  try{return await fetch(url,{...options,signal:controller.signal})}finally{clearTimeout(timer)}
+  const timeoutController=new AbortController(),timer=setTimeout(()=>timeoutController.abort(),timeout);
+  const signal=options.signal&&globalThis.AbortSignal?.any?AbortSignal.any([options.signal,timeoutController.signal]):(options.signal||timeoutController.signal);
+  try{return await fetch(url,{...options,signal})}finally{clearTimeout(timer)}
 }
 async function fetchJson(url,options){
   const config={...(options||{}),headers:{...(options?.headers||{}),'x-news-user':userId}};
@@ -60,10 +62,10 @@ async function fetchJson(url,options){
       const retryable=isGet&&(!isJson||response.status===408||response.status===425||response.status===429||response.status>=500);
       if(!retryable)throw Error(message);
       lastError=Error(message);
-    }catch(error){lastError=error}
+    }catch(error){if(error?.name==='AbortError'&&config.signal?.aborted)throw error;lastError=error}
     if(attempt<attempts-1)await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
   }
-  if(isGet){try{const cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(cached){toast('서버 연결이 불안정해 마지막 정상 뉴스를 표시합니다.');return cached}}catch{}}
+  if(isGet){try{const cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(cached){console.warn('NewsBrief API fallback',url);return cached}}catch{}}
   throw Error(lastError?.name==='AbortError'?'서버 응답이 지연되고 있습니다. 다시 시도해 주세요.':'서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.');
 }
 function clearResponseCache(){for(let i=sessionStorage.length-1;i>=0;i-=1){const key=sessionStorage.key(i);if(key?.startsWith(RESPONSE_CACHE_PREFIX))sessionStorage.removeItem(key)}}
@@ -122,6 +124,8 @@ function render(){
   $('cards').innerHTML=visible.length?visible.map(cardHtml).join(''):'<div class="empty">조건에 맞는 뉴스가 아직 없습니다.</div>';
 }
 async function load({silent=false}={}){
+  activeLoadController?.abort();
+  const loadController=new AbortController();activeLoadController=loadController;
   const requestId=++state.requestSeq;nav();
   if(!silent)$('cards').innerHTML='<div class="empty">뉴스를 불러오는 중입니다.</div>';
   const sub=currentSubview();
@@ -133,7 +137,7 @@ async function load({silent=false}={}){
       const homeHours=24;
       const homeLimit=isBaduk?30:10;
       const cardsUrl=`/api/news/articles?view=${view}&${catBit}&limit=${homeLimit}&hours=${homeHours}`;
-      const home=await fetchJson(cardsUrl);
+      const home=await fetchJson(cardsUrl,{signal:loadController.signal});
       if(requestId!==state.requestSeq)return;
       state.items=isBaduk?(home.items||[]):sortByArticleTime(home.items);
       state.heroItems=state.items.slice(0,6);
@@ -151,12 +155,13 @@ async function load({silent=false}={}){
       if(state.q)p.set('q',state.q);
       if(state.issueKey)p.set('issue_key',state.issueKey);
       if(sub!=='saved'&&!state.category)p.set('issues','1');
-      const d=await fetchJson(`/api/news/articles?${p}`);if(requestId!==state.requestSeq)return;
+      const d=await fetchJson(`/api/news/articles?${p}`,{signal:loadController.signal});if(requestId!==state.requestSeq)return;
       state.heroItems=[];state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);state.issueItems=d.issues||[];
     }
-    render()
+    lastSuccessfulLoad=Date.now();render()
   }
-  catch(e){if(requestId===state.requestSeq&&!silent)$('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}
+  catch(e){if(e?.name!=='AbortError'&&requestId===state.requestSeq&&!silent)$('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}
+  finally{if(activeLoadController===loadController)activeLoadController=null}
 }
 document.addEventListener('click',e=>{
   if(e.target.closest('#retryLoad')){load();return}
@@ -194,5 +199,5 @@ $('search').onsubmit=e=>{e.preventDefault();state.q=$('query').value.trim();load
 nav();load();
 // Keep home, latest, popular, and baduk views on the same three-hour refresh.
 setInterval(()=>load({silent:true}),10800000);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')load({silent:true})});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&Date.now()-lastSuccessfulLoad>300000)load({silent:true})});
 </script></body></html>

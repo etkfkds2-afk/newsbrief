@@ -354,7 +354,9 @@ test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공
   assert.match(html, /const attempts=isGet\?4:1/);
   assert.match(html, /response\.status===429/);
   assert.match(html, /sessionStorage\.setItem\(cacheKey/);
-  assert.match(html, /마지막 정상 뉴스를 표시합니다/);
+  assert.match(html, /NewsBrief API fallback/);
+  assert.match(html, /activeLoadController\?\.abort\(\)/);
+  assert.match(html, /Date\.now\(\)-lastSuccessfulLoad>300000/);
   assert.match(html, /id="retryLoad"/);
   assert.match(html, /closest\('#retryLoad'\)/);
 });
