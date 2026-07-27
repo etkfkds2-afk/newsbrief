@@ -119,7 +119,7 @@ async function load({silent=false}={}){
     if(sub==='home'&&!state.q&&!state.issueKey){
       const catBit=isBaduk?'category=%EB%B0%94%EB%91%91':'exclude_baduk=1';
       const view=isBaduk?'latest':'popular';
-      const homeHours=isBaduk?24:168;
+      const homeHours=24;
       const homeLimit=isBaduk?30:10;
       const heroUrl=`/api/news/articles?view=${view}&${catBit}&limit=6&hours=${homeHours}`;
       const cardsUrl=`/api/news/articles?view=${view}&${catBit}&limit=${homeLimit}&hours=${homeHours}`;

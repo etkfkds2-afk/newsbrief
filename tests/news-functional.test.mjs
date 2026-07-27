@@ -202,7 +202,7 @@ test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 
   assert.match(html, /const view=isBaduk\?'latest':'popular'/);
   assert.match(html, /sub==='saved'\?'saved':\(isBaduk\?'latest':'popular'\)/);
   assert.match(html, /view=\$\{view\}/);
-  assert.match(html, /const homeHours=isBaduk\?24:168/);
+  assert.match(html, /const homeHours=24/);
   assert.match(html, /const homeLimit=isBaduk\?30:10/);
 });
 
