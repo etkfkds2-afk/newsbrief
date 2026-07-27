@@ -82,7 +82,7 @@ function renderHero(){
 }
 function renderIssues(){
   const sub=currentSubview();
-  const show=Boolean(state.issueItems.length)&&!state.q&&sub!=='saved'&&sub!=='home';
+  const show=Boolean(state.issueItems.length)&&!state.q&&!state.category&&sub!=='saved'&&sub!=='home';
   $('issuesPanel').style.display=show?'block':'none';
   if(!show)return;
   $('issuesTitle').textContent=sub==='weekly'?'주간 이슈 키워드':'월간 이슈 키워드';
@@ -140,7 +140,7 @@ async function load({silent=false}={}){
       else if(sub==='monthly')p.set('hours','720');
       if(state.q)p.set('q',state.q);
       if(state.issueKey)p.set('issue_key',state.issueKey);
-      if(sub!=='saved')p.set('issues','1');
+      if(sub!=='saved'&&!state.category)p.set('issues','1');
       const d=await fetchJson(`/api/news/articles?${p}`);if(requestId!==state.requestSeq)return;
       state.heroItems=[];state.items=d.items||[];state.issueItems=d.issues||[];
     }
