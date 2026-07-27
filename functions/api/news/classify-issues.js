@@ -18,6 +18,22 @@ function loadExistingPayload(row) {
   }
 }
 
+export function buildClassificationPlan(articles, existingPayload, resetIssues = false) {
+  const cachedKeys = new Set(existingPayload.flatMap(group => group.url_keys || []));
+  const genuinelyNewArticles = resetIssues ? articles : articles.filter(article => !cachedKeys.has(article.url_key));
+  const miscKeys = new Set(existingPayload
+    .filter(group => group.misc || String(group.key || '').endsWith('|ai:misc'))
+    .flatMap(group => group.url_keys || []));
+  const candidateKeys = new Set(resetIssues
+    ? articles.map(article => article.url_key)
+    : [...genuinelyNewArticles.map(article => article.url_key), ...miscKeys]);
+  return {
+    genuinelyNewArticles,
+    candidateKeys,
+    candidateArticles: articles.filter(article => candidateKeys.has(article.url_key))
+  };
+}
+
 export function enforceIssueRules(groups, articles, category) {
   const articleByKey = new Map(articles.map(article => [article.url_key, article]));
   const claimed = new Set();
@@ -112,12 +128,13 @@ export async function onRequestPost({ request, env }) {
       }))
       .filter(group => group.url_keys.length > 0);
 
-    // Rebuild the complete 30-day classification. Incremental classification
-    // permanently preserved bad AI groups and prevented two articles that
-    // arrived on different runs from ever leaving 기타.
-    const newArticles = articles;
+    // When new articles arrive, reconsider the current misc pool with them. This
+    // lets two reports received on different days become an issue without paying
+    // to reclassify established groups on every scheduled run.
+    const { genuinelyNewArticles, candidateKeys, candidateArticles: newArticles } =
+      buildClassificationPlan(articles, existingPayload, resetIssues);
 
-    if (!newArticles.length) {
+    if (!genuinelyNewArticles.length) {
       return json({
         ok: true,
         category,
@@ -128,39 +145,57 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
-    const [cloudflare, budget] = await Promise.all([
-      reserveCloudflareCall(env),
-      canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD)
-    ]);
-    if (!cloudflare.allowed && !budget.allowed) return json({
-      ok: true, category, count: articles.length, new_count: newArticles.length,
+    const budget = await canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD);
+    const useClaude = budget.allowed && Boolean(env?.ANTHROPIC_API_KEY);
+    let cloudflare = { allowed: false, used: 0, reason: 'claude-primary' };
+    if (!useClaude) cloudflare = await reserveCloudflareCall(env);
+    if (!cloudflare.allowed && !useClaude) return json({
+      ok: true, category, count: articles.length, new_count: genuinelyNewArticles.length,
       provider: 'budget-blocked', monthly_micro_usd: budget.spent,
-      issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+      issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
-    const existingIssues = [];
-    const { groups, provider, model, usage, cloudflare_error, anthropic_error } = await classifyIssues(
+    const basePayload = existingPayload
+      .map(group => ({ ...group, url_keys: group.url_keys.filter(key => !candidateKeys.has(key)) }))
+      .filter(group => group.url_keys.length > 0);
+    const existingIssues = basePayload
+      .filter(group => !(group.misc || String(group.key || '').endsWith('|ai:misc')))
+      .map(group => ({ key: group.key, title: group.title }));
+    let classification = await classifyIssues(
       {
         ...env,
-        AI: cloudflare.allowed ? env.AI : undefined,
-        ANTHROPIC_API_KEY: budget.allowed ? env.ANTHROPIC_API_KEY : undefined
+        AI: useClaude ? undefined : (cloudflare.allowed ? env.AI : undefined),
+        ANTHROPIC_API_KEY: useClaude ? env.ANTHROPIC_API_KEY : undefined
       },
       newArticles,
       existingIssues.map(group => ({ key: group.key, title: group.title })),
       { allowStandaloneEvents: category === '바둑' }
     );
+    if (classification.provider === 'anthropic-failed' && env?.AI) {
+      cloudflare = await reserveCloudflareCall(env);
+      if (cloudflare.allowed) {
+        const fallback = await classifyIssues(
+          { ...env, ANTHROPIC_API_KEY: undefined, AI: env.AI },
+          newArticles,
+          existingIssues,
+          { allowStandaloneEvents: category === '바둑' }
+        );
+        classification = { ...fallback, anthropic_error: classification.anthropic_error };
+      }
+    }
+    const { groups, provider, model, usage, cloudflare_error, anthropic_error } = classification;
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);
     }
     const recorded = provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent };
 
     if (!groups.length) return json({
-      ok: true, category, count: articles.length, new_count: newArticles.length,
+      ok: true, category, count: articles.length, new_count: genuinelyNewArticles.length,
       provider, cloudflare_error, anthropic_error, monthly_micro_usd: budget.spent,
       issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
-    const byKey = new Map();
+    const byKey = new Map(basePayload.map(group => [group.key, { ...group, url_keys: [...group.url_keys] }]));
     let nextIndex = 0;
 
     for (const group of groups) {
@@ -175,7 +210,8 @@ export async function onRequestPost({ request, env }) {
       if (matched) {
         byKey.get(matched.key)?.url_keys.push(...group.url_keys);
       } else {
-        const key = `${category}|ai:${nextIndex++}`;
+        let key;
+        do key = `${category}|ai:${nextIndex++}`; while (byKey.has(key));
         byKey.set(key, { key, title: group.title, url_keys: [...group.url_keys] });
       }
     }
@@ -190,7 +226,8 @@ export async function onRequestPost({ request, env }) {
       ok: true,
       category,
       count: articles.length,
-      new_count: newArticles.length,
+      new_count: genuinelyNewArticles.length,
+      candidate_count: newArticles.length,
       provider,
       cloudflare_calls_today: cloudflare.used,
       cloudflare_error,

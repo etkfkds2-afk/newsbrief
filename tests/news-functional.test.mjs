@@ -5,7 +5,7 @@ import { normalizeCachedIssues, onRequestGet } from '../functions/api/news/artic
 import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import { classifyIssues, isStandaloneEventArticle } from '../functions/_lib/news-issue-classify.js';
-import { enforceIssueRules } from '../functions/api/news/classify-issues.js';
+import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
 
@@ -90,6 +90,29 @@ test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제
   assert.match(endpoint, /url\.searchParams\.get\('reset'\) === '1'/);
   assert.match(endpoint, /resetIssues \? \[\] : loadExistingPayload/);
   assert.match(workflow, /reset_issues:/);
+});
+
+test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', () => {
+  const articles = [
+    { url_key: 'established' }, { url_key: 'misc-old' }, { url_key: 'new-one' }
+  ];
+  const existing = [
+    { key: '바둑|ai:0', title: '기존 이슈', url_keys: ['established'] },
+    { key: '바둑|ai:misc', title: '기타', url_keys: ['misc-old'], misc: true }
+  ];
+  const plan = buildClassificationPlan(articles, existing, false);
+  assert.deepEqual(plan.genuinelyNewArticles.map(article => article.url_key), ['new-one']);
+  assert.deepEqual(plan.candidateArticles.map(article => article.url_key), ['misc-old', 'new-one']);
+  const reset = buildClassificationPlan(articles, existing, true);
+  assert.deepEqual(reset.candidateArticles.map(article => article.url_key), ['established', 'misc-old', 'new-one']);
+});
+
+test('Claude 이슈 분류가 가능하면 Cloudflare 호출을 미리 예약하지 않는다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(endpoint, /const useClaude = budget\.allowed && Boolean\(env\?\.ANTHROPIC_API_KEY\)/);
+  assert.match(endpoint, /if \(!useClaude\) cloudflare = await reserveCloudflareCall/);
+  assert.match(endpoint, /classification\.provider === 'anthropic-failed'/);
+  assert.doesNotMatch(endpoint, /Promise\.all\(\[\s*reserveCloudflareCall/);
 });
 
 test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 복구 모드를 제공한다', async () => {
@@ -421,6 +444,12 @@ test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 
   assert.match(html, /const homeLimit=isBaduk\?30:10/);
 });
 
+test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /e\.target\.closest\('\.brand'\)/);
+  assert.match(html, /setSubview\('home'\);state\.category='';state\.q='';state\.issueKey=''/);
+});
+
 test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
@@ -428,8 +457,8 @@ test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 �
   assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000/);
   assert.match(budget, /claude_budget_month/);
   assert.doesNotMatch(classifier, /MAX_NEW_ARTICLES_PER_RUN/);
-  assert.match(classifier, /const newArticles = articles;/);
-  assert.match(classifier, /const existingIssues = \[\];/);
+  assert.match(classifier, /buildClassificationPlan\(articles, existingPayload, resetIssues\)/);
+  assert.match(classifier, /const existingIssues = basePayload/);
   assert.match(classifier, /recordClaudeUsage/);
   assert.equal(claudeCostMicroUsd('claude-haiku-4-5-20251001', { input_tokens: 1000, output_tokens: 100 }), 1500);
   assert.equal(claudeCostMicroUsd('claude-sonnet-5', { input_tokens: 1000, output_tokens: 100 }), 4500);
@@ -438,7 +467,7 @@ test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 �
 test('이슈 예산이 부족하면 기존 캐시를 유지하고 새 기사는 다음 실행에 남긴다', async () => {
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
   assert.match(classifier, /provider: 'budget-blocked'/);
-  assert.match(classifier, /issues: existingPayload\.map/);
+  assert.match(classifier, /issues: enforceIssueRules\(existingPayload, articles, category\)\.map/);
   assert.doesNotMatch(classifier, /buildIssues|issueKey\(/);
 });
 
