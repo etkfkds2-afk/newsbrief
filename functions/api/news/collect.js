@@ -129,6 +129,19 @@ function parseDate(value) {
   return Number.isNaN(date.valueOf()) ? '' : date.toISOString();
 }
 
+const NAVER_SECTION_CATEGORIES = {
+  '100': '정치', '101': '경제', '102': '사회', '103': '생활/문화',
+  '104': '세계', '105': 'IT/과학'
+};
+
+export function naverSectionCategory(html = '') {
+  const sectionId = String(html).match(/\bsectionId\s*:\s*["'](10[0-5])["']/i)?.[1]
+    || String(html).match(/["']section[_-]?id["']\s*:\s*["'](10[0-5])["']/i)?.[1]
+    || String(html).match(/\bsid1[=:]["']?(10[0-5])/i)?.[1]
+    || '';
+  return NAVER_SECTION_CATEGORIES[sectionId] || '';
+}
+
 function articleSource(url, discovery = '', press = '') {
   try {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
@@ -170,6 +183,7 @@ async function fetchArticleText(url) {
       || html.match(/data-date-time=["']([^"']+)/i)?.[1]
       || ''
     );
+    const sectionCategory = naverSectionCategory(html);
     let jsonBody = '';
     for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
       try {
@@ -182,10 +196,52 @@ async function fetchArticleText(url) {
     const body = cleanBody(jsonBody || stripHtml(article
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
-    return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt };
+    return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory };
   } catch {
     return { body: '', image: '', press: '', publishedAt: '' };
   }
+}
+
+async function repairGeneralCategories(env, limit = 10) {
+  const cursorKey = 'general_category_repair_cursor';
+  const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
+  const cursor = Number(cursorRow?.value || 0);
+  const rows = await env.DB.prepare(`SELECT id,url,title,body_text,category FROM news_articles
+    WHERE id>? AND category<>'바둑' AND summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+    ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+  const candidates = rows.results || [];
+  if (!candidates.length) {
+    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
+      ON CONFLICT(key) DO UPDATE SET value=0`).bind(cursorKey).run();
+    return { attempted: 0, repaired: 0, done: true };
+  }
+  let repaired = 0;
+  for (const row of candidates) {
+    const article = await fetchArticleText(row.url);
+    const fixedCategory = article.sectionCategory || classify(row.category, row.title, article.body || row.body_text);
+    if (fixedCategory && fixedCategory !== row.category && fixedCategory !== '바둑') {
+      await env.DB.prepare('UPDATE news_articles SET category=? WHERE id=?').bind(fixedCategory, row.id).run();
+      repaired += 1;
+    }
+  }
+  const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
+  await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
+  return { attempted: candidates.length, repaired, done: candidates.length < 10 };
+}
+
+async function quarantineWeakGeneralSummaries(env) {
+  const rows = await env.DB.prepare(`SELECT id,title,summary FROM news_articles
+    WHERE category<>'바둑' AND summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+    ORDER BY id LIMIT 400`).all();
+  const weak = (rows.results || []).filter(row => !validateGeneralEditorialSummary(row.summary, row.title));
+  for (let index = 0; index < weak.length; index += 50) {
+    await env.DB.batch(weak.slice(index, index + 50).map(row =>
+      env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id)));
+  }
+  return { checked: (rows.results || []).length, quarantined: weak.length, ids: weak.map(row => row.id) };
 }
 
 async function repairGeneralArticleTimes(env, limit = 10) {
@@ -438,7 +494,7 @@ async function backfillPopularityDate(env, ymd) {
 
 async function collect(env, {
   backfill = false, repair = false, forceRetry = false, generalBoost = false,
-  googleDiscoveries = [], popularityCandidates = []
+  generalOnly = false, qualityRepairIds = [], googleDiscoveries = [], popularityCandidates = []
 } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
   const now = new Date();
@@ -611,10 +667,13 @@ async function collect(env, {
   const retryRows = await env.DB.prepare(`SELECT a.id,a.url_key,a.title,a.raw_summary,a.body_text,a.category FROM news_articles a
     LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
     WHERE a.summary_quality='none' AND length(a.body_text)>=300 AND COALESCE(f.attempts,0)<?
+      AND (?=0 OR a.category<>'바둑')
+      AND (?=0 OR instr(','||?||',', ','||a.id||',')>0)
       AND (? OR f.last_attempt IS NULL OR f.last_attempt < datetime('now','-20 hours'))
     ORDER BY CASE WHEN a.category='바둑' THEN 0 ELSE 1 END,
       COALESCE(f.attempts,0), COALESCE(f.last_attempt,'1970-01-01'), length(a.body_text) DESC LIMIT ?`)
-    .bind(24, forceRetry ? 1 : 0, retryRowLimit).all();
+    .bind(24, generalOnly ? 1 : 0, qualityRepairIds.length ? 1 : 0,
+      qualityRepairIds.join(','), forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
     if (!hasPublicationCapacity(row.category)) return;
@@ -779,11 +838,14 @@ async function collect(env, {
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
           await env.DB.prepare(`UPDATE news_articles SET
+            category=CASE WHEN ?<>'' THEN ? ELSE category END,
             press=CASE WHEN ?<>'' THEN ? ELSE press END,
             image_url=CASE WHEN ?<>'' THEN ? ELSE image_url END,
             body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END,
             published_at=CASE WHEN ?<>'' THEN ? ELSE published_at END WHERE id=?`)
-            .bind(article.press, article.press, article.image, article.image, article.body, article.body,
+            .bind(exists.category === '바둑' ? '' : article.sectionCategory,
+              exists.category === '바둑' ? '' : article.sectionCategory,
+              article.press, article.press, article.image, article.image, article.body, article.body,
               article.publishedAt || publishedAt, article.publishedAt || publishedAt, exists.id).run();
         }
         return 0;
@@ -796,13 +858,17 @@ async function collect(env, {
         const valid = validPublishedSummary(repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
+          category=CASE WHEN ?<>'' THEN ? ELSE category END,
           press=CASE WHEN ?<>'' THEN ? ELSE press END,
           image_url=CASE WHEN ?<>'' THEN ? ELSE image_url END,
           body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END,
           published_at=CASE WHEN ?<>'' THEN ? ELSE published_at END,
           summary=CASE WHEN ? THEN ? ELSE summary END,
           summary_quality=CASE WHEN ? THEN 'full' ELSE summary_quality END
-          WHERE id=?`).bind(title, article.press, article.press, article.image, article.image, article.body, article.body,
+          WHERE id=?`).bind(title,
+            exists.category === '바둑' ? '' : article.sectionCategory,
+            exists.category === '바둑' ? '' : article.sectionCategory,
+            article.press, article.press, article.image, article.image, article.body, article.body,
             article.publishedAt || publishedAt, article.publishedAt || publishedAt,
             valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
         if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
@@ -822,7 +888,9 @@ async function collect(env, {
     // Search snippets are discovery data, not an article body. Never create a
     // three-line card when the destination page is missing or cannot be read.
     if (body.length < 180) return 0;
-    const finalCategory = classify(category, title, body || rawSummary);
+    const finalCategory = category === '바둑'
+      ? classify(category, title, body || rawSummary)
+      : (article.sectionCategory || classify(category, title, body || rawSummary));
     if (!hasPublicationCapacity(finalCategory)) return 0;
     const summary = await summarize({ title, rawSummary, body, category: finalCategory });
     const validSummary = validPublishedSummary(summary, title, finalCategory);
@@ -902,12 +970,30 @@ export async function onRequestPost({ request, env }) {
     const forceRetry = requestUrl.searchParams.get('force_retry') === '1';
     const generalBoost = requestUrl.searchParams.get('general_boost') === '1';
     const repairTimes = requestUrl.searchParams.get('repair_times') === '1';
+    const repairCategories = requestUrl.searchParams.get('repair_categories') === '1';
+    const repairGeneralQuality = requestUrl.searchParams.get('repair_general_quality') === '1';
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
     if (repairTimes) {
       const timeRepair = await repairGeneralArticleTimes(env);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
         .bind(new Date().toISOString(), JSON.stringify({ time_repair: timeRepair }), runId).run();
       return json({ ok: true, time_repair: timeRepair });
+    }
+    if (repairCategories) {
+      const categoryRepair = await repairGeneralCategories(env);
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
+        .bind(new Date().toISOString(), JSON.stringify({ category_repair: categoryRepair }), runId).run();
+      return json({ ok: true, category_repair: categoryRepair });
+    }
+    if (repairGeneralQuality) {
+      const qualityRepair = await quarantineWeakGeneralSummaries(env);
+      const result = await collect(env, {
+        repair: true, forceRetry: true, generalBoost: true, generalOnly: true,
+        qualityRepairIds: qualityRepair.ids
+      });
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
+        .bind(new Date().toISOString(), JSON.stringify({ quality_repair: qualityRepair, diagnostics: result.diagnostics }).slice(0, 500), runId).run();
+      return json({ ok: true, quality_repair: qualityRepair, diagnostics: result.diagnostics });
     }
     if (popularityDate) {
       const popularity = await backfillPopularityDate(env, popularityDate);

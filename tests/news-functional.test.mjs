@@ -2,8 +2,90 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { onRequestGet } from '../functions/api/news/articles.js';
-import { googleNewsSearch, isBadukRelevant } from '../functions/api/news/collect.js';
+import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
+import { classifyIssues, isStandaloneEventArticle } from '../functions/_lib/news-issue-classify.js';
+import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
+
+test('바둑 대회·국제교류 기사는 한 건이어도 독립 이슈 후보가 된다', () => {
+  assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
+  assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
+});
+
+test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고 일반 단독 행사는 제외한다', async () => {
+  const articles = [{ url_key: 'mu-an', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
+  const env = { AI: { run: async () => ({ response: '[{"title":"무안 상숙 청소년 바둑대회","indices":[0]}]' }) } };
+  const baduk = await classifyIssues(env, articles, [], { allowStandaloneEvents: true });
+  const general = await classifyIssues(env, articles, [], { allowStandaloneEvents: false });
+  assert.equal(baduk.groups[0].title, '무안 상숙 청소년 바둑대회');
+  assert.equal(baduk.groups[0].url_keys[0], 'mu-an');
+  assert.equal(general.groups[0].title, '기타');
+  const omitted = await classifyIssues({ AI: { run: async () => ({ response: '[]' }) } }, articles, [], { allowStandaloneEvents: true });
+  assert.notEqual(omitted.groups[0].title, '기타');
+  assert.equal(omitted.groups[0].url_keys[0], 'mu-an');
+});
+
+test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 복구 모드를 제공한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(collector, /NAVER_SECTION_CATEGORIES/);
+  assert.match(collector, /repairGeneralCategories/);
+  assert.match(collector, /repair_categories/);
+  assert.match(workflow, /repair_categories:/);
+  assert.equal(naverSectionCategory(`sectionId : "100"`), '정치');
+  assert.equal(naverSectionCategory(`"section_id":"105"`), 'IT/과학');
+});
+
+test('일반 저품질 요약은 문제 기사만 격리해 AI 재요약한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(collector, /quarantineWeakGeneralSummaries/);
+  assert.match(collector, /qualityRepairIds/);
+  assert.match(collector, /repair_general_quality/);
+  assert.match(workflow, /repair_general_quality:/);
+});
+
+test('예약 실행은 production 건강 점검 실패 시 GitHub 이슈를 만든다', async () => {
+  const health = await readFile(new URL('../functions/api/news/health.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(health, /last_run_within_6h/);
+  assert.match(health, /published_time_complete/);
+  assert.match(health, /summary_exhausted_below_threshold/);
+  assert.match(workflow, /health-check:/);
+  assert.match(workflow, /gh issue create/);
+});
+
+test('건강 점검 API는 정상 운영과 발행시간 누락 장애를 구분한다', async () => {
+  const makeEnv = missing => ({ DB: {
+    async batch() { return []; },
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async first() {
+          if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
+          if (sql.includes("AS baduk")) return { baduk: 4, general: 9 };
+          if (sql.includes("TRIM(published_at)=''")) return { count: missing };
+          if (sql.includes('f.attempts>=24')) return { count: 0 };
+          return {};
+        },
+        async all() {
+          if (sql.includes('FROM news_state')) return { results: [
+            { key: 'ai_blocked', value: 0 },
+            { key: 'claude_monthly_micro_usd', value: 500000 },
+            { key: 'claude_budget_month', value: new Date().toISOString().slice(0, 7) }
+          ] };
+          return { results: [] };
+        }
+      };
+    }
+  } });
+  const healthy = await getNewsHealth({ env: makeEnv(0) });
+  const unhealthy = await getNewsHealth({ env: makeEnv(2) });
+  assert.equal(healthy.status, 200);
+  assert.equal((await healthy.json()).ok, true);
+  assert.equal(unhealthy.status, 503);
+  assert.deepEqual((await unhealthy.json()).failures, ['published_time_complete']);
+});
 
 test('정기 수집은 명백히 불량한 일반 요약만 재요약 대기열로 격리한다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');

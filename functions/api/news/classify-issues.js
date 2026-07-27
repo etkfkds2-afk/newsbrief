@@ -1,6 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues } from '../../_lib/news-issue-classify.js';
+import { classifyIssues, isStandaloneEventArticle } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -53,8 +53,14 @@ export async function onRequestPost({ request, env }) {
 
     // Drop url_keys that aged out of the 30-day window (and any group that
     // becomes empty as a result) before deciding what's genuinely new.
+    const standaloneEventKeys = new Set(articles.filter(isStandaloneEventArticle).map(article => article.url_key));
     const existingPayload = loadExistingPayload(cacheRow)
-      .map(group => ({ ...group, url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)) }))
+      .map(group => ({
+        ...group,
+        url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)
+          && !((group.misc || String(group.key || '').endsWith('|ai:misc'))
+            && category === '바둑' && standaloneEventKeys.has(key)))
+      }))
       .filter(group => group.url_keys.length > 0);
 
     const classifiedKeys = new Set(existingPayload.flatMap(group => group.url_keys));
@@ -89,7 +95,8 @@ export async function onRequestPost({ request, env }) {
         ANTHROPIC_API_KEY: budget.allowed ? env.ANTHROPIC_API_KEY : undefined
       },
       newArticles,
-      existingIssues.map(group => ({ key: group.key, title: group.title }))
+      existingIssues.map(group => ({ key: group.key, title: group.title })),
+      { allowStandaloneEvents: category === '바둑' }
     );
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);

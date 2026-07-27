@@ -186,7 +186,8 @@ const GENERAL_EDITORIAL_TITLE_PATTERNS = [
   /(?:뉴욕다이어리|\d+강의\s*시선|가볼\s*만한\s*곳)/i
 ];
 const GENERAL_EDITORIAL_ARTIFACT_PATTERNS = [
-  /(?:\[[^\]]*기자\]|기자\s*[=｜]|특파원\s*[=｜]|ⓒ|사진\s*(?:=|출처)|스틸컷)/u
+  /(?:\[[^\]]*기자\]|기자\s*[=｜]|특파원\s*[=｜]|ⓒ|사진\s*(?:=|출처)|스틸컷)/u,
+  /(?:에서\s*열린|회의에서|행사에서).{0,80}(?:발언|기념촬영|포즈|참석)하고\s*(?:있다|있었다)\.?$/u
 ];
 const GENERAL_DEPENDENT_FIRST_LINE = /^(?:\[|거치며\s|이어\s|이후\s|둘째[,，]\s*|한편\s|그러면서\s|그는\s|현재는\s)/u;
 const GENERAL_BROKEN_NUMBER_FIRST_LINE = /^\d+(?:[.,]\d+)?%\s*[,，]/u;

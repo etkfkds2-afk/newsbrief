@@ -1,5 +1,9 @@
 name: Deploy to Cloudflare Pages
 
+permissions:
+  contents: read
+  issues: write
+
 on:
   push:
     branches: [main]
@@ -28,6 +32,16 @@ on:
         type: boolean
       repair_times:
         description: '날짜만 남은 일반기사 원문 발행시각 복구'
+        required: false
+        default: false
+        type: boolean
+      repair_categories:
+        description: '최근 일반기사의 네이버 원문 섹션 기준 카테고리 복구'
+        required: false
+        default: false
+        type: boolean
+      repair_general_quality:
+        description: '낮은 품질의 일반 요약 격리 후 AI 재요약'
         required: false
         default: false
         type: boolean
@@ -126,7 +140,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Discover Google News and trigger collection
-        if: github.event_name != 'workflow_dispatch' || (!inputs.repair_popularity && !inputs.repair_times)
+        if: >-
+          github.event_name != 'workflow_dispatch' ||
+          (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality)
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           NEWSBRIEF_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && '1' || '0' }}
@@ -175,6 +191,22 @@ jobs:
                 "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_times=1"
             done
           fi
+          if [ "${{ inputs.repair_categories }}" = "true" ]; then
+            for i in $(seq 1 30); do
+              response=$(curl --fail-with-body --retry 3 --max-time 120 \
+                -X POST \
+                -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+                "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_categories=1")
+              echo "$response"
+              if echo "$response" | jq -e '.category_repair.done == true' >/dev/null; then break; fi
+            done
+          fi
+          if [ "${{ inputs.repair_general_quality }}" = "true" ]; then
+            curl --fail-with-body --retry 3 --max-time 240 \
+              -X POST \
+              -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_general_quality=1"
+          fi
 
   classify-issues:
     needs: deploy
@@ -206,3 +238,47 @@ jobs:
             echo
             python3 -m json.tool "${output}"
           done
+
+  health-check:
+    needs: [collect-news, classify-issues]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check NewsBrief production health
+        id: health
+        run: |
+          set +e
+          status=$(curl -sS -o /tmp/newsbrief-health.json -w '%{http_code}' \
+            --retry 3 --max-time 30 \
+            "https://newsbrief-etkfkds2.pages.dev/api/news/health")
+          curl_exit=$?
+          set -e
+          if [ "$curl_exit" != "0" ]; then
+            printf '{"ok":false,"failures":["health_endpoint_unreachable"],"curl_exit":%s}\n' "$curl_exit" > /tmp/newsbrief-health.json
+            status="000"
+          fi
+          cat /tmp/newsbrief-health.json
+          if [ "$status" != "200" ]; then
+            echo "unhealthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "unhealthy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update health alert issue
+        if: steps.health.outputs.unhealthy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="NewsBrief 자동 운영 경고"
+          issue=$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number // empty')
+          body="$(date -u '+%Y-%m-%d %H:%M:%S UTC') 자동 건강 점검 실패
+
+          실행: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          $(cat /tmp/newsbrief-health.json)"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          exit 1

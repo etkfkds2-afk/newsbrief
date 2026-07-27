@@ -150,3 +150,8 @@ test('일반 뉴스의 사진 출처와 스틸컷 문구를 거부한다', () =>
   assert.equal(validateGeneralEditorialSummary(photo, '일본 국가대표 선수 근황 공개'), false);
   assert.equal(validateGeneralEditorialSummary(still, '홍콩 영화 제작자 별세'), false);
 });
+
+test('일반 뉴스의 행사 사진 캡션을 요약으로 거부한다', () => {
+  const summary = '1) 이재명 대통령이 청와대에서 열린 국무회의에서 발언하고 있다.\n2) 정부는 임신 중지 제도의 공백을 해소하는 방안을 검토한다고 밝혔다.\n3) 관계 부처는 관련 법률과 의약품 도입 절차를 논의할 예정이라고 밝혔다.';
+  assert.equal(validateGeneralEditorialSummary(summary, '임신 중지 제도 공백 해소 기대'), false);
+});
