@@ -350,6 +350,13 @@ test('D1 UTC 시각 문자열을 UTC로 해석한다', async () => {
   assert.match(html, /replace\(' ','T'\).*Z/);
 });
 
+test('일반 뉴스 카드는 인기 기사 선별 후 발행시간 최신순으로 표시한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /const sortByArticleTime=items=>\[\.\.\.\(items\|\|\[\]\)\]\.sort/);
+  assert.match(html, /state\.items=isBaduk\?\(home\.items\|\|\[\]\):sortByArticleTime\(home\.items\)/);
+  assert.match(html, /state\.items=isBaduk\?\(d\.items\|\|\[\]\):sortByArticleTime\(d\.items\)/);
+});
+
 test('보조 공급자 장애 중 신규 기사가 등록되면 경고만 남긴다', async () => {
   const script = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
   assert.match(script, /::warning::/);

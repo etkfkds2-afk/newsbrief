@@ -21,6 +21,11 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const USER_KEY='newsbrief_user_id_v1';
 const userId=(()=>{let id=localStorage.getItem(USER_KEY);if(!id){id=crypto.randomUUID();localStorage.setItem(USER_KEY,id)}return id})();
 const parseTime=v=>new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(v||''))?`${v.replace(' ','T')}Z`:v);
+const sortByArticleTime=items=>[...(items||[])].sort((a,b)=>{
+  const right=+parseTime(b.published_at||b.fetched_at||'');
+  const left=+parseTime(a.published_at||a.fetched_at||'');
+  return (Number.isFinite(right)?right:0)-(Number.isFinite(left)?left:0);
+});
 const fmt=v=>{const raw=String(v||'');if(/^\d{4}-\d{2}-\d{2}$/.test(raw)){const [,m,d]=raw.split('-');return`${Number(m)}. ${Number(d)}.`}const time=parseTime(raw);return Number.isNaN(+time)?'':new Intl.DateTimeFormat('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(time)};
 const relTime=ms=>{
   const min=Math.max(0,Math.floor((Date.now()-ms)/60000));
@@ -127,7 +132,7 @@ async function load({silent=false}={}){
       const [home,popular]=await Promise.all([fetchJson(cardsUrl),fetchJson(heroUrl)]);
       if(requestId!==state.requestSeq)return;
       state.heroItems=popular.items||[];
-      state.items=home.items||[];
+      state.items=isBaduk?(home.items||[]):sortByArticleTime(home.items);
       state.issueItems=[];
     }else{
       const p=new URLSearchParams({limit:isBaduk?'200':'300',view:sub==='saved'?'saved':(isBaduk?'latest':'popular')});
@@ -143,7 +148,7 @@ async function load({silent=false}={}){
       if(state.issueKey)p.set('issue_key',state.issueKey);
       if(sub!=='saved'&&!state.category)p.set('issues','1');
       const d=await fetchJson(`/api/news/articles?${p}`);if(requestId!==state.requestSeq)return;
-      state.heroItems=[];state.items=d.items||[];state.issueItems=d.issues||[];
+      state.heroItems=[];state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);state.issueItems=d.issues||[];
     }
     render()
   }
