@@ -20,6 +20,7 @@ const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const USER_KEY='newsbrief_user_id_v1';
 const userId=(()=>{let id=localStorage.getItem(USER_KEY);if(!id){id=crypto.randomUUID();localStorage.setItem(USER_KEY,id)}return id})();
+const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
 const parseTime=v=>new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(v||''))?`${v.replace(' ','T')}Z`:v);
 const sortByArticleTime=items=>[...(items||[])].sort((a,b)=>{
   const right=+parseTime(b.published_at||'');
@@ -43,25 +44,29 @@ async function fetchTimed(url,options={},timeout=12000){
 }
 async function fetchJson(url,options){
   const config={...(options||{}),headers:{...(options?.headers||{}),'x-news-user':userId}};
-  const attempts=(config.method||'GET').toUpperCase()==='GET'?2:1;
-  let response,lastError;
+  const isGet=(config.method||'GET').toUpperCase()==='GET';
+  const attempts=isGet?4:1;
+  const cacheKey=`${RESPONSE_CACHE_PREFIX}${url}`;
+  let lastError;
   for(let attempt=0;attempt<attempts;attempt+=1){
     try{
-      response=await fetchTimed(url,config);
-      if(response.ok||response.status<500||attempt===attempts-1)break;
-    }catch(error){lastError=error;if(attempt===attempts-1)throw Error(error?.name==='AbortError'?'서버 응답이 지연되고 있습니다. 다시 시도해 주세요.':'네트워크 연결을 확인하고 다시 시도해 주세요.')}
-    await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
+      const response=await fetchTimed(url,config,15000);
+      const type=(response.headers.get('content-type')||'').toLowerCase();
+      const isJson=type.includes('application/json');
+      let data=null;
+      if(isJson){try{data=await response.json()}catch{lastError=Error('서버 JSON 응답을 읽지 못했습니다.')}}
+      if(response.ok&&data){if(isGet)try{sessionStorage.setItem(cacheKey,JSON.stringify(data))}catch{}return data}
+      const message=data?.error||(isJson?'뉴스를 불러오지 못했습니다.':'서버가 일시적으로 비정상 응답을 보냈습니다.');
+      const retryable=isGet&&(!isJson||response.status===408||response.status===425||response.status===429||response.status>=500);
+      if(!retryable)throw Error(message);
+      lastError=Error(message);
+    }catch(error){lastError=error}
+    if(attempt<attempts-1)await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
   }
-  if(!response)throw lastError||Error('뉴스를 불러오지 못했습니다.');
-  const type=(response.headers.get('content-type')||'').toLowerCase();
-  if(!type.includes('application/json')){
-    throw Error(response.ok?'서버 응답 형식이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.':'서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요.');
-  }
-  let data;
-  try{data=await response.json()}catch{throw Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.')}
-  if(!response.ok)throw Error(data?.error||'뉴스를 불러오지 못했습니다.');
-  return data;
+  if(isGet){try{const cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(cached){toast('서버 연결이 불안정해 마지막 정상 뉴스를 표시합니다.');return cached}}catch{}}
+  throw Error(lastError?.name==='AbortError'?'서버 응답이 지연되고 있습니다. 다시 시도해 주세요.':'서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.');
 }
+function clearResponseCache(){for(let i=sessionStorage.length-1;i>=0;i-=1){const key=sessionStorage.key(i);if(key?.startsWith(RESPONSE_CACHE_PREFIX))sessionStorage.removeItem(key)}}
 const SUBVIEWS={
   general:[['home','홈'],['weekly','주간'],['monthly','월간'],['saved','저장']],
   baduk:[['home','홈'],['weekly','주간'],['monthly','월간'],['saved','저장']]
@@ -179,6 +184,7 @@ $('cards').addEventListener('click',async e=>{
     const r=await fetchTimed('/api/news/item',{method:'POST',headers:{'content-type':'application/json','x-news-user':userId},body:JSON.stringify({action,url_key:key,url_keys:urlKeys})});
     const result=await r.json().catch(()=>null);
     if(!r.ok)throw Error();
+    clearResponseCache();
     if(action==='save'&&item){item.saved=1;button.dataset.action='unsave';button.textContent='저장됨';button.classList.add('on');button.disabled=false;toast('기사를 저장했습니다.');return}
     if(action==='unsave'&&currentSubview()!=='saved'&&item){item.saved=0;button.dataset.action='save';button.textContent='저장';button.classList.remove('on');button.disabled=false;toast('저장을 해제했습니다.');return}
     card.classList.add('removing');setTimeout(()=>{state.items=state.items.filter(x=>x.url_key!==key);card.remove();if(!$('cards').querySelector('.card'))render()},180);toast(action==='hide'?(result?.affected>1?`같은 뉴스 ${result.affected}건을 삭제했습니다.`:'기사를 삭제했습니다.'):'저장을 해제했습니다.');

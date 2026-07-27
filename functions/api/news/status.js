@@ -1,8 +1,7 @@
-import { ensureNewsDb, json } from '../../_lib/news-db.js';
+import { json } from '../../_lib/news-db.js';
 
 export async function onRequestGet({ env }) {
   try {
-    await ensureNewsDb(env);
     const [articles, run, categories, dates, badukRecovery] = await Promise.all([
       env.DB.prepare(`SELECT COUNT(*) AS count, MAX(fetched_at) AS latest,
         SUM(CASE WHEN length(body_text)>=300 THEN 1 ELSE 0 END) AS body_ready,

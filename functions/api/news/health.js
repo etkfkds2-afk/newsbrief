@@ -1,4 +1,4 @@
-import { ensureNewsDb, json } from '../../_lib/news-db.js';
+import { json } from '../../_lib/news-db.js';
 import { CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD } from '../../_lib/news-ai-budget.js';
 
 function utcMillis(value) {
@@ -9,7 +9,6 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    await ensureNewsDb(env);
     const [run, counts, missingTime, stateRows, exhausted] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT

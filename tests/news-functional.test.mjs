@@ -351,9 +351,22 @@ test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표
 test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /fetchTimed/);
-  assert.match(html, /const attempts=.*GET.*\?2:1/);
+  assert.match(html, /const attempts=isGet\?4:1/);
+  assert.match(html, /response\.status===429/);
+  assert.match(html, /sessionStorage\.setItem\(cacheKey/);
+  assert.match(html, /마지막 정상 뉴스를 표시합니다/);
   assert.match(html, /id="retryLoad"/);
   assert.match(html, /closest\('#retryLoad'\)/);
+});
+
+test('읽기 API는 요청마다 D1 스키마 DDL을 다시 실행하지 않는다', async () => {
+  for (const path of [
+    '../functions/api/news/articles.js', '../functions/api/news/image.js',
+    '../functions/api/news/status.js', '../functions/api/news/health.js'
+  ]) {
+    const source = await readFile(new URL(path, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /ensureNewsDb/);
+  }
 });
 
 test('대량 백필은 CPU 제한을 피하도록 작은 묶음으로 처리한다', async () => {

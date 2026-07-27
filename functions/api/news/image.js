@@ -1,5 +1,3 @@
-import { ensureNewsDb } from '../../_lib/news-db.js';
-
 function blockedHost(hostname) {
   const host = hostname.toLowerCase();
   return host === 'localhost' || host === '0.0.0.0' || host === '::1'
@@ -9,7 +7,6 @@ function blockedHost(hostname) {
 
 export async function onRequestGet({ request, env }) {
   try {
-    await ensureNewsDb(env);
     const key = new URL(request.url).searchParams.get('key') || '';
     if (!/^[a-f0-9]{64}$/.test(key)) return new Response('Bad request', { status: 400 });
     const row = await env.DB.prepare('SELECT image_url FROM news_articles WHERE url_key=?').bind(key).first();

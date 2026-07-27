@@ -1,4 +1,4 @@
-import { ensureNewsDb, json, userId } from '../../_lib/news-db.js';
+import { json, userId } from '../../_lib/news-db.js';
 import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
@@ -178,7 +178,6 @@ function outletFor(item) {
 
 export async function onRequestGet({ request, env }) {
   try {
-    await ensureNewsDb(env);
     const url = new URL(request.url);
     const category = url.searchParams.get('category') || '';
     const query = (url.searchParams.get('q') || '').trim().slice(0, 100);
