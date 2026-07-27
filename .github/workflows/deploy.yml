@@ -119,6 +119,7 @@ jobs:
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           NEWSBRIEF_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && '1' || '0' }}
+          NEWSBRIEF_GENERAL_BOOST: ${{ github.event_name == 'workflow_dispatch' && inputs.general_boost && '1' || '0' }}
         run: node scripts/google-news-discovery.mjs
 
       - name: Trigger NewsBrief collection

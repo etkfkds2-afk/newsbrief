@@ -38,6 +38,7 @@ async function fetchWithRetry(input, init = {}, { attempts = 3, timeout = 12000 
 const token = process.env.NEWSBRIEF_COLLECT_TOKEN;
 if (!token) throw new Error('NEWSBRIEF_COLLECT_TOKEN is missing');
 const full = process.env.NEWSBRIEF_BACKFILL === '1';
+const generalBoost = process.env.NEWSBRIEF_GENERAL_BOOST === '1';
 const hourSlot = Math.floor(Date.now() / 1800000);
 const selected = full ? queries : Array.from({ length: 8 }, (_, i) => queries[(hourSlot * 8 + i) % queries.length]);
 const found = new Map();
@@ -57,7 +58,10 @@ for (const query of selected) {
   }
   if (found.size >= (full ? 100 : 40)) break;
 }
-const endpoint = `https://newsbrief-etkfkds2.pages.dev/api/news/collect${full ? '?backfill=1' : ''}`;
+const collectUrl = new URL('https://newsbrief-etkfkds2.pages.dev/api/news/collect');
+if (full) collectUrl.searchParams.set('backfill', '1');
+if (generalBoost) collectUrl.searchParams.set('general_boost', '1');
+const endpoint = collectUrl.toString();
 const response = await fetchWithRetry(endpoint, {
   method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   body: JSON.stringify({ googleDiscoveries: [...found.values()] })

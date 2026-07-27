@@ -69,6 +69,10 @@ test('일반 보강 실행은 인기 뉴스를 먼저 처리하고 지역 매체
   assert.match(collector, /groups\.flatMap/);
   assert.match(workflow, /general_boost:/);
   assert.match(workflow, /general_boost=1/);
+  assert.match(workflow, /NEWSBRIEF_GENERAL_BOOST/);
+  const discovery = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
+  assert.match(discovery, /NEWSBRIEF_GENERAL_BOOST/);
+  assert.match(discovery, /searchParams\.set\('general_boost', '1'\)/);
 });
 
 test('바둑과 일반 뉴스는 각각 하루 10건·월 300건 게시 상한을 적용한다', async () => {
