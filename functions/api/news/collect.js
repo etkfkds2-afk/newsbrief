@@ -722,11 +722,23 @@ async function collect(env, {
     const urlKey = await sha256(url);
     const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
-      if (!exists.image_url || exists.summary_quality !== 'full') {
-        if (exists.summary_quality !== 'full' && !hasPublicationCapacity(exists.category || category)) return 0;
-        const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
-        let article = await fetchArticleText(fetchUrl);
-        if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+      if (exists.summary_quality === 'full') {
+        if (!exists.image_url) {
+          const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
+          let article = await fetchArticleText(fetchUrl);
+          if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+          await env.DB.prepare(`UPDATE news_articles SET
+            press=CASE WHEN ?<>'' THEN ? ELSE press END,
+            image_url=CASE WHEN ?<>'' THEN ? ELSE image_url END,
+            body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END WHERE id=?`)
+            .bind(article.press, article.press, article.image, article.image, article.body, article.body, exists.id).run();
+        }
+        return 0;
+      }
+      if (!hasPublicationCapacity(exists.category || category)) return 0;
+      const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
+      let article = await fetchArticleText(fetchUrl);
+      if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
         const repaired = await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, null, 'retry');
         const valid = validPublishedSummary(repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
@@ -738,7 +750,6 @@ async function collect(env, {
           summary_quality=CASE WHEN ? THEN 'full' ELSE summary_quality END
           WHERE id=?`).bind(title, article.press, article.press, article.image, article.image, article.body, article.body, valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
         if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
-      }
       return 0;
     }
 

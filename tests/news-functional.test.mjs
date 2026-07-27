@@ -253,6 +253,13 @@ test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시�
   assert.match(source, /COALESCE\(f\.attempts,0\), COALESCE\(f\.last_attempt,'1970-01-01'\)/);
 });
 
+test('이미 정상 요약인 기사는 이미지가 없어도 AI 요약을 다시 호출하지 않는다', async () => {
+  const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
+  assert.match(source, /if \(!exists\.image_url\)/);
+  assert.match(source, /return 0;\s*}\s*if \(!hasPublicationCapacity/);
+});
+
 test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
