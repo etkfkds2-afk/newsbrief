@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, isJunkLine, normalizeText, sanitizeStoredSummary, validateGeneralEditorialSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
+import { buildSummary, isJunkLine, normalizeText, reorderGeneralSummary, sanitizeStoredSummary, validateGeneralEditorialSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
 import { makeBestSummary } from '../functions/_lib/news-ai-summary.js';
 
 test('포털 자동요약 안내와 UI 문장을 제거한다', () => {
@@ -134,4 +134,11 @@ test('일반 뉴스의 문장 조각과 기자 표기를 거부한다', () => {
   const byline = '1) 정부는 신규 지원 정책을 발표했다고 밝혔다.\n2) [서울경제 홍길동 기자] 기업들은 정책을 검토하고 있다고 밝혔다.\n3) 관계 기관은 다음 달 세부안을 마련할 예정이라고 밝혔다.';
   assert.equal(validateGeneralEditorialSummary(broken, '뉴욕증시 혼조 출발'), false);
   assert.equal(validateGeneralEditorialSummary(byline, '정부 신규 지원 정책 발표'), false);
+});
+
+test('일반 뉴스의 제목 핵심 문장을 첫 줄로 재정렬한다', () => {
+  const btn = '1) 1,600억 원의 제작비를 투입해 고대인도 생활상을 구현했습니다.\n2) 힙불교 열풍으로 부처님에 대한 청년층의 관심이 뜨겁습니다.\n3) 드라마 붓다가 다시 시청자들을 찾아갑니다.';
+  const chenle = '1) 이후 2016년 초 SM엔터테인먼트 연습생으로 합류했다.\n2) 그룹 NCT 천러가 감각적인 비주얼 사진으로 근황을 전했다.\n3) 안경을 착용한 정면 사진을 공개했다.';
+  assert.match(reorderGeneralSummary(btn, "'힙불교'로 부처님 관심…드라마 붓다 돌아온다"), /^1\) 힙불교/);
+  assert.match(reorderGeneralSummary(chenle, '천러, 팬미팅 앞두고 감각적인 비주얼 공개'), /^1\) 그룹 NCT 천러/);
 });

@@ -1,5 +1,5 @@
 import {
-  isRejectedTitle, normalizeText, validateGeneralEditorialSummary, validateThreeLineSummary
+  isRejectedTitle, normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
@@ -28,7 +28,7 @@ const BADUK_SEARCHES = [
 ];
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
-const DAILY_ANTHROPIC_CALL_LIMIT = 6;
+const DAILY_ANTHROPIC_CALL_LIMIT = 12;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const MAX_SCHEDULED_CANDIDATES = 10;
@@ -424,10 +424,15 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       const fixedSource = articleSource(row.url, row.source, row.press);
       if (fixedSource !== row.source) await env.DB.prepare('UPDATE news_articles SET source=? WHERE id=?').bind(fixedSource, row.id).run();
     }
-    if (fixedCategory !== '바둑' && row.summary
-      && !validateGeneralEditorialSummary(row.summary, row.title)) {
-      await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
-      diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
+    if (fixedCategory !== '바둑' && row.summary) {
+      const reordered = reorderGeneralSummary(row.summary, row.title);
+      if (!validateGeneralEditorialSummary(reordered, row.title)) {
+        await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
+        diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
+      } else if (reordered !== row.summary) {
+        await env.DB.prepare('UPDATE news_articles SET summary=? WHERE id=?').bind(reordered, row.id).run();
+        diagnostics.general_summaries_reordered = Number(diagnostics.general_summaries_reordered || 0) + 1;
+      }
     }
   }
   const lastMaintainedId = (stored.results || []).at(-1)?.id || 0;
@@ -666,7 +671,14 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     uniqueCandidates.push(candidate);
   }
   uniqueCandidates.sort((a, b) => Number(b.category === '바둑') - Number(a.category === '바둑'));
-  const limitedCandidates = backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, MAX_SCHEDULED_CANDIDATES);
+  const recentGeneral = await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+    WHERE category<>'바둑' AND summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
+  const generalBelowDailyGoal = Number(recentGeneral?.count || 0) < 10;
+  const scheduledCandidateLimit = generalBelowDailyGoal ? MAX_SCHEDULED_CANDIDATES + 4 : MAX_SCHEDULED_CANDIDATES;
+  const limitedCandidates = backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, scheduledCandidateLimit);
+  diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
+  diagnostics.general_daily_goal = 10;
   diagnostics.candidates = candidates.length;
   diagnostics.unique_candidates = uniqueCandidates.length;
   diagnostics.processed_candidates = limitedCandidates.length;

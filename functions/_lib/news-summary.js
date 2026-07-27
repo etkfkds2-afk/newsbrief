@@ -186,7 +186,7 @@ const GENERAL_EDITORIAL_TITLE_PATTERNS = [
   /(?:뉴욕다이어리|\d+강의\s*시선|가볼\s*만한\s*곳)/i
 ];
 const GENERAL_EDITORIAL_LINE_PATTERNS = [
-  /^\s*(?:\[|ⓒ|사진\s*=|거치며\s|이어\s|둘째[,，]\s*|한편\s)/u,
+  /^\s*(?:\[|ⓒ|사진\s*=|거치며\s|이어\s|이후\s|둘째[,，]\s*|한편\s)/u,
   /^\s*\d+(?:[.,]\d+)?%\s*[,，]/u,
   /(?:\[[^\]]*기자\]|기자\s*[=｜]|특파원\s*[=｜]|ⓒ|사진\s*=)/u
 ];
@@ -195,10 +195,36 @@ function editorialKey(value) {
   return normalizeText(value).replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
 }
 
+const TITLE_RELEVANCE_STOPWORDS = new Set([
+  '관련', '이번', '오늘', '대한', '통해', '앞두고', '공개', '발표', '논란',
+  '정부', '한국', '전국', '부터', '까지', '위한', '있는', '없는', '기록', '완성'
+]);
+
+function titleWords(title) {
+  return normalizeText(title).replace(/[^0-9A-Za-z가-힣]+/g, ' ').split(/\s+/)
+    .filter(word => word.length >= 2 && !TITLE_RELEVANCE_STOPWORDS.has(word));
+}
+
+export function reorderGeneralSummary(summary, title = '') {
+  const rawLines = normalizeText(summary).split('\n').filter(Boolean);
+  if (rawLines.length !== 3) return summary;
+  const words = titleWords(title);
+  if (!words.length) return summary;
+  const plain = rawLines.map(stripNumbering);
+  const scores = plain.map(line => words.filter(word => line.includes(word)).length);
+  const bestScore = Math.max(...scores);
+  const bestIndex = scores.indexOf(bestScore);
+  const dependentFirst = /^(?:이후|그러면서|그는|한편|이어|둘째|현재는|사회\s*공헌|첫\s*발제자로|지난\s+\d+일)/u.test(plain[0]);
+  if (bestIndex <= 0 || (!dependentFirst && !(scores[0] === 0 && bestScore >= 2))) return summary;
+  const reordered = [rawLines[bestIndex], ...rawLines.filter((_, index) => index !== bestIndex)];
+  return reordered.map((line, index) => `${index + 1}) ${stripNumbering(line)}`).join('\n');
+}
+
 export function validateGeneralEditorialSummary(summary, title = '') {
-  if (!validateThreeLineSummary(summary, title)) return false;
+  const ordered = reorderGeneralSummary(summary, title);
+  if (!validateThreeLineSummary(ordered, title)) return false;
   if (GENERAL_EDITORIAL_TITLE_PATTERNS.some(pattern => pattern.test(title))) return false;
-  const lines = normalizeText(summary).split('\n').map(stripNumbering).filter(Boolean);
+  const lines = normalizeText(ordered).split('\n').map(stripNumbering).filter(Boolean);
   if (lines.some(line => GENERAL_EDITORIAL_LINE_PATTERNS.some(pattern => pattern.test(line)))) return false;
   const keys = lines.map(editorialKey);
   for (let left = 0; left < keys.length; left += 1) {

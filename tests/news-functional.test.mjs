@@ -46,7 +46,7 @@ test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async
 test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
-  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 6/);
+  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 12/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
   assert.match(collector, /canUseClaude/);
@@ -164,6 +164,9 @@ test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이
   assert.match(collector, /if \(payload\.category !== '바둑'\) return ''/);
   assert.match(articles, /validateGeneralEditorialSummary/);
   assert.match(articles, /group\.key !== '일반\|ai:misc'/);
+  assert.match(articles, /reorderGeneralSummary/);
+  assert.match(collector, /general_daily_goal = 10/);
+  assert.match(collector, /MAX_SCHEDULED_CANDIDATES \+ 4/);
 });
 
 test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {

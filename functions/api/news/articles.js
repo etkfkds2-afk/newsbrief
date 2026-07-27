@@ -1,6 +1,6 @@
 import { ensureNewsDb, json, userId } from '../../_lib/news-db.js';
 import {
-  normalizeText, validateGeneralEditorialSummary, validateThreeLineSummary
+  normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', 'IT/과학', '바둑', '기타']);
@@ -217,6 +217,7 @@ export async function onRequestGet({ request, env }) {
     const accepted = [];
     for (const item of result.results || []) {
       item.summary = normalizeText(String(item.summary || '').replace(/([1-3][.)])\s*&#10;/gi, '$1 '));
+      if (item.category !== '바둑') item.summary = reorderGeneralSummary(item.summary, item.title);
       item.image_url = normalizeText(item.image_url);
       item.source = cleanOutlet(item.source) || '기타';
       item.press = cleanOutlet(item.press);
