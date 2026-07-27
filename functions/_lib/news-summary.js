@@ -181,6 +181,36 @@ export function validateThreeLineSummary(summary, title = '') {
   return !isNearDuplicate(lines[0], lines[1]) && !isNearDuplicate(lines[0], lines[2]) && !isNearDuplicate(lines[1], lines[2]);
 }
 
+const GENERAL_EDITORIAL_TITLE_PATTERNS = [
+  /\[(?:여백|전라\s*insight|[^\]]*다이어리)\]/i,
+  /(?:뉴욕다이어리|\d+강의\s*시선|가볼\s*만한\s*곳)/i
+];
+const GENERAL_EDITORIAL_LINE_PATTERNS = [
+  /^\s*(?:\[|ⓒ|사진\s*=|거치며\s|이어\s|둘째[,，]\s*|한편\s)/u,
+  /^\s*\d+(?:[.,]\d+)?%\s*[,，]/u,
+  /(?:\[[^\]]*기자\]|기자\s*[=｜]|특파원\s*[=｜]|ⓒ|사진\s*=)/u
+];
+
+function editorialKey(value) {
+  return normalizeText(value).replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+}
+
+export function validateGeneralEditorialSummary(summary, title = '') {
+  if (!validateThreeLineSummary(summary, title)) return false;
+  if (GENERAL_EDITORIAL_TITLE_PATTERNS.some(pattern => pattern.test(title))) return false;
+  const lines = normalizeText(summary).split('\n').map(stripNumbering).filter(Boolean);
+  if (lines.some(line => GENERAL_EDITORIAL_LINE_PATTERNS.some(pattern => pattern.test(line)))) return false;
+  const keys = lines.map(editorialKey);
+  for (let left = 0; left < keys.length; left += 1) {
+    for (let right = left + 1; right < keys.length; right += 1) {
+      const short = keys[left].length <= keys[right].length ? keys[left] : keys[right];
+      const long = short === keys[left] ? keys[right] : keys[left];
+      if (short.length >= 25 && long.includes(short.slice(0, Math.min(40, short.length)))) return false;
+    }
+  }
+  return true;
+}
+
 export function isRejectedTitle(title = '') {
   if (/^(?:카타고|바둑)$/i.test(normalizeText(title))) return true;
   if (/�/.test(title) || (String(title).match(/\?/g) || []).length >= 5) return true;

@@ -5,9 +5,10 @@ import { onRequestGet } from '../functions/api/news/articles.js';
 import { googleNewsSearch, isBadukRelevant } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 
-test('정기 수집은 기존 게시 기사를 비노출 상태로 강등하지 않는다', async () => {
+test('정기 수집은 명백히 불량한 일반 요약만 재요약 대기열로 격리한다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /UPDATE news_articles SET summary='',summary_quality='none'/);
+  assert.match(source, /validateGeneralEditorialSummary/);
+  assert.match(source, /general_summaries_quarantined/);
 });
 
 test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 생략한다', async () => {
@@ -54,6 +55,8 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC: '1'/);
   assert.match(ai, /NEWSBRIEF_USE_ANTHROPIC === '1'/);
   assert.match(ai, /claude-haiku-4-5-20251001/);
+  assert.match(collector, /anthropic_general_calls_today/);
+  assert.match(collector, /general >= 2/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {
@@ -146,11 +149,21 @@ test('자동 수집과 화면 갱신은 3시간 주기로 동작한다', async (
 test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallback한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
-  assert.match(workflow, /categories=\("바둑" "일반"\)/);
+  assert.match(workflow, /categories=\("바둑"\)/);
   assert.match(workflow, /remaining Workers AI or Claude/);
   assert.match(classifier, /env\.AI\.run/);
   assert.match(classifier, /WORKERS_AI_CLASSIFY_MODEL/);
   assert.match(classifier, /classifyWithAnthropic/);
+  assert.match(workflow, /date -u \+%u/);
+  assert.match(workflow, /categories\+=\("일반"\)/);
+});
+
+test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이슈를 숨긴다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  assert.match(collector, /if \(payload\.category !== '바둑'\) return ''/);
+  assert.match(articles, /validateGeneralEditorialSummary/);
+  assert.match(articles, /group\.key !== '일반\|ai:misc'/);
 });
 
 test('Claude 월간 비용은 1.70달러 목표와 1.90달러 절대 한도를 사용한다', async () => {

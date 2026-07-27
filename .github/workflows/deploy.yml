@@ -21,8 +21,8 @@ on:
     # Collect and refresh all news views every three hours. URL keys in D1 make
     # each collection idempotent, so a slower cadence avoids needless requests.
     - cron: '0 */3 * * *'
-    # Once a day, use any remaining Workers AI call for issue keywords, then
-    # fall back to Claude. Keep this off the 3-hour collection cadence.
+    # Update baduk issues daily. General issues run only on Sunday UTC
+    # (Monday morning in Korea) to keep Claude spending low.
     - cron: '0 21 * * *'
 
 jobs:
@@ -155,7 +155,8 @@ jobs:
           CLASSIFY_CATEGORY: ${{ inputs.classify_category }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            categories=("바둑" "일반")
+            categories=("바둑")
+            if [ "$(date -u +%u)" = "7" ]; then categories+=("일반"); fi
           else
             categories=("${CLASSIFY_CATEGORY}")
           fi

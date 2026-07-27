@@ -1,5 +1,7 @@
 import { ensureNewsDb, json, userId } from '../../_lib/news-db.js';
-import { normalizeText, validateThreeLineSummary } from '../../_lib/news-summary.js';
+import {
+  normalizeText, validateGeneralEditorialSummary, validateThreeLineSummary
+} from '../../_lib/news-summary.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', 'IT/과학', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -100,6 +102,7 @@ async function loadIssueCache(env, category) {
 function buildIssuesFromCache(items, cached) {
   const present = new Set(items.map(item => item.url_key));
   const mapped = cached
+    .filter(group => group.key !== '일반|ai:misc')
     .map(group => ({ key: group.key, title: group.title, count: group.url_keys.filter(key => present.has(key)).length }))
     .filter(group => group.count > 0);
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
@@ -220,6 +223,7 @@ export async function onRequestGet({ request, env }) {
       if (item.press === item.source) item.press = '';
       item.outlet = outletFor(item);
       if (!validateThreeLineSummary(item.summary, item.title)) continue;
+      if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
       const first = String(item.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '');
       // Baduk headlines legitimately repeat player and tournament names. Use a
       // much stricter threshold so separate games are not collapsed together.

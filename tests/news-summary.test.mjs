@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, isJunkLine, normalizeText, sanitizeStoredSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
+import { buildSummary, isJunkLine, normalizeText, sanitizeStoredSummary, validateGeneralEditorialSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
 import { makeBestSummary } from '../functions/_lib/news-ai-summary.js';
 
 test('포털 자동요약 안내와 UI 문장을 제거한다', () => {
@@ -127,4 +127,11 @@ test('Anthropic 요약 fallback은 바둑과 일반 기사에 모두 사용할 �
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('일반 뉴스의 문장 조각과 기자 표기를 거부한다', () => {
+  const broken = '1) 50%, 0.73% 상승했고 프랑스 지수도 올랐다.\n2) 시장은 국제 유가 변동을 주시하고 있다고 밝혔다.\n3) 투자자들은 기업 실적 발표를 기다리고 있다고 전했다.';
+  const byline = '1) 정부는 신규 지원 정책을 발표했다고 밝혔다.\n2) [서울경제 홍길동 기자] 기업들은 정책을 검토하고 있다고 밝혔다.\n3) 관계 기관은 다음 달 세부안을 마련할 예정이라고 밝혔다.';
+  assert.equal(validateGeneralEditorialSummary(broken, '뉴욕증시 혼조 출발'), false);
+  assert.equal(validateGeneralEditorialSummary(byline, '정부 신규 지원 정책 발표'), false);
 });

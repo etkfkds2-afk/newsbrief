@@ -1,4 +1,6 @@
-import { isRejectedTitle, normalizeText, validateThreeLineSummary } from '../../_lib/news-summary.js';
+import {
+  isRejectedTitle, normalizeText, validateGeneralEditorialSummary, validateThreeLineSummary
+} from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, sha256
@@ -34,6 +36,11 @@ const MAINTENANCE_BATCH_SIZE = 40;
 
 const BODY_JUNK = /(?:무단전재|재배포\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\s*본\s*뉴스|기사제공|기자\s*[A-Z0-9._%+-]+@|기사의?\s*본문\s*내용|글자\s*크기|인쇄하기|공유하기)/i;
 const DEAD_PAGE = /(?:존재하지\s*않는\s*페이지|요청하신\s*페이지를\s*찾을\s*수\s*없|삭제된\s*기사|기사가\s*존재하지\s*않|page\s*not\s*found|\b404\b)/i;
+
+function validPublishedSummary(summary, title, category) {
+  return validateThreeLineSummary(summary, title)
+    && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
+}
 
 export function isBadukRelevant(title, body = '') {
   const titleText = String(title || '');
@@ -299,20 +306,26 @@ async function reserveAiCall(env, diagnostics) {
   return true;
 }
 
-async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
+async function reserveAnthropicCall(env, diagnostics, forceRetry = false, category = '') {
   const day = new Date().toISOString().slice(0, 10);
   const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_budget_day'").first();
   if (String(dayRow?.value || '') !== day) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_general_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
     ]);
   }
-  const dailyRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first();
+  const [dailyRow, generalRow] = await Promise.all([
+    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first(),
+    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_general_calls_today'").first()
+  ]);
   const daily = Number(dailyRow?.value || 0);
+  const general = Number(generalRow?.value || 0);
   const dailyLimit = forceRetry ? BACKFILL_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT;
   const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
-  if (daily >= dailyLimit || !budget.allowed) {
+  const isGeneral = category !== '바둑';
+  if (daily >= dailyLimit || (isGeneral && general >= 2) || !budget.allowed) {
     diagnostics.anthropic_budget_exhausted = true;
     diagnostics.anthropic_calls_today = daily;
     diagnostics.anthropic_daily_limit = dailyLimit;
@@ -320,7 +333,9 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
     return false;
   }
   await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
+  if (isGeneral) await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_general_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
   diagnostics.anthropic_calls_today = daily + 1;
+  diagnostics.anthropic_general_calls_today = general + (isGeneral ? 1 : 0);
   diagnostics.anthropic_daily_limit = dailyLimit;
   return true;
 }
@@ -355,7 +370,9 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     const trace = detail || {};
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
     if (sourceLength < 300) {
-      return makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
+      return payload.category === '바둑'
+        ? makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace)
+        : '';
     }
 
     let cloudflareReserved = Boolean(env.AI);
@@ -372,7 +389,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       await blockAiForToday(env, diagnostics);
     }
 
-    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry)) {
+    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, payload.category)) {
       const anthropicTrace = {};
       const anthropicSummary = await makeBestSummary({
         ...env,
@@ -395,6 +412,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       if (!summary) summary = anthropicSummary;
     }
 
+    if (payload.category !== '바둑') return '';
     return summary || makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
   };
   // Maintenance is deliberately bounded. Scanning and updating the complete
@@ -414,14 +432,17 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       const fixedSource = articleSource(row.url, row.source, row.press);
       if (fixedSource !== row.source) await env.DB.prepare('UPDATE news_articles SET source=? WHERE id=?').bind(fixedSource, row.id).run();
     }
+    if (fixedCategory !== '바둑' && row.summary
+      && !validateGeneralEditorialSummary(row.summary, row.title)) {
+      await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
+      diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
+    }
   }
   const lastMaintainedId = (stored.results || []).at(-1)?.id || 0;
   await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('maintenance_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .bind(lastMaintainedId).run();
-  // Never demote an already-published article during a routine collection.
-  // Validation rules evolve, and destructive revalidation made valid cards
-  // disappear from the site. Repairs may replace a summary only after a new
-  // summary has passed validation.
+  // Only summaries that fail the narrow general-news editorial checks above
+  // are quarantined. Other published summaries are never demoted routinely.
   if (repair) {
     const weakRows = await env.DB.prepare(`SELECT id,url,title,body_text,image_url,press FROM news_articles
       WHERE category='바둑' AND summary_quality='none' AND length(body_text)<300
@@ -465,7 +486,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     const repaired = await summarize({ title: row.title, rawSummary: row.raw_summary, body: row.body_text, category: row.category }, detail, 'retry');
     diagnostics.retry_attempted += 1;
     if (diagnostics.samples.length < 2) diagnostics.samples.push({ title: row.title, ...detail });
-    if (validateThreeLineSummary(repaired, row.title)) {
+    if (validPublishedSummary(repaired, row.title, row.category)) {
       await env.DB.batch([
         env.DB.prepare("UPDATE news_articles SET summary=?,summary_quality='full' WHERE id=?").bind(repaired, row.id),
         env.DB.prepare('DELETE FROM news_summary_attempts WHERE url_key=?').bind(row.url_key)
@@ -596,14 +617,14 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return 0;
     const press = item.press || pressFromTitle(item.title);
     const urlKey = await sha256(url);
-    const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text FROM news_articles WHERE url_key=?').bind(urlKey).first();
+    const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (!exists.image_url || exists.summary_quality !== 'full') {
         const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
         let article = await fetchArticleText(fetchUrl);
         if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
         const repaired = await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, null, 'retry');
-        const valid = validateThreeLineSummary(repaired, title);
+        const valid = validPublishedSummary(repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
           press=CASE WHEN ?<>'' THEN ? ELSE press END,
@@ -626,7 +647,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     if (body.length < 180) return 0;
     const finalCategory = classify(category, title, body || rawSummary);
     const summary = await summarize({ title, rawSummary, body, category: finalCategory });
-    const validSummary = validateThreeLineSummary(summary, title);
+    const validSummary = validPublishedSummary(summary, title, finalCategory);
 
     await env.DB.prepare(`
       INSERT INTO news_articles
