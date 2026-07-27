@@ -83,6 +83,9 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(collector, /popularityCandidates/);
   assert.match(collector, /forceRetry: true/);
   assert.match(collector, /uniqueCandidates\.slice\(0, DAILY_CATEGORY_PUBLISH_LIMIT\)/);
+  assert.match(collector, /popularityTargetCounts/);
+  assert.match(collector, /popularity_target_counts_before/);
+  assert.match(collector, /popularity_target_counts_after/);
   assert.match(workflow, /repair_popularity:/);
   assert.match(workflow, /!inputs\.repair_popularity/);
   assert.match(workflow, /popularity_date=\$\{ymd\}/);

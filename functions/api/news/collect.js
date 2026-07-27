@@ -423,18 +423,34 @@ async function collect(env, {
     publicationCounts[bucket].monthly += 1;
     if (timestamp >= dayStart) publicationCounts[bucket].daily += 1;
   }
+  const popularityTargetStart = popularityCandidates.length
+    ? Number(popularityCandidates[0].popularityDate) - 9 * 3600000
+    : 0;
+  const popularityTargetCounts = { baduk: 0, general: 0 };
+  if (popularityTargetStart) {
+    for (const row of publishedRows.results || []) {
+      if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
+      const timestamp = storedTime(row.published_at || row.fetched_at);
+      if (timestamp < popularityTargetStart || timestamp >= popularityTargetStart + 86400000) continue;
+      popularityTargetCounts[row.category === '바둑' ? 'baduk' : 'general'] += 1;
+    }
+  }
   const publicationBucket = category => category === '바둑' ? 'baduk' : 'general';
   const hasPublicationCapacity = category => {
-    const count = publicationCounts[publicationBucket(category)];
-    return count.daily < DAILY_CATEGORY_PUBLISH_LIMIT && count.monthly < MONTHLY_CATEGORY_PUBLISH_LIMIT;
+    const bucket = publicationBucket(category);
+    const daily = popularityTargetStart ? popularityTargetCounts[bucket] : publicationCounts[bucket].daily;
+    return daily < DAILY_CATEGORY_PUBLISH_LIMIT && publicationCounts[bucket].monthly < MONTHLY_CATEGORY_PUBLISH_LIMIT;
   };
   const consumePublicationCapacity = category => {
-    const count = publicationCounts[publicationBucket(category)];
-    count.daily += 1;
+    const bucket = publicationBucket(category);
+    const count = publicationCounts[bucket];
+    if (popularityTargetStart) popularityTargetCounts[bucket] += 1;
+    else count.daily += 1;
     count.monthly += 1;
   };
   diagnostics.publish_limits = { daily: DAILY_CATEGORY_PUBLISH_LIMIT, monthly: MONTHLY_CATEGORY_PUBLISH_LIMIT };
   diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
+  if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
   const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
@@ -798,6 +814,7 @@ async function collect(env, {
   for (const row of generalRetries) await retrySummary(row);
   for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
   diagnostics.publish_counts_after = publicationCounts;
+  if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;
   return { inserted, diagnostics };
 }
 
