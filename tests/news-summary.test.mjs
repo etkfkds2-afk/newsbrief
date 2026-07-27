@@ -138,7 +138,15 @@ test('일반 뉴스의 문장 조각과 기자 표기를 거부한다', () => {
 
 test('일반 뉴스의 제목 핵심 문장을 첫 줄로 재정렬한다', () => {
   const btn = '1) 1,600억 원의 제작비를 투입해 고대인도 생활상을 구현했습니다.\n2) 힙불교 열풍으로 부처님에 대한 청년층의 관심이 뜨겁습니다.\n3) 드라마 붓다가 다시 시청자들을 찾아갑니다.';
-  const chenle = '1) 이후 2016년 초 SM엔터테인먼트 연습생으로 합류했다.\n2) 그룹 NCT 천러가 감각적인 비주얼 사진으로 근황을 전했다.\n3) 안경을 착용한 정면 사진을 공개했다.';
+  const chenle = '1) 이후 2016년 초 SM엔터테인먼트의 캐스팅 제의를 받아 한국으로 건너와 연습생으로 합류했다.\n2) 그룹 NCT 천러가 감각적인 비주얼이 담긴 사진으로 최근 근황을 전했다.\n3) 안경을 착용한 정면 클로즈업을 통해 차분한 일상 모습을 공개했다.';
   assert.match(reorderGeneralSummary(btn, "'힙불교'로 부처님 관심…드라마 붓다 돌아온다"), /^1\) 힙불교/);
   assert.match(reorderGeneralSummary(chenle, '천러, 팬미팅 앞두고 감각적인 비주얼 공개'), /^1\) 그룹 NCT 천러/);
+  assert.equal(validateGeneralEditorialSummary(reorderGeneralSummary(chenle, '천러, 팬미팅 앞두고 감각적인 비주얼 공개'), '천러, 팬미팅 앞두고 감각적인 비주얼 공개'), true);
+});
+
+test('일반 뉴스의 사진 출처와 스틸컷 문구를 거부한다', () => {
+  const photo = '1) 일본 국가대표 선수의 은퇴 후 근황이 알려졌다. [사진출처 = 인스타그램]\n2) 해당 선수는 국제대회에 여러 차례 출전했다고 밝혔다.\n3) 그는 최근 인터뷰에서 새로운 진로를 공개했다고 전했다.';
+  const still = '1) 영화 천녀유혼 스틸컷 제작자가 홍콩에서 별세했다.\n2) 고인은 여러 흥행작 제작에 참여했다고 알려졌다.\n3) 영화계 관계자들은 고인의 업적을 기렸다고 밝혔다.';
+  assert.equal(validateGeneralEditorialSummary(photo, '일본 국가대표 선수 근황 공개'), false);
+  assert.equal(validateGeneralEditorialSummary(still, '홍콩 영화 제작자 별세'), false);
 });
