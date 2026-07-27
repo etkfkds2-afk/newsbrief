@@ -83,6 +83,8 @@ test('바둑과 일반 뉴스는 각각 하루 10건·월 300건 게시 상한�
   assert.match(collector, /consumePublicationCapacity/);
   assert.match(collector, /publish_counts_before/);
   assert.match(collector, /publish_counts_after/);
+  assert.match(collector, /validPublishedSummary\(row\.summary, row\.title, row\.category\)/);
+  assert.match(collector, /const dayStart = Date\.UTC/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {

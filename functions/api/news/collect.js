@@ -366,18 +366,28 @@ async function collectArchivedTop(slot) {
 
 async function collect(env, { backfill = false, repair = false, forceRetry = false, generalBoost = false, googleDiscoveries = [] } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
-  const publishedCounts = await env.DB.prepare(`SELECT
-    CASE WHEN category='바둑' THEN 'baduk' ELSE 'general' END AS bucket,
-    SUM(CASE WHEN datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','+9 hours','start of day','-9 hours') THEN 1 ELSE 0 END) AS daily_count,
-    SUM(CASE WHEN datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','+9 hours','start of month','-9 hours') THEN 1 ELSE 0 END) AS monthly_count
-    FROM news_articles WHERE summary_quality='full' GROUP BY bucket`).all();
+  const now = new Date();
+  const koreaNow = new Date(now.valueOf() + 9 * 3600000);
+  const dayStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), koreaNow.getUTCDate()) - 9 * 3600000;
+  const monthStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), 1) - 9 * 3600000;
+  const publishedRows = await env.DB.prepare(`SELECT category,title,summary,published_at,fetched_at
+    FROM news_articles WHERE summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime(?)`)
+    .bind(new Date(monthStart).toISOString()).all();
   const publicationCounts = {
     baduk: { daily: 0, monthly: 0 },
     general: { daily: 0, monthly: 0 }
   };
-  for (const row of publishedCounts.results || []) {
-    if (!publicationCounts[row.bucket]) continue;
-    publicationCounts[row.bucket] = { daily: Number(row.daily_count || 0), monthly: Number(row.monthly_count || 0) };
+  const storedTime = value => {
+    const text = String(value || '');
+    return Date.parse(/Z$|[+-]\d\d:\d\d$/.test(text) ? text : `${text.replace(' ', 'T')}Z`);
+  };
+  for (const row of publishedRows.results || []) {
+    if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
+    const bucket = row.category === '바둑' ? 'baduk' : 'general';
+    const timestamp = storedTime(row.published_at || row.fetched_at);
+    publicationCounts[bucket].monthly += 1;
+    if (timestamp >= dayStart) publicationCounts[bucket].daily += 1;
   }
   const publicationBucket = category => category === '바둑' ? 'baduk' : 'general';
   const hasPublicationCapacity = category => {
