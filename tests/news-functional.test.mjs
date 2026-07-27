@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
+import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
 import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import { classifyIssues, isStandaloneEventArticle } from '../functions/_lib/news-issue-classify.js';
@@ -57,6 +57,18 @@ test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사
   ]);
   assert.equal(normalized.find(group => group.key.includes('|ai:event:')).url_keys[0], 'event');
   assert.deepEqual(normalized.find(group => group.key.endsWith('|ai:misc')).url_keys, ['profile']);
+});
+
+test('월간 이슈가 12개를 넘어도 주간에 보인 바둑 대회를 잘라내지 않는다', () => {
+  const items = Array.from({ length: 13 }, (_, index) => ({
+    url_key: `event-${index}`, category: '바둑', title: `제${index + 1}회 바둑대회`
+  }));
+  const cached = items.map((item, index) => ({
+    key: `바둑|ai:${index}`, title: `바둑대회 ${index + 1}`, url_keys: [item.url_key]
+  }));
+  const issues = buildIssuesFromCache(items, cached);
+  assert.equal(issues.length, 13);
+  assert.equal(issues.some(issue => issue.key === '바둑|ai:12'), true);
 });
 
 test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고 일반 단독 행사는 제외한다', async () => {
@@ -268,11 +280,12 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(workflow, /popularity_date=\$\{ymd\}/);
 });
 
-test('바둑과 일반 뉴스는 각각 하루 10건·월 300건 게시 상한을 적용한다', async () => {
+test('홈 표시 개수는 제한하되 수집 단계에서 정상 기사를 버리지 않는다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 10/);
-  assert.match(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT = 300/);
-  assert.match(collector, /hasPublicationCapacity/);
+  assert.doesNotMatch(collector, /DAILY_CATEGORY_PUBLISH_LIMIT/);
+  assert.doesNotMatch(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT/);
+  assert.doesNotMatch(collector, /hasPublicationCapacity/);
+  assert.match(collector, /home_display_limits = \{ baduk: 30, general: 10 \}/);
   assert.match(collector, /consumePublicationCapacity/);
   assert.match(collector, /publish_counts_before/);
   assert.match(collector, /publish_counts_after/);
@@ -382,6 +395,7 @@ test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공
   assert.match(html, /Date\.now\(\)-lastSuccessfulLoad>300000/);
   assert.match(html, /id="retryLoad"/);
   assert.match(html, /closest\('#retryLoad'\)/);
+  assert.match(html, /if\(sub==='home'\)\$\('hot'\)\.innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다/);
 });
 
 test('읽기 API는 요청마다 D1 스키마 DDL을 다시 실행하지 않는다', async () => {
@@ -404,11 +418,13 @@ test('대량 백필은 CPU 제한을 피하도록 작은 묶음으로 처리한�
   assert.match(workflow, /seq 1 10/);
 });
 
-test('자동 수집과 화면 갱신은 3시간 주기로 동작한다', async () => {
+test('자동 수집은 3시간 주기와 watchdog을 사용하고 화면은 10분마다 확인한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(workflow, /cron: '0 \*\/3 \* \* \*'/);
-  assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),10800000\)/);
+  assert.match(workflow, /cron: '17 \*\/3 \* \* \*'/);
+  assert.match(workflow, /cron: '47 \* \* \* \*'/);
+  assert.match(workflow, /automatic_age_hours \/\/ 999\) > 4/);
+  assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),600000\)/);
 });
 
 test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallback한다', async () => {
@@ -429,10 +445,16 @@ test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이
   assert.match(collector, /if \(payload\.category !== '바둑'\) return ''/);
   assert.match(articles, /validateGeneralEditorialSummary/);
   assert.doesNotMatch(articles, /group\.key !== '일반\|ai:misc'/);
-  assert.match(articles, /return \[\.\.\.rest\.slice\(0, misc\.length \? 11 : 12\), \.\.\.misc\]/);
+  assert.match(articles, /return \[\.\.\.rest, \.\.\.misc\]/);
+  assert.doesNotMatch(articles, /rest\.slice\(0, misc\.length \? 11 : 12\)/);
   assert.match(articles, /reorderGeneralSummary/);
   assert.match(collector, /general_daily_goal = 10/);
-  assert.match(collector, /MAX_SCHEDULED_CANDIDATES \+ 4/);
+  assert.match(collector, /SCHEDULED_CANDIDATES_PER_CATEGORY = 6/);
+  assert.match(collector, /processed_by_category/);
+  assert.match(collector, /candidate_outcomes/);
+  assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
+  assert.match(collector, /const newOrder = Number\(knownCandidateKeys\.has/);
+  assert.match(collector, /diagnostics\.new_candidates/);
 });
 
 test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 보존한다', async () => {
@@ -514,7 +536,8 @@ test('이미 정상 요약인 기사는 메타데이터만 보강하고 AI 요�
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
   assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly \|\| hasMissingTime\)/);
-  assert.match(source, /return 0;\s*}\s*if \(!hasPublicationCapacity/);
+  assert.match(source, /return outcome\('existing_full'\)/);
+  assert.doesNotMatch(source, /hasPublicationCapacity/);
 });
 
 test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', async () => {

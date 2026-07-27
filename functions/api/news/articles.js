@@ -84,8 +84,7 @@ function buildIssues(items, category = '') {
     groups.set(key, group);
   }
   return [...groups.values()]
-    .sort((a, b) => b.count - a.count || String(b.latest).localeCompare(String(a.latest)))
-    .slice(0, 12);
+    .sort((a, b) => b.count - a.count || String(b.latest).localeCompare(String(a.latest)));
 }
 
 async function loadIssueCache(env, category) {
@@ -131,14 +130,14 @@ export function normalizeCachedIssues(items, cached) {
   return withoutMisc;
 }
 
-function buildIssuesFromCache(items, cached) {
+export function buildIssuesFromCache(items, cached) {
   const normalized = normalizeCachedIssues(items, cached);
   const mapped = normalized.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }));
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
   // count, so it is kept out of the count sort and appended last instead.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
   const rest = mapped.filter(group => !group.key.endsWith('|ai:misc')).sort((a, b) => b.count - a.count);
-  return [...rest.slice(0, misc.length ? 11 : 12), ...misc].slice(0, 12);
+  return [...rest, ...misc];
 }
 
 function bigrams(value) {

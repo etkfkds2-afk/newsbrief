@@ -152,8 +152,8 @@ async function load({silent=false}={}){
   activeLoadController?.abort();
   const loadController=new AbortController();activeLoadController=loadController;
   const requestId=++state.requestSeq;nav();
-  if(!silent)$('cards').innerHTML='<div class="empty">뉴스를 불러오는 중입니다.</div>';
   const sub=currentSubview();
+  if(!silent){$('cards').innerHTML='<div class="empty">뉴스를 불러오는 중입니다.</div>';$('issuesPanel').style.display='none';$('hero').style.display=sub==='home'?'block':'none';if(sub==='home')$('hot').innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다.</div>'}
   const isBaduk=state.section==='baduk';
   try{
     if(sub==='home'&&!state.q&&!state.issueKey){
@@ -226,7 +226,8 @@ $('cards').addEventListener('click',async e=>{
 });
 $('search').onsubmit=e=>{e.preventDefault();state.q=$('query').value.trim();load()};
 nav();load();
-// Keep home, latest, popular, and baduk views on the same three-hour refresh.
-setInterval(()=>load({silent:true}),10800000);
+// Recheck visible data every ten minutes; the collector and five-minute cache
+// keep this lightweight while making newly collected articles appear promptly.
+setInterval(()=>load({silent:true}),600000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&Date.now()-lastSuccessfulLoad>300000)load({silent:true})});
 </script></body></html>

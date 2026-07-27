@@ -32,11 +32,9 @@ const DAILY_ANTHROPIC_CALL_LIMIT = 12;
 const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
-const MAX_SCHEDULED_CANDIDATES = 10;
+const SCHEDULED_CANDIDATES_PER_CATEGORY = 6;
 const MAINTENANCE_BATCH_SIZE = 40;
-const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
-const MONTHLY_CATEGORY_PUBLISH_LIMIT = 300;
 
 const BODY_JUNK = /(?:무단전재|재배포\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\s*본\s*뉴스|기사제공|기자\s*[A-Z0-9._%+-]+@|기사의?\s*본문\s*내용|글자\s*크기|인쇄하기|공유하기)/i;
 const DEAD_PAGE = /(?:존재하지\s*않는\s*페이지|요청하신\s*페이지를\s*찾을\s*수\s*없|삭제된\s*기사|기사가\s*존재하지\s*않|page\s*not\s*found|\b404\b)/i;
@@ -536,11 +534,6 @@ async function collect(env, {
     }
   }
   const publicationBucket = category => category === '바둑' ? 'baduk' : 'general';
-  const hasPublicationCapacity = category => {
-    const bucket = publicationBucket(category);
-    const daily = popularityTargetStart ? popularityTargetCounts[bucket] : publicationCounts[bucket].daily;
-    return daily < DAILY_CATEGORY_PUBLISH_LIMIT && publicationCounts[bucket].monthly < MONTHLY_CATEGORY_PUBLISH_LIMIT;
-  };
   const consumePublicationCapacity = category => {
     const bucket = publicationBucket(category);
     const count = publicationCounts[bucket];
@@ -548,7 +541,7 @@ async function collect(env, {
     else count.daily += 1;
     count.monthly += 1;
   };
-  diagnostics.publish_limits = { daily: DAILY_CATEGORY_PUBLISH_LIMIT, monthly: MONTHLY_CATEGORY_PUBLISH_LIMIT };
+  diagnostics.home_display_limits = { baduk: 30, general: 10 };
   diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
   if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
   const summarize = async (payload, detail, purpose = 'new') => {
@@ -677,7 +670,6 @@ async function collect(env, {
       qualityRepairIds.join(','), forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
-    if (!hasPublicationCapacity(row.category)) return;
     const detail = {};
     const repaired = await summarize({ title: row.title, rawSummary: row.raw_summary, body: row.body_text, category: row.category }, detail, 'retry');
     diagnostics.retry_attempted += 1;
@@ -818,16 +810,23 @@ async function collect(env, {
     diagnostics.popular_error = String(error?.message || error).slice(0, 120);
   }
 
-  const processCandidate = async ({ category, item, source, isPopular = false }) => {
-    const preferredUrl = source === 'NAVER' && /naver\.com\//i.test(item.link || '') ? item.link : (item.originallink || item.link);
-    const url = canonicalUrl(preferredUrl);
+  const candidateUrl = ({ item, source }) => canonicalUrl(
+    source === 'NAVER' && /naver\.com\//i.test(item?.link || '') ? item.link : (item?.originallink || item?.link)
+  );
+  const processCandidate = async ({ category, item, source, isPopular = false, urlKey: knownUrlKey = '' }) => {
+    const outcome = reason => {
+      diagnostics.candidate_outcomes ||= {};
+      diagnostics.candidate_outcomes[reason] = Number(diagnostics.candidate_outcomes[reason] || 0) + 1;
+      return 0;
+    };
+    const url = candidateUrl({ item, source });
     const title = cleanTitle(item.title);
     const publishedAt = parseDate(item.pubDate);
-    if (!url || !title || GENERIC_TITLES.has(title) || isRejectedTitle(title) || !/^https?:\/\//.test(url)) return 0;
-    if (!allowedCandidate(url, source)) return 0;
-    if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return 0;
+    if (!url || !title || GENERIC_TITLES.has(title) || isRejectedTitle(title) || !/^https?:\/\//.test(url)) return outcome('invalid_metadata');
+    if (!allowedCandidate(url, source)) return outcome('disallowed_url');
+    if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return outcome('too_old');
     const press = item.press || pressFromTitle(item.title);
-    const urlKey = await sha256(url);
+    const urlKey = knownUrlKey || await sha256(url);
     const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (exists.summary_quality === 'full') {
@@ -849,9 +848,8 @@ async function collect(env, {
               article.press, article.press, article.image, article.image, article.body, article.body,
               article.publishedAt || publishedAt, article.publishedAt || publishedAt, exists.id).run();
         }
-        return 0;
+        return outcome('existing_full');
       }
-      if (!hasPublicationCapacity(exists.category || category)) return 0;
       const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
       let article = await fetchArticleText(fetchUrl);
       if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
@@ -873,10 +871,8 @@ async function collect(env, {
             article.publishedAt || publishedAt, article.publishedAt || publishedAt,
             valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
         if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
-      return 0;
+      return outcome(valid ? 'existing_repaired' : 'existing_repair_failed');
     }
-
-    if (!hasPublicationCapacity(category)) return 0;
 
     const rawSummary = stripHtml(item.description);
     const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
@@ -885,14 +881,13 @@ async function collect(env, {
     const body = article.body;
     const resolvedPublishedAt = article.publishedAt || publishedAt;
     const resolvedPress = article.press || press;
-    if (category !== '바둑' && !isPopular && LOCAL_GENERAL_PRESS.test(resolvedPress)) return 0;
+    if (category !== '바둑' && !isPopular && LOCAL_GENERAL_PRESS.test(resolvedPress)) return outcome('local_general_filtered');
     // Search snippets are discovery data, not an article body. Never create a
     // three-line card when the destination page is missing or cannot be read.
-    if (body.length < 180) return 0;
+    if (body.length < 180) return outcome('body_too_short');
     const finalCategory = category === '바둑'
       ? classify(category, title, body || rawSummary)
       : (article.sectionCategory || classify(category, title, body || rawSummary));
-    if (!hasPublicationCapacity(finalCategory)) return 0;
     const summary = await summarize({ title, rawSummary, body, category: finalCategory });
     const validSummary = validPublishedSummary(summary, title, finalCategory);
 
@@ -911,17 +906,27 @@ async function collect(env, {
       body, validSummary ? summary : '', validSummary ? 'full' : 'none', article.image
     ).run();
     if (validSummary) consumePublicationCapacity(finalCategory);
+    outcome(validSummary ? 'inserted_publishable' : 'inserted_pending_summary');
     return 1;
   };
   const uniqueCandidates = [];
   const candidateUrls = new Set();
   for (const candidate of candidates) {
-    const key = canonicalUrl(candidate.item?.originallink || candidate.item?.link);
+    const key = candidateUrl(candidate);
     if (!key || candidateUrls.has(key)) continue;
     candidateUrls.add(key);
-    uniqueCandidates.push(candidate);
+    uniqueCandidates.push({ ...candidate, urlKey: await sha256(key) });
+  }
+  const knownCandidateKeys = new Set();
+  if (uniqueCandidates.length) {
+    const placeholders = uniqueCandidates.map(() => '?').join(',');
+    const knownRows = await env.DB.prepare(`SELECT url_key FROM news_articles WHERE url_key IN (${placeholders})`)
+      .bind(...uniqueCandidates.map(candidate => candidate.urlKey)).all();
+    for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
   }
   uniqueCandidates.sort((a, b) => {
+    const newOrder = Number(knownCandidateKeys.has(a.urlKey)) - Number(knownCandidateKeys.has(b.urlKey));
+    if (newOrder) return newOrder;
     const badukOrder = Number(b.category === '바둑') - Number(a.category === '바둑');
     if (badukOrder) return badukOrder;
     const popularOrder = Number(Boolean(b.isPopular)) - Number(Boolean(a.isPopular));
@@ -932,15 +937,23 @@ async function collect(env, {
     WHERE category<>'바둑' AND summary_quality='full'
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
   const generalBelowDailyGoal = Number(recentGeneral?.count || 0) < 10;
-  const scheduledCandidateLimit = generalBelowDailyGoal ? MAX_SCHEDULED_CANDIDATES + 4 : MAX_SCHEDULED_CANDIDATES;
   const limitedCandidates = popularityCandidates.length
     ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
-    : (backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, scheduledCandidateLimit));
+    : (backfill ? uniqueCandidates.slice(0, 8) : [
+        ...uniqueCandidates.filter(candidate => candidate.category === '바둑').slice(0, SCHEDULED_CANDIDATES_PER_CATEGORY),
+        ...uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_CANDIDATES_PER_CATEGORY)
+      ]);
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
   diagnostics.candidates = candidates.length;
   diagnostics.unique_candidates = uniqueCandidates.length;
+  diagnostics.new_candidates = uniqueCandidates.filter(candidate => !knownCandidateKeys.has(candidate.urlKey)).length;
+  diagnostics.existing_candidates = uniqueCandidates.length - diagnostics.new_candidates;
   diagnostics.processed_candidates = limitedCandidates.length;
+  diagnostics.processed_by_category = {
+    baduk: limitedCandidates.filter(candidate => candidate.category === '바둑').length,
+    general: limitedCandidates.filter(candidate => candidate.category !== '바둑').length
+  };
   let inserted = 0;
   const badukRetries = pendingRetries.filter(row => row.category === '바둑');
   const generalRetries = pendingRetries.filter(row => row.category !== '바둑');
@@ -966,6 +979,8 @@ export async function onRequestPost({ request, env }) {
     const run = await env.DB.prepare("INSERT INTO news_runs(started_at,status) VALUES(?,'running') RETURNING id").bind(started).first();
     runId = run?.id;
     const requestUrl = new URL(request.url);
+    const requestedSource = requestUrl.searchParams.get('source') || 'manual';
+    const runSource = ['scheduled', 'watchdog', 'manual'].includes(requestedSource) ? requestedSource : 'manual';
     const backfill = requestUrl.searchParams.get('backfill') === '1';
     const repair = requestUrl.searchParams.get('repair') === '1';
     const forceRetry = requestUrl.searchParams.get('force_retry') === '1';
@@ -1030,6 +1045,7 @@ export async function onRequestPost({ request, env }) {
     } catch {}
     const googleDiscoveries = Array.isArray(payload?.googleDiscoveries) ? payload.googleDiscoveries : [];
     const result = await collect(env, { backfill, repair, forceRetry, generalBoost, googleDiscoveries });
+    result.diagnostics.mode = runSource;
     const warnings = Object.entries(result.diagnostics)
       .filter(([key, value]) => /_error$/.test(key) && value)
       .map(([key, value]) => `${key}: ${value}`);

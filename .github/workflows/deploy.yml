@@ -54,10 +54,13 @@ on:
     # GitHub may delay scheduled jobs during busy periods. Running every 15
     # Collect and refresh all news views every three hours. URL keys in D1 make
     # each collection idempotent, so a slower cadence avoids needless requests.
-    - cron: '0 */3 * * *'
+    - cron: '17 */3 * * *'
+    # An hourly watchdog only collects when the last automatic run is over four
+    # hours old. The offset avoids GitHub's busiest top-of-hour scheduler window.
+    - cron: '47 * * * *'
     # Update baduk issues daily. General issues run only on Sunday UTC
     # (Monday morning in Korea) to keep Claude spending low.
-    - cron: '0 21 * * *'
+    - cron: '23 21 * * *'
 
 jobs:
   deploy:
@@ -135,7 +138,7 @@ jobs:
     needs: deploy
     if: >-
       always() &&
-      ((github.event_name == 'schedule' && github.event.schedule == '0 */3 * * *') ||
+      ((github.event_name == 'schedule' && (github.event.schedule == '17 */3 * * *' || github.event.schedule == '47 * * * *')) ||
        github.event_name == 'workflow_dispatch')
     concurrency:
       group: newsbrief-collector
@@ -144,17 +147,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Decide whether collection is due
+        id: collection-gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          should_collect=true
+          run_source=manual
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            run_source=scheduled
+            if [ "$EVENT_SCHEDULE" = "47 * * * *" ]; then
+              run_source=watchdog
+              health=$(curl -sS --retry 2 --max-time 30 "https://newsbrief-etkfkds2.pages.dev/api/news/health" || printf '{}')
+              should_collect=$(echo "$health" | jq -r '((.metrics.automatic_age_hours // 999) > 4)')
+            fi
+          fi
+          echo "should_collect=$should_collect" >> "$GITHUB_OUTPUT"
+          echo "run_source=$run_source" >> "$GITHUB_OUTPUT"
+
       - name: Discover Google News and trigger collection
         if: >-
-          github.event_name != 'workflow_dispatch' ||
-          (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality)
+          steps.collection-gate.outputs.should_collect == 'true' &&
+          (github.event_name != 'workflow_dispatch' ||
+          (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality))
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           NEWSBRIEF_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && '1' || '0' }}
           NEWSBRIEF_GENERAL_BOOST: ${{ github.event_name == 'workflow_dispatch' && inputs.general_boost && '1' || '0' }}
+          NEWSBRIEF_RUN_SOURCE: ${{ steps.collection-gate.outputs.run_source }}
         run: node scripts/google-news-discovery.mjs
 
       - name: Trigger NewsBrief collection
+        if: steps.collection-gate.outputs.should_collect == 'true'
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
         run: |
@@ -163,9 +188,9 @@ jobs:
           # each Pages Worker invocation stays below its CPU time limit.
           if [ "${{ inputs.backfill }}" = "true" ]; then runs=18; fi
           for i in $(seq 1 "$runs"); do
-            endpoint="https://newsbrief-etkfkds2.pages.dev/api/news/collect"
-            if [ "${{ inputs.backfill }}" = "true" ]; then endpoint="${endpoint}?backfill=1&force_retry=1"; fi
-            if [ "${{ inputs.general_boost }}" = "true" ]; then endpoint="${endpoint}?general_boost=1"; fi
+            endpoint="https://newsbrief-etkfkds2.pages.dev/api/news/collect?source=manual"
+            if [ "${{ inputs.backfill }}" = "true" ]; then endpoint="${endpoint}&backfill=1&force_retry=1"; fi
+            if [ "${{ inputs.general_boost }}" = "true" ]; then endpoint="${endpoint}&general_boost=1"; fi
             curl --fail-with-body --retry 3 --max-time 240 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
@@ -223,7 +248,7 @@ jobs:
     if: >-
       always() &&
       ((github.event_name == 'workflow_dispatch' && inputs.classify_category != '') ||
-       (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *'))
+       (github.event_name == 'schedule' && github.event.schedule == '23 21 * * *'))
     runs-on: ubuntu-latest
     steps:
       - name: Classify issue keywords with remaining Workers AI or Claude

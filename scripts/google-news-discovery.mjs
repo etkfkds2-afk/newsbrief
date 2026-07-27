@@ -59,6 +59,7 @@ for (const query of selected) {
   if (found.size >= (full ? 100 : 40)) break;
 }
 const collectUrl = new URL('https://newsbrief-etkfkds2.pages.dev/api/news/collect');
+collectUrl.searchParams.set('source', process.env.NEWSBRIEF_RUN_SOURCE || 'scheduled');
 if (full) collectUrl.searchParams.set('backfill', '1');
 if (generalBoost) collectUrl.searchParams.set('general_boost', '1');
 const endpoint = collectUrl.toString();

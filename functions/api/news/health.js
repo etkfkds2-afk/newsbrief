@@ -9,8 +9,11 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, counts, missingTime, stateRows, exhausted] = await Promise.all([
+    const [run, automaticRun, counts, missingTime, stateRows, exhausted] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
+      env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
+        WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
+        ORDER BY id DESC LIMIT 1`).first(),
       env.DB.prepare(`SELECT
         SUM(CASE WHEN category='바둑' THEN 1 ELSE 0 END) AS baduk,
         SUM(CASE WHEN category<>'바둑' THEN 1 ELSE 0 END) AS general
@@ -27,9 +30,11 @@ export async function onRequestGet({ env }) {
     ]);
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const finishedAgeHours = run?.finished_at ? (Date.now() - utcMillis(run.finished_at)) / 3600000 : Infinity;
+    const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
     const checks = {
       last_run_ok: run?.status === 'ok',
       last_run_within_6h: finishedAgeHours <= 6,
+      automatic_run_within_4h: automaticAgeHours <= 4,
       general_has_recent_news: Number(counts?.general || 0) > 0,
       baduk_has_recent_news: Number(counts?.baduk || 0) > 0,
       published_time_complete: Number(missingTime?.count || 0) === 0,
@@ -45,7 +50,9 @@ export async function onRequestGet({ env }) {
       checks,
       metrics: {
         last_run: run || null,
+        last_automatic_run: automaticRun || null,
         finished_age_hours: Number.isFinite(finishedAgeHours) ? Number(finishedAgeHours.toFixed(2)) : null,
+        automatic_age_hours: Number.isFinite(automaticAgeHours) ? Number(automaticAgeHours.toFixed(2)) : null,
         general_24h: Number(counts?.general || 0),
         baduk_24h: Number(counts?.baduk || 0),
         missing_published_time: Number(missingTime?.count || 0),
