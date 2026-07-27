@@ -143,16 +143,24 @@ test('이슈 식별은 제목의 대회·선수 조합을 사용하고 일반 �
   assert.match(source, /if \(category === '바둑'\)[\s\S]*return '';/);
 });
 
-test('이슈 필터는 기간 제한 없이 전체 관련 기사를 보여준다', async () => {
+test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () => {
   const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
   assert.match(source, /const queryLimit = issueKeyFilter \? 900/);
-  // Clicking an issue tile must not carry the sub-view's own hours window
-  // (e.g. 주간's 168h) into the filtered result, or articles belonging to
-  // the same issue but older than that window would be silently dropped.
-  assert.match(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
+  assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
+  assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
+});
+
+test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 날짜만 저장한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(collector, /popularityDate \+ 12 \* 3600000/);
+  assert.match(collector, /article\.publishedAt \|\| publishedAt/);
+  assert.match(articles, /date\(COALESCE[\s\S]*p\.score DESC/);
+  assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 
 test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하되 중복 제목 목록을 만들지 않는다', async () => {
@@ -259,7 +267,7 @@ test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시�
 test('이미 정상 요약인 기사는 이미지가 없어도 AI 요약을 다시 호출하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
-  assert.match(source, /if \(!exists\.image_url\)/);
+  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime\)/);
   assert.match(source, /return 0;\s*}\s*if \(!hasPublicationCapacity/);
 });
 

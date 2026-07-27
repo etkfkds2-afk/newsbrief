@@ -120,7 +120,12 @@ function cleanPressName(value) {
 }
 
 function parseDate(value) {
-  const date = new Date(value || '');
+  const text = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)
+    ? `${text.replace(' ', 'T')}+09:00`
+    : text;
+  const date = new Date(normalized);
   return Number.isNaN(date.valueOf()) ? '' : date.toISOString();
 }
 
@@ -149,15 +154,22 @@ async function fetchArticleText(url) {
       headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
       cf: { cacheTtl: 300, cacheEverything: false }
     });
-    if (!response.ok) return { body: '', image: '', press: '' };
+    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '' };
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html')) return { body: '', image: '', press: '' };
+    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
     const html = (await response.text()).slice(0, 800000);
-    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '' };
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
     const image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
     const siteName = cleanPressName(html.match(/<meta[^>]+(?:property|name)=["']og:site_name["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:site_name["']/i)?.[1] || '');
+    const publishedAt = parseDate(
+      html.match(/<meta[^>]+(?:property|name)=["'](?:article:published_time|og:article:published_time)["'][^>]+content=["']([^"']+)/i)?.[1]
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:published_time|og:article:published_time)["']/i)?.[1]
+      || html.match(/["']datePublished["']\s*:\s*["']([^"']+)/i)?.[1]
+      || html.match(/data-date-time=["']([^"']+)/i)?.[1]
+      || ''
+    );
     let jsonBody = '';
     for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
       try {
@@ -170,9 +182,9 @@ async function fetchArticleText(url) {
     const body = cleanBody(jsonBody || stripHtml(article
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
-    return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName };
+    return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt };
   } catch {
-    return { body: '', image: '', press: '' };
+    return { body: '', image: '', press: '', publishedAt: '' };
   }
 }
 
@@ -601,7 +613,10 @@ async function collect(env, {
     popularityRank: row.rank,
     item: {
       title: row.title, link: row.href, originallink: row.href, description: '',
-      pubDate: new Date(row.popularityDate + 12 * 3600000).toISOString()
+      // Archived ranking pages identify the day, not an exact publication
+      // time. Keep that as a date-only value until the article page supplies
+      // its real timestamp; inventing noon UTC displayed as 9 PM in Korea.
+      pubDate: new Date(row.popularityDate).toISOString().slice(0, 10)
     }
   }));
   if (repair) {
@@ -724,18 +739,21 @@ async function collect(env, {
     if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return 0;
     const press = item.press || pressFromTitle(item.title);
     const urlKey = await sha256(url);
-    const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category FROM news_articles WHERE url_key=?').bind(urlKey).first();
+    const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (exists.summary_quality === 'full') {
-        if (!exists.image_url) {
+        const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
+        if (!exists.image_url || hasSyntheticTime) {
           const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
           await env.DB.prepare(`UPDATE news_articles SET
             press=CASE WHEN ?<>'' THEN ? ELSE press END,
             image_url=CASE WHEN ?<>'' THEN ? ELSE image_url END,
-            body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END WHERE id=?`)
-            .bind(article.press, article.press, article.image, article.image, article.body, article.body, exists.id).run();
+            body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END,
+            published_at=CASE WHEN ?<>'' THEN ? ELSE published_at END WHERE id=?`)
+            .bind(article.press, article.press, article.image, article.image, article.body, article.body,
+              article.publishedAt || publishedAt, article.publishedAt || publishedAt, exists.id).run();
         }
         return 0;
       }
@@ -750,9 +768,12 @@ async function collect(env, {
           press=CASE WHEN ?<>'' THEN ? ELSE press END,
           image_url=CASE WHEN ?<>'' THEN ? ELSE image_url END,
           body_text=CASE WHEN ?<>'' THEN ? ELSE body_text END,
+          published_at=CASE WHEN ?<>'' THEN ? ELSE published_at END,
           summary=CASE WHEN ? THEN ? ELSE summary END,
           summary_quality=CASE WHEN ? THEN 'full' ELSE summary_quality END
-          WHERE id=?`).bind(title, article.press, article.press, article.image, article.image, article.body, article.body, valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
+          WHERE id=?`).bind(title, article.press, article.press, article.image, article.image, article.body, article.body,
+            article.publishedAt || publishedAt, article.publishedAt || publishedAt,
+            valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
         if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
       return 0;
     }
@@ -764,6 +785,7 @@ async function collect(env, {
     let article = await fetchArticleText(fetchUrl);
     if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
     const body = article.body;
+    const resolvedPublishedAt = article.publishedAt || publishedAt;
     const resolvedPress = article.press || press;
     if (category !== '바둑' && !isPopular && LOCAL_GENERAL_PRESS.test(resolvedPress)) return 0;
     // Search snippets are discovery data, not an article body. Never create a
@@ -785,7 +807,7 @@ async function collect(env, {
         summary=CASE WHEN length(excluded.summary)>length(news_articles.summary) THEN excluded.summary ELSE news_articles.summary END,
         summary_quality=excluded.summary_quality
     `).bind(
-      url, urlKey, title, articleSource(url, source, article.press || press), article.press || press, finalCategory, publishedAt, rawSummary,
+      url, urlKey, title, articleSource(url, source, article.press || press), article.press || press, finalCategory, resolvedPublishedAt, rawSummary,
       body, validSummary ? summary : '', validSummary ? 'full' : 'none', article.image
     ).run();
     if (validSummary) consumePublicationCapacity(finalCategory);

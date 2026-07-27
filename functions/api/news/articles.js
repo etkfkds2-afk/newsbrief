@@ -197,7 +197,9 @@ export async function onRequestGet({ request, env }) {
     bindings.push(queryLimit);
 
     const order = view === 'popular'
-      ? "p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
+      ? (hours > 0 && hours <= 24
+        ? "p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
+        : "date(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
       : view === 'home'
         ? "CASE WHEN p.title IS NULL THEN 0 ELSE 1 END DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";
