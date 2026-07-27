@@ -370,20 +370,25 @@ async function collectArchivedTop(slot) {
 
 async function collect(env, { backfill = false, repair = false, forceRetry = false, googleDiscoveries = [] } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
-  let aiRetryRemaining = repair ? 4 : (backfill ? 3 : 2);
-  let aiNewRemaining = repair ? 0 : (backfill ? 2 : 2);
+  const retryQuota = repair ? 4 : (backfill ? 3 : 2);
+  const newQuota = repair ? 0 : 2;
+  const aiRetryRemaining = { 바둑: retryQuota, 일반: retryQuota };
+  const aiNewRemaining = { 바둑: newQuota, 일반: newQuota };
   const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
+    const quotaKey = payload.category === '바둑' ? '바둑' : '일반';
     const wantsAnthropic = Boolean(env.ANTHROPIC_API_KEY)
       && env.NEWSBRIEF_USE_ANTHROPIC === '1'
       && payload.category === '바둑';
-    let useAi = Boolean(env.AI || wantsAnthropic) && payload.category === '바둑'
-      && (purpose === 'retry' ? aiRetryRemaining > 0 : aiNewRemaining > 0);
+    // Workers AI summarizes every news category. Anthropic remains an
+    // opt-in path for baduk summaries only; production keeps that flag off.
+    let useAi = Boolean(env.AI || wantsAnthropic)
+      && (purpose === 'retry' ? aiRetryRemaining[quotaKey] > 0 : aiNewRemaining[quotaKey] > 0);
     if (useAi) useAi = wantsAnthropic
       ? await reserveAnthropicCall(env, diagnostics, forceRetry)
       : await reserveAiCall(env, diagnostics);
-    if (useAi && purpose === 'retry') aiRetryRemaining -= 1;
-    if (useAi && purpose !== 'retry') aiNewRemaining -= 1;
+    if (useAi && purpose === 'retry') aiRetryRemaining[quotaKey] -= 1;
+    if (useAi && purpose !== 'retry') aiNewRemaining[quotaKey] -= 1;
     const summary = await makeBestSummary(useAi ? env : { AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
     if (useAi && !wantsAnthropic && /(?:daily free allocation|Account limited|3036|4006)/i.test(String(trace.ai_error || ''))) {
       await blockAiForToday(env, diagnostics);

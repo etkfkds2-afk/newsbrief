@@ -52,6 +52,14 @@ test('Anthropic은 바둑 전용이며 평시·백필·누적 호출 상한을 �
   assert.match(ai, /claude-haiku-4-5-20251001/);
 });
 
+test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /let useAi = Boolean\(env\.AI \|\| wantsAnthropic\)/);
+  assert.doesNotMatch(collector, /let useAi = Boolean\(env\.AI \|\| wantsAnthropic\) && payload\.category === '바둑'/);
+  assert.match(collector, /aiNewRemaining = \{ 바둑: newQuota, 일반: newQuota \}/);
+  assert.match(collector, /quotaKey = payload\.category === '바둑' \? '바둑' : '일반'/);
+});
+
 test('현재 production은 Claude를 끄고 Cloudflare AI 우선으로 동작한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
@@ -116,6 +124,15 @@ test('자동 수집과 화면 갱신은 3시간 주기로 동작한다', async (
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(workflow, /cron: '0 \*\/3 \* \* \*'/);
   assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),10800000\)/);
+});
+
+test('일일 이슈 분류는 바둑과 일반을 모두 Workers AI 우선으로 처리한다', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(workflow, /categories=\("바둑" "일반"\)/);
+  assert.match(workflow, /Workers AI and Claude fallback/);
+  assert.match(classifier, /if \(env\?\.AI\)/);
+  assert.match(classifier, /classifyWithAnthropic/);
 });
 
 test('바둑 검색에 섞인 무관한 기사는 Claude 대상으로 분류하지 않는다', () => {
