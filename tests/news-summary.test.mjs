@@ -107,7 +107,7 @@ test('행사 의미를 덧붙이는 홍보성 문장을 요약으로 인정하�
   assert.equal(validateThreeLineSummary(summary, '울산 주말 바둑 생활체육 대회 열전'), false);
 });
 
-test('Anthropic 호출은 바둑 기사에만 사용한다', async () => {
+test('Anthropic 요약 fallback은 바둑과 일반 기사에 모두 사용할 수 있다', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -123,7 +123,7 @@ test('Anthropic 호출은 바둑 기사에만 사용한다', async () => {
     assert.equal(calls, 1);
     assert.equal(validateThreeLineSummary(baduk, '신진서 본선 승리'), true);
     await makeBestSummary({ ANTHROPIC_API_KEY: 'test-key', NEWSBRIEF_USE_ANTHROPIC: '1' }, { title: '경제 정책 발표', body, category: '경제' });
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

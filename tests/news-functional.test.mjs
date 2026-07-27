@@ -40,31 +40,41 @@ test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async
   assert.match(source, /ai_blocked/);
 });
 
-test('Anthropic은 바둑 전용이며 평시·백필·누적 호출 상한을 적용한다', async () => {
+test('Anthropic 요약 fallback은 평시·백필·누적 호출 상한을 적용한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 12/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.match(collector, /TOTAL_ANTHROPIC_CALL_LIMIT = 600/);
-  assert.match(collector, /payload\.category === '바둑'/);
-  assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC === '1'/);
+  assert.match(collector, /reserveAnthropicCall/);
+  assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC: '1'/);
   assert.match(ai, /NEWSBRIEF_USE_ANTHROPIC === '1'/);
   assert.match(ai, /claude-haiku-4-5-20251001/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /let useAi = Boolean\(env\.AI \|\| wantsAnthropic\)/);
-  assert.doesNotMatch(collector, /let useAi = Boolean\(env\.AI \|\| wantsAnthropic\) && payload\.category === '바둑'/);
+  assert.match(collector, /cloudflareReserved = Boolean\(env\.AI\)/);
   assert.match(collector, /aiNewRemaining = \{ 바둑: newQuota, 일반: newQuota \}/);
   assert.match(collector, /quotaKey = payload\.category === '바둑' \? '바둑' : '일반'/);
 });
 
-test('현재 production은 Claude를 끄고 Cloudflare AI 우선으로 동작한다', async () => {
+test('Cloudflare 요약 한도·오류·검증 실패 시 Claude로 재시도한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
+  assert.match(collector, /cloudflareValid/);
+  assert.match(collector, /cloudflare_fallback: true/);
+  assert.match(collector, /budget_unavailable/);
+  assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC: '1'/);
+  assert.doesNotMatch(ai, /category === '바둑'\s*&& env\?\.NEWSBRIEF_USE_ANTHROPIC/);
+});
+
+test('production은 Cloudflare AI를 우선하고 Claude는 fallback으로만 동작한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(workflow, /NEWSBRIEF_USE_ANTHROPIC:\{type:"plain_text",value:"0"\}/);
-  assert.match(collector, /Boolean\(env\.AI \|\| wantsAnthropic\)/);
+  assert.match(collector, /if \(cloudflareValid\) return summary/);
+  assert.match(collector, /reserveAnthropicCall/);
 });
 
 test('이슈 식별은 제목의 대회·선수 조합을 사용하고 일반 단어를 배제한다', async () => {

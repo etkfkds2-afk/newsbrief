@@ -58,8 +58,7 @@ export async function makeBestSummary(env, { title = '', rawSummary = '', body =
   const source = normalizeText(body || rawSummary).slice(0, 6000);
   if (!source) return '';
 
-  const useAnthropic = category === '바둑'
-    && env?.NEWSBRIEF_USE_ANTHROPIC === '1'
+  const useAnthropic = env?.NEWSBRIEF_USE_ANTHROPIC === '1'
     && Boolean(env?.ANTHROPIC_API_KEY);
   if ((useAnthropic || env?.AI) && source.length >= 300) {
     if (diagnostics) diagnostics.ai_attempted = true;

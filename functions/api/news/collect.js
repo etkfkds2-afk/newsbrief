@@ -377,23 +377,44 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
   const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
     const quotaKey = payload.category === '바둑' ? '바둑' : '일반';
-    const wantsAnthropic = Boolean(env.ANTHROPIC_API_KEY)
-      && env.NEWSBRIEF_USE_ANTHROPIC === '1'
-      && payload.category === '바둑';
-    // Workers AI summarizes every news category. Anthropic remains an
-    // opt-in path for baduk summaries only; production keeps that flag off.
-    let useAi = Boolean(env.AI || wantsAnthropic)
-      && (purpose === 'retry' ? aiRetryRemaining[quotaKey] > 0 : aiNewRemaining[quotaKey] > 0);
-    if (useAi) useAi = wantsAnthropic
-      ? await reserveAnthropicCall(env, diagnostics, forceRetry)
-      : await reserveAiCall(env, diagnostics);
-    if (useAi && purpose === 'retry') aiRetryRemaining[quotaKey] -= 1;
-    if (useAi && purpose !== 'retry') aiNewRemaining[quotaKey] -= 1;
-    const summary = await makeBestSummary(useAi ? env : { AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
-    if (useAi && !wantsAnthropic && /(?:daily free allocation|Account limited|3036|4006)/i.test(String(trace.ai_error || ''))) {
+    const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
+    if (sourceLength < 300) {
+      return makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
+    }
+
+    const remaining = purpose === 'retry' ? aiRetryRemaining : aiNewRemaining;
+    let cloudflareReserved = Boolean(env.AI) && remaining[quotaKey] > 0;
+    if (cloudflareReserved) cloudflareReserved = await reserveAiCall(env, diagnostics);
+    if (cloudflareReserved) remaining[quotaKey] -= 1;
+
+    let summary = '';
+    if (cloudflareReserved) {
+      summary = await makeBestSummary({ ...env, ANTHROPIC_API_KEY: undefined, NEWSBRIEF_USE_ANTHROPIC: '0' }, payload, trace);
+      const cloudflareValid = trace.ai_provider === 'cloudflare'
+        && trace.structurally_valid && trace.numbers_grounded;
+      if (cloudflareValid) return summary;
+    }
+    if (cloudflareReserved && /(?:daily free allocation|Account limited|3036|4006)/i.test(String(trace.ai_error || ''))) {
       await blockAiForToday(env, diagnostics);
     }
-    return summary;
+
+    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry)) {
+      const anthropicTrace = {};
+      const anthropicSummary = await makeBestSummary({
+        ...env,
+        AI: undefined,
+        NEWSBRIEF_USE_ANTHROPIC: '1'
+      }, payload, anthropicTrace);
+      Object.assign(trace, anthropicTrace, {
+        cloudflare_fallback: true,
+        cloudflare_error: trace.ai_error || (cloudflareReserved ? 'invalid_response' : 'budget_unavailable')
+      });
+      if (anthropicTrace.ai_provider === 'anthropic'
+        && anthropicTrace.structurally_valid && anthropicTrace.numbers_grounded) return anthropicSummary;
+      if (!summary) summary = anthropicSummary;
+    }
+
+    return summary || makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
   };
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.
