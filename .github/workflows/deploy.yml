@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       repair_popularity:
-        description: '최근 7일 네이버 인기 랭킹 기록만 복구 (AI 호출 없음)'
+        description: '최근 7일 네이버 인기 랭킹과 누락 기사 복구'
         required: false
         default: false
         type: boolean

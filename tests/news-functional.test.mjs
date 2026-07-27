@@ -75,12 +75,14 @@ test('일반 보강 실행은 인기 뉴스를 먼저 처리하고 지역 매체
   assert.match(discovery, /searchParams\.set\('general_boost', '1'\)/);
 });
 
-test('최근 인기 랭킹 복구는 날짜별 메타데이터만 저장하고 AI를 호출하지 않는다', async () => {
+test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상한 안에서 처리한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(collector, /backfillPopularityDate/);
   assert.match(collector, /popularity_date/);
-  assert.match(collector, /ai_calls: 0/);
+  assert.match(collector, /popularityCandidates/);
+  assert.match(collector, /forceRetry: true/);
+  assert.match(collector, /uniqueCandidates\.slice\(0, DAILY_CATEGORY_PUBLISH_LIMIT\)/);
   assert.match(workflow, /repair_popularity:/);
   assert.match(workflow, /!inputs\.repair_popularity/);
   assert.match(workflow, /popularity_date=\$\{ymd\}/);

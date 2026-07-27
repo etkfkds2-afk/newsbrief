@@ -370,11 +370,12 @@ async function backfillPopularityDate(env, ymd) {
   if (!Number.isFinite(parsed) || parsed > Date.now() + 86400000 || parsed < Date.now() - 31 * 86400000) {
     throw new Error('popularity_date는 최근 30일 이내여야 합니다.');
   }
-  const rows = [];
+  const groups = [];
   for (const [sid, category] of [['100','정치'],['101','경제'],['102','사회'],['103','생활/문화'],['104','세계']]) {
     const url = `https://news.naver.com/main/ranking/popularDay.naver?mid=etc&sid1=${sid}&date=${ymd}`;
-    rows.push(...(await popularPage(url, 'NAVER')).slice(0, 10).map(row => ({ ...row, category })));
+    groups.push((await popularPage(url, 'NAVER')).slice(0, 10).map(row => ({ ...row, category })));
   }
+  const rows = Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
   const statements = [];
   for (const row of rows) {
     const key = await sha256(canonicalUrl(row.href));
@@ -391,10 +392,13 @@ async function backfillPopularityDate(env, ymd) {
   for (let index = 0; index < statements.length; index += 50) {
     await env.DB.batch(statements.slice(index, index + 50));
   }
-  return { date: ymd, ranking_items: rows.length };
+  return { date: ymd, ranking_items: rows.length, rows };
 }
 
-async function collect(env, { backfill = false, repair = false, forceRetry = false, generalBoost = false, googleDiscoveries = [] } = {}) {
+async function collect(env, {
+  backfill = false, repair = false, forceRetry = false, generalBoost = false,
+  googleDiscoveries = [], popularityCandidates = []
+} = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
   const now = new Date();
   const koreaNow = new Date(now.valueOf() + 9 * 3600000);
@@ -542,7 +546,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     diagnostics.body_recrawl_attempted = (weakRows.results || []).length;
     diagnostics.body_recrawl_recovered = recovered.reduce((sum, value) => sum + value, 0);
   }
-  const retryRowLimit = repair ? 4 : (backfill ? 4 : 3);
+  const retryRowLimit = popularityCandidates.length ? 0 : (repair ? 4 : (backfill ? 4 : 3));
   const retryRows = await env.DB.prepare(`SELECT a.id,a.url_key,a.title,a.raw_summary,a.body_text,a.category FROM news_articles a
     LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
     WHERE a.summary_quality='none' AND length(a.body_text)>=300 AND COALESCE(f.attempts,0)<?
@@ -570,7 +574,16 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     }
   };
   const pendingRetries = retryRows.results || [];
-  const candidates = [];
+  const candidates = popularityCandidates.map(row => ({
+    category: row.category,
+    source: 'NAVER',
+    isPopular: true,
+    popularityRank: row.rank,
+    item: {
+      title: row.title, link: row.href, originallink: row.href, description: '',
+      pubDate: new Date(row.popularityDate + 12 * 3600000).toISOString()
+    }
+  }));
   if (repair) {
     for (const row of pendingRetries) await retrySummary(row);
     return { inserted: 0, diagnostics };
@@ -582,7 +595,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
   const backfillStart = backfill ? (slot % 10) * 100 + 1 : (slot % 100) * 10 + 1;
   const badukQuery = BADUK_SEARCHES[slot % BADUK_SEARCHES.length];
   const generalSearches = SEARCHES.filter(([category]) => category !== '바둑');
-  const selectedSearches = backfill
+  const selectedSearches = popularityCandidates.length ? [] : backfill
     ? SEARCHES.filter(([category]) => category === '바둑')
     : [SEARCHES[0], generalSearches[slot % generalSearches.length], generalSearches[(slot + 1) % generalSearches.length]];
   for (const [category, query] of selectedSearches) {
@@ -648,14 +661,14 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
   // The GitHub discovery job already supplies Google headlines from a network
   // that Google accepts. Avoid a redundant Worker-origin RSS call, which is
   // frequently rejected with 503 even though discovery already succeeded.
-  if (!backfill && !googleDiscoveries.length) try {
+  if (!popularityCandidates.length && !backfill && !googleDiscoveries.length) try {
     for (const item of (await googleNewsSearch(badukQuery, 30)).slice(0, 3)) candidates.push({ category: '바둑', item, source: 'GOOGLE' });
   } catch (error) {
     diagnostics.google_error = String(error?.message || error).slice(0, 120);
   } else if (!backfill) {
     diagnostics.google_fallback_skipped = true;
   }
-  if (!backfill) try {
+  if (!popularityCandidates.length && !backfill) try {
     const allPopular = await collectPopularity(slot);
     const popular = allPopular.slice(0, 12);
     diagnostics.popular_found = popular.length;
@@ -767,7 +780,9 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
   const generalBelowDailyGoal = Number(recentGeneral?.count || 0) < 10;
   const scheduledCandidateLimit = generalBelowDailyGoal ? MAX_SCHEDULED_CANDIDATES + 4 : MAX_SCHEDULED_CANDIDATES;
-  const limitedCandidates = backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, scheduledCandidateLimit);
+  const limitedCandidates = popularityCandidates.length
+    ? uniqueCandidates.slice(0, DAILY_CATEGORY_PUBLISH_LIMIT)
+    : (backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, scheduledCandidateLimit));
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
   diagnostics.candidates = candidates.length;
@@ -804,9 +819,20 @@ export async function onRequestPost({ request, env }) {
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
     if (popularityDate) {
       const popularity = await backfillPopularityDate(env, popularityDate);
-      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
-        .bind(new Date().toISOString(), JSON.stringify({ popularity }), runId).run();
-      return json({ ok: true, popularity, ai_calls: 0 });
+      const parsedPopularityDate = Date.parse(`${popularityDate.slice(0, 4)}-${popularityDate.slice(4, 6)}-${popularityDate.slice(6, 8)}T00:00:00Z`);
+      const result = await collect(env, {
+        forceRetry: true,
+        popularityCandidates: popularity.rows.map(row => ({ ...row, popularityDate: parsedPopularityDate }))
+      });
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=?,message=? WHERE id=?")
+        .bind(new Date().toISOString(), result.inserted,
+          JSON.stringify({ popularity: { date: popularity.date, ranking_items: popularity.ranking_items }, diagnostics: result.diagnostics }).slice(0, 500), runId).run();
+      return json({
+        ok: true,
+        popularity: { date: popularity.date, ranking_items: popularity.ranking_items },
+        inserted: result.inserted,
+        diagnostics: result.diagnostics
+      });
     }
     let payload = {};
     try {
