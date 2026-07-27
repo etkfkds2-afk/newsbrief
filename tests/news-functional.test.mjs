@@ -10,6 +10,7 @@ import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 test('바둑 대회·국제교류 기사는 한 건이어도 독립 이슈 후보가 된다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
+  assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개', summary: '지난 대회 활약을 돌아봤다.' }), false);
 });
 
 test('바둑 단일 대회는 AI의 넓은 묶음과 무관하게 독립 이슈로 유지한다', async () => {
@@ -35,7 +36,7 @@ test('기타 바둑소식은 별도 타일을 만들지 않고 기타로 합친�
   const result = await classifyIssues(env, articles, [], { allowStandaloneEvents: true });
   assert.deepEqual(result.groups, [
     { title: '기타', url_keys: ['plain-1', 'plain-2'], misc: true },
-    { title: '무안군 중국 상숙시 청소년 온라인 바둑대회 개최', url_keys: ['event'] }
+    { title: '무안군 중국 상숙시 청소년 온라인 바둑대회 개최', url_keys: ['event'], standalone_event: true }
   ]);
 });
 

@@ -18,7 +18,7 @@ ${allowStandaloneEvents ? '- 예외: 제목이나 본문에 고유한 대회·�
 
 export function isStandaloneEventArticle(article) {
   return /(?:바둑)?(?:대회|리그|기전|선수권|오픈|행사|축제|국제(?:우호|교류)|스포츠교류|합동훈련)/u
-    .test(`${article?.title || ''} ${article?.summary || ''}`);
+    .test(String(article?.title || ''));
 }
 
 function buildListing(articles) {
@@ -85,7 +85,8 @@ function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = fals
   for (const index of standaloneLeftover) {
     groups.push({
       title: String(articles[index].title || '바둑 대회').replace(/[“”‘’"']/g, '').trim().slice(0, 40),
-      url_keys: [articles[index].url_key]
+      url_keys: [articles[index].url_key],
+      standalone_event: true
     });
   }
   const miscLeftover = leftover.filter(i => !standaloneLeftover.includes(i));
