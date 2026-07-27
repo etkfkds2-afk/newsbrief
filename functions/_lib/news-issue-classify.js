@@ -7,7 +7,7 @@ ${hasExisting ? '\n각 새 기사가 기존 이슈 중 하나와 실제로 같�
 규칙:
 - 서로 다른 대회, 다른 라운드, 다른 인물, 다른 사건의 기사는 절대 같은 이슈로 묶지 않는다.
 - 새로 만드는 이슈는 정말로 같은 사건을 다루는 기사가 2건 이상 있을 때만 만든다.
-${allowStandaloneEvents ? '- 예외: 제목이나 본문에 고유한 대회·리그·기전·선수권·오픈·바둑 행사·국제 바둑교류가 명시된 기사는 단독 1건이어도 반드시 독립 이슈로 만든다. 이런 기사를 기타로 보내지 않는다.\n' : ''}
+${allowStandaloneEvents ? '- 예외: 제목이나 본문에 "대회"라는 단어가 명시된 기사는 단독 1건이어도 반드시 독립 이슈로 만든다. 이런 기사를 기타로 보내지 않는다. 리그·기전·행사·교류 등만 있고 "대회"가 없는 단독 기사는 기타로 보낸다.\n' : ''}
 - 같은 번호를 두 이슈에 중복으로 넣지 않는다.
 - 새로 만드는 이슈 제목은 8~18자 내외의 자연스러운 한국어 명사구로 쓴다. 어색한 번역투, 따옴표, 특수기호를 쓰지 않는다.
   예시: "신진서 삼성화재배 우승", "한국기원 정기이사회 개최", "이세돌 은퇴 이후 근황"
@@ -17,8 +17,7 @@ ${allowStandaloneEvents ? '- 예외: 제목이나 본문에 고유한 대회·�
 }
 
 export function isStandaloneEventArticle(article) {
-  return /(?:바둑)?(?:대회|리그|기전|선수권|오픈|행사|축제|국제(?:우호|교류)|스포츠교류|합동훈련)/u
-    .test(`${article?.title || ''} ${article?.summary || ''}`);
+  return /대회/u.test(`${article?.title || ''} ${article?.summary || ''}`);
 }
 
 function buildListing(articles) {
@@ -139,17 +138,27 @@ async function classifyWithWorkersAi(env, articles, existingIssues, allowStandal
 // instead of re-classifying everything from scratch every run.
 export async function classifyIssues(env, articles, existingIssues = [], { allowStandaloneEvents = false } = {}) {
   if (!articles.length) return { groups: [], provider: 'none' };
-  let cloudflareError = '';
-  if (env?.AI) {
+  let anthropicError = '';
+  if (env?.ANTHROPIC_API_KEY) {
     try {
-      return { groups: await classifyWithWorkersAi(env, articles, existingIssues, allowStandaloneEvents), provider: 'cloudflare' };
+      const result = await classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents);
+      return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL };
     } catch (error) {
-      cloudflareError = String(error?.message || error).slice(0, 300);
+      anthropicError = String(error?.message || error).slice(0, 300);
     }
   }
-  if (env?.ANTHROPIC_API_KEY) {
-    const result = await classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents);
-    return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL, cloudflare_error: cloudflareError };
+  if (env?.AI) {
+    try {
+      return {
+        groups: await classifyWithWorkersAi(env, articles, existingIssues, allowStandaloneEvents),
+        provider: 'cloudflare', anthropic_error: anthropicError
+      };
+    } catch (error) {
+      return {
+        groups: [], provider: 'cloudflare-failed', anthropic_error: anthropicError,
+        cloudflare_error: String(error?.message || error).slice(0, 300)
+      };
+    }
   }
-  return { groups: [], provider: cloudflareError ? 'cloudflare-failed' : 'none', cloudflare_error: cloudflareError };
+  return { groups: [], provider: anthropicError ? 'anthropic-failed' : 'none', anthropic_error: anthropicError };
 }

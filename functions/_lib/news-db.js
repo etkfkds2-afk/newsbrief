@@ -78,10 +78,24 @@ export function json(data, status = 200) {
   });
 }
 
+let schemaReadyFor;
+let schemaReadyPromise;
+
 export async function ensureNewsDb(env) {
   if (!env.DB) throw new Error('Cloudflare D1 binding DB가 없습니다.');
+  // A Pages Functions isolate can serve many requests. Running every CREATE
+  // TABLE/INDEX statement on every article and image read adds avoidable D1
+  // contention, especially while the collector is writing. Initialize once per
+  // binding/isolate and retry on the next request if initialization failed.
+  if (schemaReadyFor === env.DB && schemaReadyPromise) return schemaReadyPromise;
   const statements = NEWS_SCHEMA.split(';').map(value => value.trim()).filter(Boolean);
-  await env.DB.batch(statements.map(sql => env.DB.prepare(sql)));
+  schemaReadyFor = env.DB;
+  schemaReadyPromise = env.DB.batch(statements.map(sql => env.DB.prepare(sql))).catch(error => {
+    schemaReadyFor = undefined;
+    schemaReadyPromise = undefined;
+    throw error;
+  });
+  return schemaReadyPromise;
 }
 
 export async function sha256(value) {

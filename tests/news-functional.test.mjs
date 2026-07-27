@@ -1,15 +1,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { onRequestGet } from '../functions/api/news/articles.js';
+import { normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
 import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import { classifyIssues, isStandaloneEventArticle } from '../functions/_lib/news-issue-classify.js';
+import { enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
+import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
 
-test('바둑 대회·국제교류 기사는 한 건이어도 독립 이슈 후보가 된다', () => {
+test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 된다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
+  assert.equal(isStandaloneEventArticle({ title: '한중 청소년 바둑 스포츠교류 개최' }), false);
+  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), false);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
+});
+
+test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 기타로 강제한다', () => {
+  const articles = [
+    { url_key: 'tournament', title: '무안 청소년 온라인 바둑대회 개최', summary: '' },
+    { url_key: 'profile', title: '김동한 프로기사 근황', summary: '' },
+    { url_key: 'pair-a', title: '신진서 카타고 격파', summary: '' },
+    { url_key: 'pair-b', title: 'AI 넘어선 신진서', summary: '' }
+  ];
+  const groups = enforceIssueRules([
+    { key: '바둑|ai:1', title: '김동한 근황', url_keys: ['profile'] },
+    { key: '바둑|ai:2', title: '신진서 AI 격파', url_keys: ['pair-a', 'pair-b'] },
+    { key: '바둑|ai:misc', title: '기타', url_keys: ['tournament'], misc: true }
+  ], articles, '바둑');
+  assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
+    ['신진서 AI 격파', ['pair-a', 'pair-b']],
+    ['무안 청소년 온라인 바둑대회 개최', ['tournament']],
+    ['기타', ['profile']]
+  ]);
+});
+
+test('일반 뉴스는 대회 기사도 한 건이면 기타로 보낸다', () => {
+  const articles = [{ url_key: 'general-event', title: '전국 창업대회 개최', summary: '' }];
+  const groups = enforceIssueRules([
+    { key: '일반|ai:0', title: '전국 창업대회', url_keys: ['general-event'] }
+  ], articles, '일반');
+  assert.deepEqual(groups, [
+    { key: '일반|ai:misc', title: '기타', url_keys: ['general-event'], misc: true }
+  ]);
+});
+
+test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사용한다', () => {
+  const items = [
+    { url_key: 'event', category: '바둑', title: '전국 어린이 바둑대회 개최', summary: '' },
+    { url_key: 'profile', category: '바둑', title: '프로기사 근황', summary: '' }
+  ];
+  const normalized = normalizeCachedIssues(items, [
+    { key: '바둑|ai:misc', title: '기타', url_keys: ['event'] },
+    { key: '바둑|ai:old', title: '프로기사 근황', url_keys: ['profile'] }
+  ]);
+  assert.equal(normalized.find(group => group.key.includes('|ai:event:')).url_keys[0], 'event');
+  assert.deepEqual(normalized.find(group => group.key.endsWith('|ai:misc')).url_keys, ['profile']);
 });
 
 test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고 일반 단독 행사는 제외한다', async () => {
@@ -184,7 +230,9 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(collector, /popularity_date/);
   assert.match(collector, /popularityCandidates/);
   assert.match(collector, /forceRetry: true/);
-  assert.match(collector, /uniqueCandidates\.slice\(0, DAILY_CATEGORY_PUBLISH_LIMIT\)/);
+  assert.match(collector, /POPULARITY_REPAIR_BATCH_SIZE = 4/);
+  assert.match(collector, /uniqueCandidates\.slice\(popularityOffset, popularityOffset \+ POPULARITY_REPAIR_BATCH_SIZE\)/);
+  assert.match(workflow, /popularity_offset=\$\{batch_offset\}/);
   assert.match(collector, /popularityTargetCounts/);
   assert.match(collector, /popularity_target_counts_before/);
   assert.match(collector, /popularity_target_counts_after/);
@@ -363,7 +411,9 @@ test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 �
   assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 2_500_000/);
   assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000/);
   assert.match(budget, /claude_budget_month/);
-  assert.match(classifier, /MAX_NEW_ARTICLES_PER_RUN = 40/);
+  assert.doesNotMatch(classifier, /MAX_NEW_ARTICLES_PER_RUN/);
+  assert.match(classifier, /const newArticles = articles;/);
+  assert.match(classifier, /const existingIssues = \[\];/);
   assert.match(classifier, /recordClaudeUsage/);
   assert.equal(claudeCostMicroUsd('claude-haiku-4-5-20251001', { input_tokens: 1000, output_tokens: 100 }), 1500);
   assert.equal(claudeCostMicroUsd('claude-sonnet-5', { input_tokens: 1000, output_tokens: 100 }), 4500);
@@ -446,6 +496,30 @@ test('브라우저는 방문자 ID를 저장·조회 API에 함께 보내고 삭
   assert.doesNotMatch(html, /data-action="unhide"/);
   assert.match(html, /data-action="hide">삭제/);
   assert.match(html, /기사를 삭제했습니다/);
+  assert.match(html, /item\.related\|\|\[\]/);
+  assert.match(html, /url_keys:urlKeys/);
+});
+
+test('삭제 API는 대표 기사와 관련 기사 키를 한 배치로 숨긴다', async () => {
+  const bound = [];
+  const env = { DB: {
+    prepare(sql) {
+      return { bind(...values) { bound.push({ sql, values }); return this; } };
+    },
+    async batch(statements) { return statements.map(() => ({})); }
+  } };
+  const response = await updateNewsItem({
+    request: new Request('https://example.com/api/news/item', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-news-user': 'visitor-a' },
+      body: JSON.stringify({ action: 'hide', url_key: 'main', url_keys: ['main', 'related'] })
+    }), env
+  });
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.affected, 2);
+  assert.deepEqual(bound.filter(entry => entry.sql.includes('news_hidden')).map(entry => entry.values), [
+    ['visitor-a', 'main'], ['visitor-a', 'related']
+  ]);
 });
 
 test('D1 UTC 시각 문자열을 UTC로 해석한다', async () => {

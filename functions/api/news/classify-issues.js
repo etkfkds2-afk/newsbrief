@@ -6,7 +6,6 @@ import {
 } from '../../_lib/news-ai-budget.js';
 
 const SUPPORTED_CATEGORIES = new Set(['바둑', '일반']);
-const MAX_NEW_ARTICLES_PER_RUN = 40;
 const ESTIMATED_ISSUE_CALL_MICRO_USD = 180_000;
 
 function loadExistingPayload(row) {
@@ -17,6 +16,55 @@ function loadExistingPayload(row) {
   } catch {
     return [];
   }
+}
+
+export function enforceIssueRules(groups, articles, category) {
+  const articleByKey = new Map(articles.map(article => [article.url_key, article]));
+  const claimed = new Set();
+  const mergedByTitle = new Map();
+  const miscKeys = [];
+  const orderedGroups = [...(groups || [])].sort((left, right) =>
+    Number(Boolean(left?.misc || String(left?.key || '').endsWith('|ai:misc')))
+    - Number(Boolean(right?.misc || String(right?.key || '').endsWith('|ai:misc'))));
+  for (const group of orderedGroups) {
+    const title = String(group?.title || '').trim().slice(0, 40);
+    const keys = [...new Set(group?.url_keys || [])].filter(key => articleByKey.has(key) && !claimed.has(key));
+    keys.forEach(key => claimed.add(key));
+    if (!keys.length) continue;
+    const isMisc = group?.misc || title === '기타' || String(group?.key || '').endsWith('|ai:misc');
+    if (isMisc) {
+      miscKeys.push(...keys);
+      continue;
+    }
+    const existing = mergedByTitle.get(title);
+    if (existing) existing.url_keys.push(...keys);
+    else mergedByTitle.set(title, { ...group, title, url_keys: keys });
+  }
+  for (const key of articleByKey.keys()) if (!claimed.has(key)) miscKeys.push(key);
+
+  const kept = [];
+  for (const group of mergedByTitle.values()) {
+    const standaloneTournament = category === '바둑' && group.url_keys.length === 1
+      && isStandaloneEventArticle(articleByKey.get(group.url_keys[0]));
+    if (group.url_keys.length >= 2 || standaloneTournament) kept.push(group);
+    else miscKeys.push(...group.url_keys);
+  }
+  let uniqueMisc = [...new Set(miscKeys)].filter(key => !kept.some(group => group.url_keys.includes(key)));
+  if (category === '바둑') {
+    const missedTournaments = uniqueMisc.filter(key => isStandaloneEventArticle(articleByKey.get(key)));
+    for (const key of missedTournaments) {
+      const article = articleByKey.get(key);
+      kept.push({
+        key: `${category}|ai:event:${key.slice(0, 16)}`,
+        title: String(article?.title || '바둑대회').replace(/[“”‘’"']/g, '').trim().slice(0, 40),
+        url_keys: [key]
+      });
+    }
+    const tournamentKeys = new Set(missedTournaments);
+    uniqueMisc = uniqueMisc.filter(key => !tournamentKeys.has(key));
+  }
+  if (uniqueMisc.length) kept.push({ key: `${category}|ai:misc`, title: '기타', url_keys: uniqueMisc, misc: true });
+  return kept;
 }
 
 export async function onRequestPost({ request, env }) {
@@ -64,8 +112,10 @@ export async function onRequestPost({ request, env }) {
       }))
       .filter(group => group.url_keys.length > 0);
 
-    const classifiedKeys = new Set(existingPayload.flatMap(group => group.url_keys));
-    const newArticles = articles.filter(a => !classifiedKeys.has(a.url_key)).slice(0, MAX_NEW_ARTICLES_PER_RUN);
+    // Rebuild the complete 30-day classification. Incremental classification
+    // permanently preserved bad AI groups and prevented two articles that
+    // arrived on different runs from ever leaving 기타.
+    const newArticles = articles;
 
     if (!newArticles.length) {
       return json({
@@ -74,7 +124,7 @@ export async function onRequestPost({ request, env }) {
         count: articles.length,
         new_count: 0,
         provider: 'none',
-        issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+        issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
       });
     }
 
@@ -88,8 +138,8 @@ export async function onRequestPost({ request, env }) {
       issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
-    const existingIssues = existingPayload.filter(group => !group.misc && !String(group.key || '').endsWith('|ai:misc'));
-    const { groups, provider, model, usage, cloudflare_error } = await classifyIssues(
+    const existingIssues = [];
+    const { groups, provider, model, usage, cloudflare_error, anthropic_error } = await classifyIssues(
       {
         ...env,
         AI: cloudflare.allowed ? env.AI : undefined,
@@ -104,17 +154,14 @@ export async function onRequestPost({ request, env }) {
     }
     const recorded = provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent };
 
-    if (!groups.length && provider === 'cloudflare-failed') return json({
+    if (!groups.length) return json({
       ok: true, category, count: articles.length, new_count: newArticles.length,
-      provider, cloudflare_error, monthly_micro_usd: budget.spent,
-      issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+      provider, cloudflare_error, anthropic_error, monthly_micro_usd: budget.spent,
+      issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
-    const byKey = new Map(existingPayload.map(group => [group.key, group]));
-    let nextIndex = existingPayload.reduce((max, group) => {
-      const match = /\|ai:(\d+)$/.exec(group.key || '');
-      return match ? Math.max(max, Number(match[1]) + 1) : max;
-    }, 0);
+    const byKey = new Map();
+    let nextIndex = 0;
 
     for (const group of groups) {
       if (group.misc) {
@@ -126,14 +173,14 @@ export async function onRequestPost({ request, env }) {
       }
       const matched = existingIssues.find(existing => existing.title === group.title);
       if (matched) {
-        matched.url_keys.push(...group.url_keys);
+        byKey.get(matched.key)?.url_keys.push(...group.url_keys);
       } else {
         const key = `${category}|ai:${nextIndex++}`;
         byKey.set(key, { key, title: group.title, url_keys: [...group.url_keys] });
       }
     }
 
-    const payload = [...byKey.values()];
+    const payload = enforceIssueRules([...byKey.values()], articles, category);
     await env.DB.prepare(
       `INSERT INTO news_issue_cache (category, payload, built_at) VALUES (?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(category) DO UPDATE SET payload = excluded.payload, built_at = CURRENT_TIMESTAMP`
@@ -147,6 +194,7 @@ export async function onRequestPost({ request, env }) {
       provider,
       cloudflare_calls_today: cloudflare.used,
       cloudflare_error,
+      anthropic_error,
       usage,
       cost_micro_usd: recorded.cost,
       monthly_micro_usd: recorded.spent,

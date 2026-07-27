@@ -170,6 +170,7 @@ jobs:
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
               "$endpoint"
+            sleep 3
           done
           if [ "${{ inputs.backfill }}" = "true" ]; then
             for i in $(seq 1 10); do
@@ -177,15 +178,19 @@ jobs:
                 -X POST \
                 -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
                 "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair=1&force_retry=1"
+              sleep 3
             done
           fi
           if [ "${{ inputs.repair_popularity }}" = "true" ]; then
             for offset in $(seq 0 6); do
               ymd=$(date -u -d "${offset} day ago" +%Y%m%d)
-              curl --fail-with-body --retry 3 --max-time 120 \
-                -X POST \
-                -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
-                "https://newsbrief-etkfkds2.pages.dev/api/news/collect?popularity_date=${ymd}"
+              for batch_offset in 0 4 8; do
+                curl --fail-with-body --retry 3 --max-time 120 \
+                  -X POST \
+                  -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+                  "https://newsbrief-etkfkds2.pages.dev/api/news/collect?popularity_date=${ymd}&popularity_offset=${batch_offset}"
+                sleep 3
+              done
             done
           fi
           if [ "${{ inputs.repair_times }}" = "true" ]; then

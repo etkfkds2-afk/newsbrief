@@ -99,11 +99,41 @@ async function loadIssueCache(env, category) {
   }
 }
 
+export function normalizeCachedIssues(items, cached) {
+  const itemByKey = new Map(items.map(item => [item.url_key, item]));
+  const mapped = cached.map(group => {
+    const keys = group.url_keys.filter(key => itemByKey.has(key));
+    return { key: group.key, title: group.title, url_keys: keys };
+  }).filter(group => group.url_keys.length > 0);
+  const forcedMisc = [];
+  const valid = mapped.filter(group => {
+    if (group.key.endsWith('|ai:misc')) return true;
+    if (group.url_keys.length >= 2) return true;
+    const item = itemByKey.get(group.url_keys[0]);
+    if (item?.category === '바둑' && /대회/u.test(`${item.title || ''} ${item.summary || ''}`)) return true;
+    forcedMisc.push(...group.url_keys);
+    return false;
+  });
+  const misc = valid.find(group => group.key.endsWith('|ai:misc'));
+  const miscKeys = [...new Set([...(misc?.url_keys || []), ...forcedMisc])];
+  const missedTournaments = miscKeys.filter(key => {
+    const item = itemByKey.get(key);
+    return item?.category === '바둑' && /대회/u.test(`${item.title || ''} ${item.summary || ''}`);
+  });
+  const missedSet = new Set(missedTournaments);
+  for (const key of missedTournaments) {
+    const item = itemByKey.get(key);
+    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: item.title.slice(0, 40), url_keys: [key] });
+  }
+  const normalizedMisc = miscKeys.filter(key => !missedSet.has(key));
+  const withoutMisc = valid.filter(group => !group.key.endsWith('|ai:misc'));
+  if (normalizedMisc.length) withoutMisc.push({ key: `${items[0]?.category === '바둑' ? '바둑' : '일반'}|ai:misc`, title: '기타', url_keys: normalizedMisc });
+  return withoutMisc;
+}
+
 function buildIssuesFromCache(items, cached) {
-  const present = new Set(items.map(item => item.url_key));
-  const mapped = cached
-    .map(group => ({ key: group.key, title: group.title, count: group.url_keys.filter(key => present.has(key)).length }))
-    .filter(group => group.count > 0);
+  const normalized = normalizeCachedIssues(items, cached);
+  const mapped = normalized.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }));
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
   // count, so it is kept out of the count sort and appended last instead.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
@@ -244,11 +274,12 @@ export async function onRequestGet({ request, env }) {
     const cachedIssues = category === '바둑'
       ? await loadIssueCache(env, category)
       : (!category && excludeBaduk) ? await loadIssueCache(env, '일반') : null;
+    const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;
     const issueList = cachedIssues ? buildIssuesFromCache(accepted, cachedIssues) : buildIssues(accepted, category);
     let selected = accepted;
     if (issueKeyFilter) {
-      if (cachedIssues) {
-        const group = cachedIssues.find(entry => entry.key === issueKeyFilter);
+      if (normalizedCachedIssues) {
+        const group = normalizedCachedIssues.find(entry => entry.key === issueKeyFilter);
         selected = group ? accepted.filter(item => group.url_keys.includes(item.url_key)) : [];
       } else {
         selected = accepted.filter(item => issueKey(item.title, item.category || category, item.summary) === issueKeyFilter);

@@ -16,7 +16,17 @@ export async function onRequestGet({ request, env }) {
     if (!row?.image_url) return new Response('Not found', { status: 404 });
     const target = new URL(row.image_url);
     if (!['http:', 'https:'].includes(target.protocol) || blockedHost(target.hostname)) return new Response('Forbidden', { status: 403 });
-    const upstream = await fetch(target, { headers: { 'user-agent': 'Mozilla/5.0' } });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let upstream;
+    try {
+      upstream = await fetch(target, {
+        headers: { 'user-agent': 'Mozilla/5.0' }, signal: controller.signal,
+        cf: { cacheEverything: true, cacheTtl: 86400 }
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!upstream.ok) return new Response('Image unavailable', { status: 502 });
     const type = upstream.headers.get('content-type') || '';
     if (!type.startsWith('image/')) return new Response('Invalid image', { status: 415 });

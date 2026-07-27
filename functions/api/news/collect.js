@@ -35,6 +35,7 @@ const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const MAX_SCHEDULED_CANDIDATES = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
+const POPULARITY_REPAIR_BATCH_SIZE = 4;
 const MONTHLY_CATEGORY_PUBLISH_LIMIT = 300;
 
 const BODY_JUNK = /(?:무단전재|재배포\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\s*본\s*뉴스|기사제공|기자\s*[A-Z0-9._%+-]+@|기사의?\s*본문\s*내용|글자\s*크기|인쇄하기|공유하기)/i;
@@ -494,7 +495,7 @@ async function backfillPopularityDate(env, ymd) {
 
 async function collect(env, {
   backfill = false, repair = false, forceRetry = false, generalBoost = false,
-  generalOnly = false, qualityRepairIds = [], googleDiscoveries = [], popularityCandidates = []
+  generalOnly = false, qualityRepairIds = [], googleDiscoveries = [], popularityCandidates = [], popularityOffset = 0
 } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
   const now = new Date();
@@ -933,7 +934,7 @@ async function collect(env, {
   const generalBelowDailyGoal = Number(recentGeneral?.count || 0) < 10;
   const scheduledCandidateLimit = generalBelowDailyGoal ? MAX_SCHEDULED_CANDIDATES + 4 : MAX_SCHEDULED_CANDIDATES;
   const limitedCandidates = popularityCandidates.length
-    ? uniqueCandidates.slice(0, DAILY_CATEGORY_PUBLISH_LIMIT)
+    ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
     : (backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, scheduledCandidateLimit));
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
@@ -973,6 +974,7 @@ export async function onRequestPost({ request, env }) {
     const repairCategories = requestUrl.searchParams.get('repair_categories') === '1';
     const repairGeneralQuality = requestUrl.searchParams.get('repair_general_quality') === '1';
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
+    const popularityOffset = Math.max(0, Math.min(Number(requestUrl.searchParams.get('popularity_offset')) || 0, 48));
     if (repairTimes) {
       const timeRepair = await repairGeneralArticleTimes(env);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
@@ -1000,7 +1002,8 @@ export async function onRequestPost({ request, env }) {
       const parsedPopularityDate = Date.parse(`${popularityDate.slice(0, 4)}-${popularityDate.slice(4, 6)}-${popularityDate.slice(6, 8)}T00:00:00Z`);
       const result = await collect(env, {
         forceRetry: true,
-        popularityCandidates: popularity.rows.map(row => ({ ...row, popularityDate: parsedPopularityDate }))
+        popularityCandidates: popularity.rows.map(row => ({ ...row, popularityDate: parsedPopularityDate })),
+        popularityOffset
       });
       // Old popularity repairs stored a made-up noon UTC timestamp, which
       // rendered as 9 PM in Korea. After trying to recover the real timestamp
