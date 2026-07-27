@@ -364,6 +364,36 @@ async function collectArchivedTop(slot) {
   return rows;
 }
 
+async function backfillPopularityDate(env, ymd) {
+  if (!/^\d{8}$/.test(ymd)) throw new Error('popularity_date는 YYYYMMDD 형식이어야 합니다.');
+  const parsed = Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00Z`);
+  if (!Number.isFinite(parsed) || parsed > Date.now() + 86400000 || parsed < Date.now() - 31 * 86400000) {
+    throw new Error('popularity_date는 최근 30일 이내여야 합니다.');
+  }
+  const rows = [];
+  for (const [sid, category] of [['100','정치'],['101','경제'],['102','사회'],['103','생활/문화'],['104','세계']]) {
+    const url = `https://news.naver.com/main/ranking/popularDay.naver?mid=etc&sid1=${sid}&date=${ymd}`;
+    rows.push(...(await popularPage(url, 'NAVER')).slice(0, 10).map(row => ({ ...row, category })));
+  }
+  const statements = [];
+  for (const row of rows) {
+    const key = await sha256(canonicalUrl(row.href));
+    statements.push(env.DB.prepare(`INSERT INTO news_popularity(url_key,score,rank,source,collected_at)
+      VALUES(?,?,?,'NAVER',CURRENT_TIMESTAMP) ON CONFLICT(url_key) DO UPDATE SET
+      score=MAX(news_popularity.score,excluded.score),rank=MIN(news_popularity.rank,excluded.rank),collected_at=CURRENT_TIMESTAMP`)
+      .bind(key, 101 - row.rank, row.rank));
+    statements.push(env.DB.prepare(`INSERT INTO news_popular_items(title,url_key,score,rank,source,collected_at)
+      VALUES(?,?,?,?,'NAVER',CURRENT_TIMESTAMP) ON CONFLICT(title) DO UPDATE SET
+      url_key=excluded.url_key,score=MAX(news_popular_items.score,excluded.score),
+      rank=MIN(news_popular_items.rank,excluded.rank),collected_at=CURRENT_TIMESTAMP`)
+      .bind(row.title, key, 101 - row.rank, row.rank));
+  }
+  for (let index = 0; index < statements.length; index += 50) {
+    await env.DB.batch(statements.slice(index, index + 50));
+  }
+  return { date: ymd, ranking_items: rows.length };
+}
+
 async function collect(env, { backfill = false, repair = false, forceRetry = false, generalBoost = false, googleDiscoveries = [] } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
   const now = new Date();
@@ -771,6 +801,13 @@ export async function onRequestPost({ request, env }) {
     const repair = requestUrl.searchParams.get('repair') === '1';
     const forceRetry = requestUrl.searchParams.get('force_retry') === '1';
     const generalBoost = requestUrl.searchParams.get('general_boost') === '1';
+    const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
+    if (popularityDate) {
+      const popularity = await backfillPopularityDate(env, popularityDate);
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
+        .bind(new Date().toISOString(), JSON.stringify({ popularity }), runId).run();
+      return json({ ok: true, popularity, ai_calls: 0 });
+    }
     let payload = {};
     try {
       if ((request.headers.get('content-type') || '').includes('application/json')) payload = await request.json();
