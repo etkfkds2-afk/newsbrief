@@ -404,9 +404,10 @@ async function collect(env, {
   const koreaNow = new Date(now.valueOf() + 9 * 3600000);
   const dayStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), koreaNow.getUTCDate()) - 9 * 3600000;
   const monthStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), 1) - 9 * 3600000;
-  const publishedRows = await env.DB.prepare(`SELECT category,title,summary,published_at,fetched_at
-    FROM news_articles WHERE summary_quality='full'
-      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime(?)`)
+  const publishedRows = await env.DB.prepare(`SELECT a.category,a.title,a.summary,a.published_at,a.fetched_at,
+      EXISTS(SELECT 1 FROM news_popular_items p WHERE p.url_key=a.url_key OR p.title=a.title) AS is_popular
+    FROM news_articles a WHERE a.summary_quality='full'
+      AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime(?)`)
     .bind(new Date(monthStart).toISOString()).all();
   const publicationCounts = {
     baduk: { daily: 0, monthly: 0 },
@@ -430,6 +431,7 @@ async function collect(env, {
   if (popularityTargetStart) {
     for (const row of publishedRows.results || []) {
       if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
+      if (!Number(row.is_popular || 0)) continue;
       const timestamp = storedTime(row.published_at || row.fetched_at);
       if (timestamp < popularityTargetStart || timestamp >= popularityTargetStart + 86400000) continue;
       popularityTargetCounts[row.category === '바둑' ? 'baduk' : 'general'] += 1;

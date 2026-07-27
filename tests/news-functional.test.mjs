@@ -86,6 +86,8 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(collector, /popularityTargetCounts/);
   assert.match(collector, /popularity_target_counts_before/);
   assert.match(collector, /popularity_target_counts_after/);
+  assert.match(collector, /AS is_popular/);
+  assert.match(collector, /if \(!Number\(row\.is_popular \|\| 0\)\) continue/);
   assert.match(collector, /if \(!popularityCandidates\.length\) \{\s*const maintenanceCursor/);
   assert.match(workflow, /repair_popularity:/);
   assert.match(workflow, /!inputs\.repair_popularity/);
