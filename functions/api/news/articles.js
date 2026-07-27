@@ -199,7 +199,7 @@ export async function onRequestGet({ request, env }) {
     const order = view === 'popular'
       ? (hours > 0 && hours <= 24
         ? "p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
-        : "date(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
+        : "date(datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at),'+9 hours')) DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
       : view === 'home'
         ? "CASE WHEN p.title IS NULL THEN 0 ELSE 1 END DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";

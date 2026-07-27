@@ -159,7 +159,9 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.doesNotMatch(collector, /popularityDate \+ 12 \* 3600000/);
   assert.match(collector, /article\.publishedAt \|\| publishedAt/);
-  assert.match(articles, /date\(COALESCE[\s\S]*p\.score DESC/);
+  assert.match(collector, /synthetic_times_cleared/);
+  assert.match(collector, /published_at=substr\(published_at,1,10\)/);
+  assert.match(articles, /date\(datetime\(COALESCE[\s\S]*'\+9 hours'\)[\s\S]*p\.score DESC/);
   assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 

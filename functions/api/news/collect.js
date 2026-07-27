@@ -878,6 +878,15 @@ export async function onRequestPost({ request, env }) {
         forceRetry: true,
         popularityCandidates: popularity.rows.map(row => ({ ...row, popularityDate: parsedPopularityDate }))
       });
+      // Old popularity repairs stored a made-up noon UTC timestamp, which
+      // rendered as 9 PM in Korea. After trying to recover the real timestamp
+      // from each article, downgrade only the remaining synthetic values for
+      // this ranking day to an honest date-only value.
+      const targetDate = `${popularityDate.slice(0, 4)}-${popularityDate.slice(4, 6)}-${popularityDate.slice(6, 8)}`;
+      const cleared = await env.DB.prepare(`UPDATE news_articles
+        SET published_at=substr(published_at,1,10)
+        WHERE published_at=?`).bind(`${targetDate}T12:00:00.000Z`).run();
+      result.diagnostics.synthetic_times_cleared = Number(cleared?.meta?.changes || 0);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=?,message=? WHERE id=?")
         .bind(new Date().toISOString(), result.inserted,
           JSON.stringify({ popularity: { date: popularity.date, ranking_items: popularity.ranking_items }, diagnostics: result.diagnostics }).slice(0, 500), runId).run();
