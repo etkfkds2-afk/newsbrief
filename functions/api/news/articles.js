@@ -102,7 +102,6 @@ async function loadIssueCache(env, category) {
 function buildIssuesFromCache(items, cached) {
   const present = new Set(items.map(item => item.url_key));
   const mapped = cached
-    .filter(group => group.key !== '일반|ai:misc')
     .map(group => ({ key: group.key, title: group.title, count: group.url_keys.filter(key => present.has(key)).length }))
     .filter(group => group.count > 0);
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
