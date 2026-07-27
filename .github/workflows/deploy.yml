@@ -16,6 +16,11 @@ on:
         default: ''
         type: choice
         options: ['', '바둑', '일반']
+      general_boost:
+        description: '이번 실행만 일반 인기뉴스 Claude 한도를 24회로 보강'
+        required: false
+        default: false
+        type: boolean
   schedule:
     # GitHub may delay scheduled jobs during busy periods. Running every 15
     # Collect and refresh all news views every three hours. URL keys in D1 make
@@ -127,6 +132,7 @@ jobs:
           for i in $(seq 1 "$runs"); do
             endpoint="https://newsbrief-etkfkds2.pages.dev/api/news/collect"
             if [ "${{ inputs.backfill }}" = "true" ]; then endpoint="${endpoint}?backfill=1&force_retry=1"; fi
+            if [ "${{ inputs.general_boost }}" = "true" ]; then endpoint="${endpoint}?general_boost=1"; fi
             curl --fail-with-body --retry 3 --max-time 240 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \

@@ -47,6 +47,7 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 12/);
+  assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
   assert.match(collector, /canUseClaude/);
@@ -57,6 +58,27 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   assert.match(ai, /claude-haiku-4-5-20251001/);
   assert.doesNotMatch(collector, /anthropic_general_calls_today/);
   assert.doesNotMatch(collector, /general >= 2/);
+});
+
+test('일반 보강 실행은 인기 뉴스를 먼저 처리하고 지역 매체 검색 단신을 제외한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(collector, /isPopular: true/);
+  assert.match(collector, /popularOrder/);
+  assert.match(collector, /LOCAL_GENERAL_PRESS\.test\(resolvedPress\)/);
+  assert.match(collector, /groups\.flatMap/);
+  assert.match(workflow, /general_boost:/);
+  assert.match(workflow, /general_boost=1/);
+});
+
+test('바둑과 일반 뉴스는 각각 하루 10건·월 300건 게시 상한을 적용한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 10/);
+  assert.match(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT = 300/);
+  assert.match(collector, /hasPublicationCapacity/);
+  assert.match(collector, /consumePublicationCapacity/);
+  assert.match(collector, /publish_counts_before/);
+  assert.match(collector, /publish_counts_after/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {

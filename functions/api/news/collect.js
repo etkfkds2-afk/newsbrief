@@ -29,13 +29,17 @@ const BADUK_SEARCHES = [
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
 const DAILY_ANTHROPIC_CALL_LIMIT = 12;
+const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const MAX_SCHEDULED_CANDIDATES = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
+const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
+const MONTHLY_CATEGORY_PUBLISH_LIMIT = 300;
 
 const BODY_JUNK = /(?:무단전재|재배포\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\s*본\s*뉴스|기사제공|기자\s*[A-Z0-9._%+-]+@|기사의?\s*본문\s*내용|글자\s*크기|인쇄하기|공유하기)/i;
 const DEAD_PAGE = /(?:존재하지\s*않는\s*페이지|요청하신\s*페이지를\s*찾을\s*수\s*없|삭제된\s*기사|기사가\s*존재하지\s*않|page\s*not\s*found|\b404\b)/i;
+const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북|전남|경북|경남|강원|제주|부산|울산|경기|인천).*(?:뉴스|일보|신문|투데이)|(?:중부|제주|경인|영남|호남)(?:매일|일보|신문)/i;
 
 function validPublishedSummary(summary, title, category) {
   return validateThreeLineSummary(summary, title)
@@ -290,9 +294,11 @@ async function collectPopularity(slot = 0) {
     ['https://news.daum.net/ranking/popular', 'DAUM', '기타']
   ];
   const selected = [pages[slot % 5], pages[5]];
-  const rows = [];
-  for (const [url, source, category] of selected) rows.push(...(await popularPage(url, source)).map(row => ({ ...row, category })));
-  return rows;
+  const groups = [];
+  for (const [url, source, category] of selected) {
+    groups.push((await popularPage(url, source)).slice(0, 6).map(row => ({ ...row, category })));
+  }
+  return Array.from({ length: 6 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
 }
 
 async function reserveAiCall(env, diagnostics) {
@@ -306,7 +312,7 @@ async function reserveAiCall(env, diagnostics) {
   return true;
 }
 
-async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
+async function reserveAnthropicCall(env, diagnostics, forceRetry = false, generalBoost = false) {
   const day = new Date().toISOString().slice(0, 10);
   const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_budget_day'").first();
   if (String(dayRow?.value || '') !== day) {
@@ -317,7 +323,9 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
   }
   const dailyRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first();
   const daily = Number(dailyRow?.value || 0);
-  const dailyLimit = forceRetry ? BACKFILL_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT;
+  const dailyLimit = forceRetry
+    ? BACKFILL_ANTHROPIC_CALL_LIMIT
+    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT);
   const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
   if (daily >= dailyLimit || !budget.allowed) {
     diagnostics.anthropic_budget_exhausted = true;
@@ -356,8 +364,33 @@ async function collectArchivedTop(slot) {
   return rows;
 }
 
-async function collect(env, { backfill = false, repair = false, forceRetry = false, googleDiscoveries = [] } = {}) {
+async function collect(env, { backfill = false, repair = false, forceRetry = false, generalBoost = false, googleDiscoveries = [] } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
+  const publishedCounts = await env.DB.prepare(`SELECT
+    CASE WHEN category='바둑' THEN 'baduk' ELSE 'general' END AS bucket,
+    SUM(CASE WHEN datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','+9 hours','start of day','-9 hours') THEN 1 ELSE 0 END) AS daily_count,
+    SUM(CASE WHEN datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','+9 hours','start of month','-9 hours') THEN 1 ELSE 0 END) AS monthly_count
+    FROM news_articles WHERE summary_quality='full' GROUP BY bucket`).all();
+  const publicationCounts = {
+    baduk: { daily: 0, monthly: 0 },
+    general: { daily: 0, monthly: 0 }
+  };
+  for (const row of publishedCounts.results || []) {
+    if (!publicationCounts[row.bucket]) continue;
+    publicationCounts[row.bucket] = { daily: Number(row.daily_count || 0), monthly: Number(row.monthly_count || 0) };
+  }
+  const publicationBucket = category => category === '바둑' ? 'baduk' : 'general';
+  const hasPublicationCapacity = category => {
+    const count = publicationCounts[publicationBucket(category)];
+    return count.daily < DAILY_CATEGORY_PUBLISH_LIMIT && count.monthly < MONTHLY_CATEGORY_PUBLISH_LIMIT;
+  };
+  const consumePublicationCapacity = category => {
+    const count = publicationCounts[publicationBucket(category)];
+    count.daily += 1;
+    count.monthly += 1;
+  };
+  diagnostics.publish_limits = { daily: DAILY_CATEGORY_PUBLISH_LIMIT, monthly: MONTHLY_CATEGORY_PUBLISH_LIMIT };
+  diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
   const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
@@ -381,7 +414,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       await blockAiForToday(env, diagnostics);
     }
 
-    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry)) {
+    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
       const anthropicTrace = {};
       const anthropicSummary = await makeBestSummary({
         ...env,
@@ -479,6 +512,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     .bind(24, forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
+    if (!hasPublicationCapacity(row.category)) return;
     const detail = {};
     const repaired = await summarize({ title: row.title, rawSummary: row.raw_summary, body: row.body_text, category: row.category }, detail, 'retry');
     diagnostics.retry_attempted += 1;
@@ -488,6 +522,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
         env.DB.prepare("UPDATE news_articles SET summary=?,summary_quality='full' WHERE id=?").bind(repaired, row.id),
         env.DB.prepare('DELETE FROM news_summary_attempts WHERE url_key=?').bind(row.url_key)
       ]);
+      consumePublicationCapacity(row.category);
       diagnostics.retry_repaired += 1;
     } else if (detail.ai_attempted && !detail.ai_error) {
       await env.DB.prepare(`INSERT INTO news_summary_attempts(url_key,attempts,last_attempt) VALUES(?,1,CURRENT_TIMESTAMP)
@@ -584,9 +619,11 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     const allPopular = await collectPopularity(slot);
     const popular = allPopular.slice(0, 12);
     diagnostics.popular_found = popular.length;
-    for (const row of popular.filter(row => row.rank <= 2)) candidates.push({
+    for (const row of popular) candidates.push({
       category: row.category,
       source: row.source,
+      isPopular: true,
+      popularityRank: row.rank,
       item: { title: row.title, link: row.href, originallink: row.href, description: '', pubDate: '' }
     });
     for (const row of popular) {
@@ -604,7 +641,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     diagnostics.popular_error = String(error?.message || error).slice(0, 120);
   }
 
-  const processCandidate = async ({ category, item, source }) => {
+  const processCandidate = async ({ category, item, source, isPopular = false }) => {
     const preferredUrl = source === 'NAVER' && /naver\.com\//i.test(item.link || '') ? item.link : (item.originallink || item.link);
     const url = canonicalUrl(preferredUrl);
     const title = cleanTitle(item.title);
@@ -617,6 +654,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (!exists.image_url || exists.summary_quality !== 'full') {
+        if (exists.summary_quality !== 'full' && !hasPublicationCapacity(exists.category || category)) return 0;
         const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
         let article = await fetchArticleText(fetchUrl);
         if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
@@ -630,19 +668,25 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
           summary=CASE WHEN ? THEN ? ELSE summary END,
           summary_quality=CASE WHEN ? THEN 'full' ELSE summary_quality END
           WHERE id=?`).bind(title, article.press, article.press, article.image, article.image, article.body, article.body, valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
+        if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
       }
       return 0;
     }
+
+    if (!hasPublicationCapacity(category)) return 0;
 
     const rawSummary = stripHtml(item.description);
     const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
     let article = await fetchArticleText(fetchUrl);
     if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
     const body = article.body;
+    const resolvedPress = article.press || press;
+    if (category !== '바둑' && !isPopular && LOCAL_GENERAL_PRESS.test(resolvedPress)) return 0;
     // Search snippets are discovery data, not an article body. Never create a
     // three-line card when the destination page is missing or cannot be read.
     if (body.length < 180) return 0;
     const finalCategory = classify(category, title, body || rawSummary);
+    if (!hasPublicationCapacity(finalCategory)) return 0;
     const summary = await summarize({ title, rawSummary, body, category: finalCategory });
     const validSummary = validPublishedSummary(summary, title, finalCategory);
 
@@ -660,6 +704,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       url, urlKey, title, articleSource(url, source, article.press || press), article.press || press, finalCategory, publishedAt, rawSummary,
       body, validSummary ? summary : '', validSummary ? 'full' : 'none', article.image
     ).run();
+    if (validSummary) consumePublicationCapacity(finalCategory);
     return 1;
   };
   const uniqueCandidates = [];
@@ -670,7 +715,13 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     candidateUrls.add(key);
     uniqueCandidates.push(candidate);
   }
-  uniqueCandidates.sort((a, b) => Number(b.category === '바둑') - Number(a.category === '바둑'));
+  uniqueCandidates.sort((a, b) => {
+    const badukOrder = Number(b.category === '바둑') - Number(a.category === '바둑');
+    if (badukOrder) return badukOrder;
+    const popularOrder = Number(Boolean(b.isPopular)) - Number(Boolean(a.isPopular));
+    if (popularOrder) return popularOrder;
+    return Number(a.popularityRank || 999) - Number(b.popularityRank || 999);
+  });
   const recentGeneral = await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
     WHERE category<>'바둑' AND summary_quality='full'
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
@@ -691,6 +742,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
   for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
   for (const row of generalRetries) await retrySummary(row);
   for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
+  diagnostics.publish_counts_after = publicationCounts;
   return { inserted, diagnostics };
 }
 
@@ -708,12 +760,13 @@ export async function onRequestPost({ request, env }) {
     const backfill = requestUrl.searchParams.get('backfill') === '1';
     const repair = requestUrl.searchParams.get('repair') === '1';
     const forceRetry = requestUrl.searchParams.get('force_retry') === '1';
+    const generalBoost = requestUrl.searchParams.get('general_boost') === '1';
     let payload = {};
     try {
       if ((request.headers.get('content-type') || '').includes('application/json')) payload = await request.json();
     } catch {}
     const googleDiscoveries = Array.isArray(payload?.googleDiscoveries) ? payload.googleDiscoveries : [];
-    const result = await collect(env, { backfill, repair, forceRetry, googleDiscoveries });
+    const result = await collect(env, { backfill, repair, forceRetry, generalBoost, googleDiscoveries });
     const warnings = Object.entries(result.diagnostics)
       .filter(([key, value]) => /_error$/.test(key) && value)
       .map(([key, value]) => `${key}: ${value}`);
