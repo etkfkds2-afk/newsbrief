@@ -20,6 +20,11 @@ on:
         default: ''
         type: choice
         options: ['', '바둑', '일반']
+      reset_issues:
+        description: '선택한 카테고리 이슈 캐시를 비우고 처음부터 재분류'
+        required: false
+        default: false
+        type: boolean
       general_boost:
         description: '이번 실행만 일반 인기뉴스 Claude 한도를 24회로 보강'
         required: false
@@ -220,6 +225,7 @@ jobs:
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           CLASSIFY_CATEGORY: ${{ inputs.classify_category }}
+          RESET_ISSUES: ${{ inputs.reset_issues }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             categories=("바둑")
@@ -230,10 +236,12 @@ jobs:
           for category in "${categories[@]}"; do
             encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "${category}")
             output="/tmp/classify-${encoded}.json"
+            reset_query=""
+            if [ "${RESET_ISSUES}" = "true" ]; then reset_query="&reset=1"; fi
             curl --fail-with-body -sS --retry 2 --max-time 120 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
-              "https://newsbrief-etkfkds2.pages.dev/api/news/classify-issues?category=${encoded}" \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/classify-issues?category=${encoded}${reset_query}" \
               | tee "${output}"
             echo
             python3 -m json.tool "${output}"

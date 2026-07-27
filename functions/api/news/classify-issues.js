@@ -25,6 +25,7 @@ export async function onRequestPost({ request, env }) {
     await ensureNewsDb(env);
     const url = new URL(request.url);
     const category = url.searchParams.get('category') || '바둑';
+    const resetIssues = url.searchParams.get('reset') === '1';
     if (!SUPPORTED_CATEGORIES.has(category)) return json({ error: `지원하지 않는 category: ${category}` }, 400);
 
     const dbCategory = category === '바둑' ? '바둑' : null;
@@ -50,23 +51,17 @@ export async function onRequestPost({ request, env }) {
     ]);
     const articles = result.results || [];
     const inWindowKeys = new Set(articles.map(a => a.url_key));
-    const articleByKey = new Map(articles.map(article => [article.url_key, article]));
 
     // Drop url_keys that aged out of the 30-day window (and any group that
     // becomes empty as a result) before deciding what's genuinely new.
     const standaloneEventKeys = new Set(articles.filter(isStandaloneEventArticle).map(article => article.url_key));
-    const existingPayload = loadExistingPayload(cacheRow)
+    const existingPayload = (resetIssues ? [] : loadExistingPayload(cacheRow))
       .map(group => ({
         ...group,
         url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)
-          && !(category === '바둑' && standaloneEventKeys.has(key) && !group.standalone_event))
+          && !((group.misc || String(group.key || '').endsWith('|ai:misc'))
+            && category === '바둑' && standaloneEventKeys.has(key)))
       }))
-      .filter(group => {
-        if (category !== '바둑' || group.standalone_event || group.url_keys.length !== 1) return true;
-        const article = articleByKey.get(group.url_keys[0]);
-        const rawTitle = String(article?.title || '').replace(/[“”‘’"']/g, '').trim();
-        return !rawTitle || !group.title.startsWith(rawTitle.slice(0, 20));
-      })
       .filter(group => group.url_keys.length > 0);
 
     const classifiedKeys = new Set(existingPayload.flatMap(group => group.url_keys));
@@ -134,10 +129,7 @@ export async function onRequestPost({ request, env }) {
         matched.url_keys.push(...group.url_keys);
       } else {
         const key = `${category}|ai:${nextIndex++}`;
-        byKey.set(key, {
-          key, title: group.title, url_keys: [...group.url_keys],
-          ...(group.standalone_event ? { standalone_event: true } : {})
-        });
+        byKey.set(key, { key, title: group.title, url_keys: [...group.url_keys] });
       }
     }
 

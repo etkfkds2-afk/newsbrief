@@ -10,15 +10,14 @@ import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 test('바둑 대회·국제교류 기사는 한 건이어도 독립 이슈 후보가 된다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개', summary: '지난 대회 활약을 돌아봤다.' }), false);
 });
 
-test('바둑 단일 대회는 AI의 넓은 묶음과 무관하게 독립 이슈로 유지한다', async () => {
+test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고 일반 단독 행사는 제외한다', async () => {
   const articles = [{ url_key: 'mu-an', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
   const env = { AI: { run: async () => ({ response: '[{"title":"무안 상숙 청소년 바둑대회","indices":[0]}]' }) } };
   const baduk = await classifyIssues(env, articles, [], { allowStandaloneEvents: true });
   const general = await classifyIssues(env, articles, [], { allowStandaloneEvents: false });
-  assert.match(baduk.groups[0].title, /무안군.*바둑대회/);
+  assert.equal(baduk.groups[0].title, '무안 상숙 청소년 바둑대회');
   assert.equal(baduk.groups[0].url_keys[0], 'mu-an');
   assert.equal(general.groups[0].title, '기타');
   const omitted = await classifyIssues({ AI: { run: async () => ({ response: '[]' }) } }, articles, [], { allowStandaloneEvents: true });
@@ -28,16 +27,22 @@ test('바둑 단일 대회는 AI의 넓은 묶음과 무관하게 독립 이슈�
 
 test('기타 바둑소식은 별도 타일을 만들지 않고 기타로 합친다', async () => {
   const articles = [
-    { url_key: 'event', title: '무안군 중국 상숙시 청소년 온라인 바둑대회 개최', summary: '' },
     { url_key: 'plain-1', title: '기사 하나', summary: '' },
     { url_key: 'plain-2', title: '기사 둘', summary: '' }
   ];
-  const env = { AI: { run: async () => ({ response: '[{"title":"기타 바둑소식","indices":[0,1,2]}]' }) } };
+  const env = { AI: { run: async () => ({ response: '[{"title":"기타 바둑소식","indices":[0,1]}]' }) } };
   const result = await classifyIssues(env, articles, [], { allowStandaloneEvents: true });
   assert.deepEqual(result.groups, [
-    { title: '기타', url_keys: ['plain-1', 'plain-2'], misc: true },
-    { title: '무안군 중국 상숙시 청소년 온라인 바둑대회 개최', url_keys: ['event'], standalone_event: true }
+    { title: '기타', url_keys: ['plain-1', 'plain-2'], misc: true }
   ]);
+});
+
+test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제공한다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(endpoint, /url\.searchParams\.get\('reset'\) === '1'/);
+  assert.match(endpoint, /resetIssues \? \[\] : loadExistingPayload/);
+  assert.match(workflow, /reset_issues:/);
 });
 
 test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 복구 모드를 제공한다', async () => {
