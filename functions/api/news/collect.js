@@ -204,16 +204,40 @@ function xmlText(block, tag) {
     .replace(/^<!\[CDATA\[|\]\]>$/g, ''));
 }
 
-async function googleNewsSearch(query, days = 30) {
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchGoogleRss(endpoint, attempts = 3) {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(endpoint, {
+        signal: controller.signal,
+        headers: {
+          'user-agent': attempt ? 'Mozilla/5.0' : 'Mozilla/5.0 NewsBrief/1.0',
+          accept: attempt ? 'application/xml,text/xml;q=0.9,*/*;q=0.8' : 'application/rss+xml, application/xml;q=0.9'
+        }
+      });
+      lastStatus = response.status;
+      if (response.ok || response.status < 500) return response;
+    } catch (error) {
+      if (error?.name !== 'AbortError' && attempt === attempts - 1) throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt < attempts - 1) await wait(250 * (2 ** attempt));
+  }
+  throw new Error(`Google News RSS ${lastStatus || 'timeout'}`);
+}
+
+export async function googleNewsSearch(query, days = 30) {
   const endpoint = new URL('https://news.google.com/rss/search');
   endpoint.searchParams.set('q', `${query} when:${Math.min(Math.max(days, 1), 30)}d`);
   endpoint.searchParams.set('hl', 'ko');
   endpoint.searchParams.set('gl', 'KR');
   endpoint.searchParams.set('ceid', 'KR:ko');
-  let response = await fetch(endpoint, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/1.0', accept: 'application/rss+xml, application/xml;q=0.9' } });
-  if (response.status >= 500) {
-    response = await fetch(endpoint, { headers: { 'user-agent': 'Mozilla/5.0', accept: 'application/xml,text/xml;q=0.9,*/*;q=0.8' } });
-  }
+  const response = await fetchGoogleRss(endpoint);
   if (!response.ok) throw new Error(`Google News RSS ${response.status}`);
   const xml = await response.text();
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 5).map(match => {
@@ -517,10 +541,15 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       diagnostics.archive_error = String(error?.message || error).slice(0, 120);
     }
   }
-  if (!backfill) try {
+  // The GitHub discovery job already supplies Google headlines from a network
+  // that Google accepts. Avoid a redundant Worker-origin RSS call, which is
+  // frequently rejected with 503 even though discovery already succeeded.
+  if (!backfill && !googleDiscoveries.length) try {
     for (const item of (await googleNewsSearch(badukQuery, 30)).slice(0, 3)) candidates.push({ category: '바둑', item, source: 'GOOGLE' });
   } catch (error) {
     diagnostics.google_error = String(error?.message || error).slice(0, 120);
+  } else if (!backfill) {
+    diagnostics.google_fallback_skipped = true;
   }
   if (!backfill) try {
     const allPopular = await collectPopularity(slot);

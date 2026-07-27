@@ -2,11 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { onRequestGet } from '../functions/api/news/articles.js';
-import { isBadukRelevant } from '../functions/api/news/collect.js';
+import { googleNewsSearch, isBadukRelevant } from '../functions/api/news/collect.js';
 
 test('정기 수집은 기존 게시 기사를 비노출 상태로 강등하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /UPDATE news_articles SET summary='',summary_quality='none'/);
+});
+
+test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 생략한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /!backfill && !googleDiscoveries\.length/);
+  assert.match(collector, /google_fallback_skipped = true/);
+});
+
+test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls < 3
+      ? new Response('', { status: 503 })
+      : new Response('<rss><channel><item><title>신진서 바둑 대회 우승 - 테스트신문</title><link>https://example.com/a</link></item></channel></rss>', { status: 200 });
+  };
+  try {
+    const items = await googleNewsSearch('바둑');
+    assert.equal(calls, 3);
+    assert.equal(items.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async () => {
@@ -65,7 +89,16 @@ test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하
   assert.match(html, /clearIssue/);
   assert.match(html, /sub==='home'&&!state\.q&&!state\.issueKey/);
   assert.match(html, /relatedHtml\(x\)/);
+  assert.doesNotMatch(html, /같은 이슈에 속한 기사 전체입니다/);
   assert.doesNotMatch(html, /issueRelated/);
+});
+
+test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /fetchTimed/);
+  assert.match(html, /const attempts=.*GET.*\?2:1/);
+  assert.match(html, /id="retryLoad"/);
+  assert.match(html, /closest\('#retryLoad'\)/);
 });
 
 test('대량 백필은 CPU 제한을 피하도록 작은 묶음으로 처리한다', async () => {

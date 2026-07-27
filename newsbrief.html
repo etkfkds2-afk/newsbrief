@@ -32,9 +32,22 @@ const relTime=ms=>{
 };
 let toastTimer;
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1800)}
+async function fetchTimed(url,options={},timeout=12000){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+  try{return await fetch(url,{...options,signal:controller.signal})}finally{clearTimeout(timer)}
+}
 async function fetchJson(url,options){
   const config={...(options||{}),headers:{...(options?.headers||{}),'x-news-user':userId}};
-  const response=await fetch(url,config);
+  const attempts=(config.method||'GET').toUpperCase()==='GET'?2:1;
+  let response,lastError;
+  for(let attempt=0;attempt<attempts;attempt+=1){
+    try{
+      response=await fetchTimed(url,config);
+      if(response.ok||response.status<500||attempt===attempts-1)break;
+    }catch(error){lastError=error;if(attempt===attempts-1)throw Error(error?.name==='AbortError'?'서버 응답이 지연되고 있습니다. 다시 시도해 주세요.':'네트워크 연결을 확인하고 다시 시도해 주세요.')}
+    await new Promise(resolve=>setTimeout(resolve,350*(attempt+1)));
+  }
+  if(!response)throw lastError||Error('뉴스를 불러오지 못했습니다.');
   const type=(response.headers.get('content-type')||'').toLowerCase();
   if(!type.includes('application/json')){
     throw Error(response.ok?'서버 응답 형식이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.':'서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요.');
@@ -132,9 +145,10 @@ async function load({silent=false}={}){
     }
     render()
   }
-  catch(e){if(requestId===state.requestSeq&&!silent)$('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}</div>`}
+  catch(e){if(requestId===state.requestSeq&&!silent)$('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}
 }
 document.addEventListener('click',e=>{
+  if(e.target.closest('#retryLoad')){load();return}
   if(e.target.closest('#clearIssue')){state.issueKey='';load();return}
   const issue=e.target.closest('[data-issue-key]');
   if(issue){
@@ -154,7 +168,8 @@ $('cards').addEventListener('click',async e=>{
   const button=e.target,card=button.closest('.card'),key=card.dataset.key;
   button.disabled=true;
   try{
-    const r=await fetch('/api/news/item',{method:'POST',headers:{'content-type':'application/json','x-news-user':userId},body:JSON.stringify({action,url_key:key})});
+    const r=await fetchTimed('/api/news/item',{method:'POST',headers:{'content-type':'application/json','x-news-user':userId},body:JSON.stringify({action,url_key:key})});
+    await r.json().catch(()=>null);
     if(!r.ok)throw Error();
     const item=state.items.find(x=>x.url_key===key);
     if(action==='save'&&item){item.saved=1;button.dataset.action='unsave';button.textContent='저장됨';button.classList.add('on');button.disabled=false;toast('기사를 저장했습니다.');return}

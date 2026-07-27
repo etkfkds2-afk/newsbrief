@@ -13,6 +13,28 @@ function text(block, tag) {
     .replace(/^<!\[CDATA\[|\]\]>$/g, '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').trim();
 }
 
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchWithRetry(input, init = {}, { attempts = 3, timeout = 12000 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      if (response.ok || response.status < 500 || attempt === attempts - 1) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts - 1) throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    await wait(300 * (2 ** attempt));
+  }
+  throw lastError || new Error('Request failed');
+}
+
 const token = process.env.NEWSBRIEF_COLLECT_TOKEN;
 if (!token) throw new Error('NEWSBRIEF_COLLECT_TOKEN is missing');
 const full = process.env.NEWSBRIEF_BACKFILL === '1';
@@ -23,7 +45,7 @@ for (const query of selected) {
   const endpoint = new URL('https://news.google.com/rss/search');
   endpoint.searchParams.set('q', `${query} when:30d`);
   endpoint.searchParams.set('hl', 'ko'); endpoint.searchParams.set('gl', 'KR'); endpoint.searchParams.set('ceid', 'KR:ko');
-  const response = await fetch(endpoint, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief personal feed reader' } });
+  const response = await fetchWithRetry(endpoint, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief personal feed reader' } });
   if (!response.ok) continue;
   const xml = await response.text();
   for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
@@ -36,10 +58,10 @@ for (const query of selected) {
   if (found.size >= (full ? 100 : 40)) break;
 }
 const endpoint = `https://newsbrief-etkfkds2.pages.dev/api/news/collect${full ? '?backfill=1' : ''}`;
-const response = await fetch(endpoint, {
+const response = await fetchWithRetry(endpoint, {
   method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   body: JSON.stringify({ googleDiscoveries: [...found.values()] })
-});
+}, { attempts: 3, timeout: 180000 });
 const result = await response.text();
 console.log(`Google discoveries=${found.size} collector=${response.status} ${result}`);
 if (!response.ok) {
