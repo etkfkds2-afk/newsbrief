@@ -1,8 +1,11 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
 import { classifyIssues } from '../../_lib/news-issue-classify.js';
+import { canUseClaude, recordClaudeUsage } from '../../_lib/news-ai-budget.js';
 
 const SUPPORTED_CATEGORIES = new Set(['바둑', '일반']);
+const MAX_NEW_ARTICLES_PER_RUN = 40;
+const ESTIMATED_ISSUE_CALL_MICRO_USD = 180_000;
 
 function loadExistingPayload(row) {
   if (!row) return [];
@@ -53,7 +56,7 @@ export async function onRequestPost({ request, env }) {
       .filter(group => group.url_keys.length > 0);
 
     const classifiedKeys = new Set(existingPayload.flatMap(group => group.url_keys));
-    const newArticles = articles.filter(a => !classifiedKeys.has(a.url_key));
+    const newArticles = articles.filter(a => !classifiedKeys.has(a.url_key)).slice(0, MAX_NEW_ARTICLES_PER_RUN);
 
     if (!newArticles.length) {
       return json({
@@ -66,12 +69,20 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
+    const budget = await canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD);
+    if (!budget.allowed) return json({
+      ok: true, category, count: articles.length, new_count: newArticles.length,
+      provider: 'budget-blocked', monthly_micro_usd: budget.spent,
+      issues: existingPayload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+    });
+
     const existingIssues = existingPayload.filter(group => !group.misc && !String(group.key || '').endsWith('|ai:misc'));
-    const { groups, provider } = await classifyIssues(
+    const { groups, provider, model, usage } = await classifyIssues(
       env,
       newArticles,
       existingIssues.map(group => ({ key: group.key, title: group.title }))
     );
+    const recorded = provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent };
 
     const byKey = new Map(existingPayload.map(group => [group.key, group]));
     let nextIndex = existingPayload.reduce((max, group) => {
@@ -108,6 +119,9 @@ export async function onRequestPost({ request, env }) {
       count: articles.length,
       new_count: newArticles.length,
       provider,
+      usage,
+      cost_micro_usd: recorded.cost,
+      monthly_micro_usd: recorded.spent,
       issues: payload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
   } catch (error) {

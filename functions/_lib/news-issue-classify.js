@@ -1,5 +1,4 @@
 const CLASSIFY_MODEL = 'claude-sonnet-5';
-const WORKERS_AI_CLASSIFY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function buildInstructions(hasExisting) {
   return `당신은 한국 뉴스 데스크의 편집자다. ${hasExisting ? '이미 분류된 기존 이슈 목록과, ' : ''}아직 분류되지 않은 새 기사 목록을 준다.
@@ -73,21 +72,6 @@ function toGroups(parsed, articles, existingTitles) {
   return groups;
 }
 
-async function classifyWithWorkersAi(env, articles, existingIssues) {
-  const result = await env.AI.run(WORKERS_AI_CLASSIFY_MODEL, {
-    messages: [
-      { role: 'system', content: buildInstructions(existingIssues.length > 0) },
-      { role: 'user', content: buildPrompt(articles, existingIssues) }
-    ],
-    max_tokens: 4096,
-    temperature: 0
-  });
-  const text = result?.response || result?.result?.response || '';
-  const parsed = extractJsonArray(text);
-  if (!parsed) throw new Error(`Cloudflare AI 응답을 JSON으로 해석하지 못했습니다: ${text.slice(0, 300)}`);
-  return toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)));
-}
-
 async function classifyWithAnthropic(env, articles, existingIssues) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -110,7 +94,10 @@ async function classifyWithAnthropic(env, articles, existingIssues) {
   const text = (payload?.content || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
   const parsed = extractJsonArray(text);
   if (!parsed) throw new Error('Anthropic 응답을 JSON으로 해석하지 못했습니다.');
-  return toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)));
+  return {
+    groups: toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title))),
+    usage: payload?.usage || {}
+  };
 }
 
 // existingIssues: [{key, title}] — issues already in the cache, so the
@@ -118,13 +105,9 @@ async function classifyWithAnthropic(env, articles, existingIssues) {
 // instead of re-classifying everything from scratch every run.
 export async function classifyIssues(env, articles, existingIssues = []) {
   if (!articles.length) return { groups: [], provider: 'none' };
-  if (env?.AI) {
-    try {
-      return { groups: await classifyWithWorkersAi(env, articles, existingIssues), provider: 'workers-ai' };
-    } catch (error) {
-      if (!env?.ANTHROPIC_API_KEY) throw error;
-    }
+  if (env?.ANTHROPIC_API_KEY) {
+    const result = await classifyWithAnthropic(env, articles, existingIssues);
+    return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL };
   }
-  if (env?.ANTHROPIC_API_KEY) return { groups: await classifyWithAnthropic(env, articles, existingIssues), provider: 'anthropic' };
   return { groups: [], provider: 'none' };
 }

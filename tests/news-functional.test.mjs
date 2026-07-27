@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { onRequestGet } from '../functions/api/news/articles.js';
 import { googleNewsSearch, isBadukRelevant } from '../functions/api/news/collect.js';
+import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 
 test('정기 수집은 기존 게시 기사를 비노출 상태로 강등하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
@@ -40,12 +41,14 @@ test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async
   assert.match(source, /ai_blocked/);
 });
 
-test('Anthropic 요약 fallback은 평시·백필·누적 호출 상한을 적용한다', async () => {
+test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
-  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 12/);
+  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 6/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
-  assert.match(collector, /TOTAL_ANTHROPIC_CALL_LIMIT = 600/);
+  assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
+  assert.match(collector, /canUseClaude/);
+  assert.match(collector, /recordClaudeUsage/);
   assert.match(collector, /reserveAnthropicCall/);
   assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC: '1'/);
   assert.match(ai, /NEWSBRIEF_USE_ANTHROPIC === '1'/);
@@ -55,8 +58,11 @@ test('Anthropic 요약 fallback은 평시·백필·누적 호출 상한을 적�
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /cloudflareReserved = Boolean\(env\.AI\)/);
-  assert.match(collector, /aiNewRemaining = \{ 바둑: newQuota, 일반: newQuota \}/);
-  assert.match(collector, /quotaKey = payload\.category === '바둑' \? '바둑' : '일반'/);
+  assert.doesNotMatch(collector, /aiNewRemaining|aiRetryRemaining/);
+  assert.match(collector, /for \(const row of badukRetries\)/);
+  assert.match(collector, /for \(const candidate of badukCandidates\)/);
+  assert.match(collector, /for \(const row of generalRetries\)/);
+  assert.match(collector, /for \(const candidate of generalCandidates\)/);
 });
 
 test('Cloudflare 요약 한도·오류·검증 실패 시 Claude로 재시도한다', async () => {
@@ -136,13 +142,32 @@ test('자동 수집과 화면 갱신은 3시간 주기로 동작한다', async (
   assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),10800000\)/);
 });
 
-test('일일 이슈 분류는 바둑과 일반을 모두 Workers AI 우선으로 처리한다', async () => {
+test('일일 이슈 분류는 바둑과 일반을 모두 Claude 전용으로 처리한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
   assert.match(workflow, /categories=\("바둑" "일반"\)/);
-  assert.match(workflow, /Workers AI and Claude fallback/);
-  assert.match(classifier, /if \(env\?\.AI\)/);
+  assert.match(workflow, /Classify issue keywords with Claude/);
+  assert.doesNotMatch(classifier, /env\.AI\.run/);
   assert.match(classifier, /classifyWithAnthropic/);
+});
+
+test('Claude 월간 비용은 1.70달러 목표와 1.90달러 절대 한도를 사용한다', async () => {
+  const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
+  const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 1_700_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 1_900_000/);
+  assert.match(budget, /claude_budget_month/);
+  assert.match(classifier, /MAX_NEW_ARTICLES_PER_RUN = 40/);
+  assert.match(classifier, /recordClaudeUsage/);
+  assert.equal(claudeCostMicroUsd('claude-haiku-4-5-20251001', { input_tokens: 1000, output_tokens: 100 }), 1500);
+  assert.equal(claudeCostMicroUsd('claude-sonnet-5', { input_tokens: 1000, output_tokens: 100 }), 4500);
+});
+
+test('이슈 예산이 부족하면 기존 캐시를 유지하고 새 기사는 다음 실행에 남긴다', async () => {
+  const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(classifier, /provider: 'budget-blocked'/);
+  assert.match(classifier, /issues: existingPayload\.map/);
+  assert.doesNotMatch(classifier, /buildIssues|issueKey\(/);
 });
 
 test('바둑 검색에 섞인 무관한 기사는 Claude 대상으로 분류하지 않는다', () => {

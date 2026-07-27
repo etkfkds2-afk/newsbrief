@@ -3,6 +3,7 @@ import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, sha256
 } from '../../_lib/news-db.js';
+import { canUseClaude, recordClaudeUsage } from '../../_lib/news-ai-budget.js';
 
 const SEARCHES = [
   ['바둑', '바둑 대회 프로기사'],
@@ -24,11 +25,9 @@ const BADUK_SEARCHES = [
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
 const DAILY_AI_CALL_LIMIT = 4;
-const DAILY_ANTHROPIC_CALL_LIMIT = 12;
+const DAILY_ANTHROPIC_CALL_LIMIT = 6;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
-// This circuit breaker limits accidental runaway usage. The Anthropic workspace
-// spend limit remains the authoritative US$5 billing-side stop.
-const TOTAL_ANTHROPIC_CALL_LIMIT = 600;
+const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const MAX_SCHEDULED_CANDIDATES = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 
@@ -320,26 +319,19 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
       env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
     ]);
   }
-  const [dailyRow, totalRow] = await Promise.all([
-    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first(),
-    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_total'").first()
-  ]);
+  const dailyRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first();
   const daily = Number(dailyRow?.value || 0);
-  const total = Number(totalRow?.value || 0);
   const dailyLimit = forceRetry ? BACKFILL_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT;
-  if (daily >= dailyLimit || total >= TOTAL_ANTHROPIC_CALL_LIMIT) {
+  const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
+  if (daily >= dailyLimit || !budget.allowed) {
     diagnostics.anthropic_budget_exhausted = true;
     diagnostics.anthropic_calls_today = daily;
-    diagnostics.anthropic_calls_total = total;
     diagnostics.anthropic_daily_limit = dailyLimit;
+    diagnostics.claude_monthly_micro_usd = budget.spent;
     return false;
   }
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1"),
-    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_total',1) ON CONFLICT(key) DO UPDATE SET value=value+1")
-  ]);
+  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
   diagnostics.anthropic_calls_today = daily + 1;
-  diagnostics.anthropic_calls_total = total + 1;
   diagnostics.anthropic_daily_limit = dailyLimit;
   return true;
 }
@@ -370,22 +362,15 @@ async function collectArchivedTop(slot) {
 
 async function collect(env, { backfill = false, repair = false, forceRetry = false, googleDiscoveries = [] } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
-  const retryQuota = repair ? 4 : (backfill ? 3 : 2);
-  const newQuota = repair ? 0 : 2;
-  const aiRetryRemaining = { 바둑: retryQuota, 일반: retryQuota };
-  const aiNewRemaining = { 바둑: newQuota, 일반: newQuota };
   const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
-    const quotaKey = payload.category === '바둑' ? '바둑' : '일반';
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
     if (sourceLength < 300) {
       return makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
     }
 
-    const remaining = purpose === 'retry' ? aiRetryRemaining : aiNewRemaining;
-    let cloudflareReserved = Boolean(env.AI) && remaining[quotaKey] > 0;
+    let cloudflareReserved = Boolean(env.AI);
     if (cloudflareReserved) cloudflareReserved = await reserveAiCall(env, diagnostics);
-    if (cloudflareReserved) remaining[quotaKey] -= 1;
 
     let summary = '';
     if (cloudflareReserved) {
@@ -409,6 +394,13 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
         cloudflare_fallback: true,
         cloudflare_error: trace.ai_error || (cloudflareReserved ? 'invalid_response' : 'budget_unavailable')
       });
+      if (anthropicTrace.ai_provider === 'anthropic') {
+        const recorded = await recordClaudeUsage(env, anthropicTrace.ai_model, {
+          input_tokens: anthropicTrace.ai_input_tokens,
+          output_tokens: anthropicTrace.ai_output_tokens
+        });
+        diagnostics.claude_monthly_micro_usd = recorded.spent;
+      }
       if (anthropicTrace.ai_provider === 'anthropic'
         && anthropicTrace.structurally_valid && anthropicTrace.numbers_grounded) return anthropicSummary;
       if (!summary) summary = anthropicSummary;
@@ -478,8 +470,8 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     ORDER BY CASE WHEN a.category='바둑' THEN 0 ELSE 1 END,
       COALESCE(f.attempts,0), COALESCE(f.last_attempt,'1970-01-01'), length(a.body_text) DESC LIMIT ?`)
     .bind(24, forceRetry ? 1 : 0, retryRowLimit).all();
-  for (const row of retryRows.results || []) {
-    if (isRejectedTitle(row.title)) continue;
+  const retrySummary = async row => {
+    if (isRejectedTitle(row.title)) return;
     const detail = {};
     const repaired = await summarize({ title: row.title, rawSummary: row.raw_summary, body: row.body_text, category: row.category }, detail, 'retry');
     diagnostics.retry_attempted += 1;
@@ -494,9 +486,13 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       await env.DB.prepare(`INSERT INTO news_summary_attempts(url_key,attempts,last_attempt) VALUES(?,1,CURRENT_TIMESTAMP)
         ON CONFLICT(url_key) DO UPDATE SET attempts=attempts+1,last_attempt=CURRENT_TIMESTAMP`).bind(row.url_key).run();
     }
-  }
+  };
+  const pendingRetries = retryRows.results || [];
   const candidates = [];
-  if (repair) return { inserted: 0, diagnostics };
+  if (repair) {
+    for (const row of pendingRetries) await retrySummary(row);
+    return { inserted: 0, diagnostics };
+  }
   const cursorKey = backfill ? 'history_cursor' : 'rotation_cursor';
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
   const slot = Number(cursorRow?.value || 0);
@@ -667,12 +663,20 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
     candidateUrls.add(key);
     uniqueCandidates.push(candidate);
   }
+  uniqueCandidates.sort((a, b) => Number(b.category === '바둑') - Number(a.category === '바둑'));
   const limitedCandidates = backfill ? uniqueCandidates.slice(0, 8) : uniqueCandidates.slice(0, MAX_SCHEDULED_CANDIDATES);
   diagnostics.candidates = candidates.length;
   diagnostics.unique_candidates = uniqueCandidates.length;
   diagnostics.processed_candidates = limitedCandidates.length;
   let inserted = 0;
-  for (const candidate of limitedCandidates) inserted += await processCandidate(candidate);
+  const badukRetries = pendingRetries.filter(row => row.category === '바둑');
+  const generalRetries = pendingRetries.filter(row => row.category !== '바둑');
+  const badukCandidates = limitedCandidates.filter(candidate => candidate.category === '바둑');
+  const generalCandidates = limitedCandidates.filter(candidate => candidate.category !== '바둑');
+  for (const row of badukRetries) await retrySummary(row);
+  for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
+  for (const row of generalRetries) await retrySummary(row);
+  for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
   return { inserted, diagnostics };
 }
 
