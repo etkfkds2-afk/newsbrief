@@ -13,6 +13,7 @@ test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 �
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ title: '한중 청소년 바둑 스포츠교류 개최' }), false);
   assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), false);
+  assert.equal(isStandaloneEventArticle({ title: '김동한 프로기사 근황', summary: '국제 바둑대회에 출전한 경력이 있다.' }), false);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
 });
 

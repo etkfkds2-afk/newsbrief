@@ -110,7 +110,7 @@ export function normalizeCachedIssues(items, cached) {
     if (group.key.endsWith('|ai:misc')) return true;
     if (group.url_keys.length >= 2) return true;
     const item = itemByKey.get(group.url_keys[0]);
-    if (item?.category === '바둑' && /대회/u.test(`${item.title || ''} ${item.summary || ''}`)) return true;
+    if (item?.category === '바둑' && /대회/u.test(String(item.title || ''))) return true;
     forcedMisc.push(...group.url_keys);
     return false;
   });
@@ -118,7 +118,7 @@ export function normalizeCachedIssues(items, cached) {
   const miscKeys = [...new Set([...(misc?.url_keys || []), ...forcedMisc])];
   const missedTournaments = miscKeys.filter(key => {
     const item = itemByKey.get(key);
-    return item?.category === '바둑' && /대회/u.test(`${item.title || ''} ${item.summary || ''}`);
+    return item?.category === '바둑' && /대회/u.test(String(item.title || ''));
   });
   const missedSet = new Set(missedTournaments);
   for (const key of missedTournaments) {
