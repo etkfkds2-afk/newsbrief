@@ -450,6 +450,33 @@ test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', as
   assert.match(html, /setSubview\('home'\);state\.category='';state\.q='';state\.issueKey=''/);
 });
 
+test('홈 유휴 시간에 주간·월간 데이터를 미리 받고 5분간 재사용한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /const VIEW_CACHE_TTL=300000/);
+  assert.match(html, /function prefetchPeriods\(section\)/);
+  assert.match(html, /for\(const sub of \['weekly','monthly'\]\)/);
+  assert.match(html, /connection\?\.saveData\|\|\/2g\//);
+  assert.match(html, /setTimeout\(resolve,250\)/);
+  assert.match(html, /if\(viewRequests\.has\(url\)\)return viewRequests\.get\(url\)/);
+  assert.match(html, /prefetchPeriods\(state\.section\)/);
+  assert.match(html, /await fetchViewJson\(`\/api\/news\/articles\?\$\{p\}`/);
+  assert.match(html, /viewCache\.clear\(\);viewRequests\.clear\(\)/);
+  assert.match(html, /viewCacheGeneration\+=1/);
+  assert.match(html, /content-visibility:auto/);
+});
+
+test('핵심 뉴스는 원문 대신 아래에 선택한 요약 카드 한 장만 표시한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /href="#article-\$\{esc\(x\.url_key\)\}" data-jump-key/);
+  assert.match(html, /closest\('\[data-jump-key\]'\)/);
+  assert.match(html, /state\.focusKey\?state\.items\.filter\(item=>item\.url_key===state\.focusKey\):state\.items/);
+  assert.match(html, /state\.focusKey=jump\.dataset\.jumpKey;render\(\)/);
+  assert.match(html, /state\.focusKey='';/);
+  assert.match(html, /scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
+  assert.match(html, /card\.classList\.add\('issue-focus'\)/);
+  assert.doesNotMatch(html, /class="hotchip" href="\$\{esc\(x\.url\)\}"/);
+});
+
 test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
