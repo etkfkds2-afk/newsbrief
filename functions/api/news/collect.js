@@ -502,35 +502,37 @@ async function collect(env, {
   };
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.
-  const maintenanceCursor = await env.DB.prepare("SELECT value FROM news_state WHERE key='maintenance_cursor'").first();
-  const maintenanceAfter = Number(maintenanceCursor?.value || 0);
-  let stored = await env.DB.prepare(`SELECT id,title,summary,body_text,category,url,source,press FROM news_articles
-    WHERE id>? ORDER BY id LIMIT ?`).bind(maintenanceAfter, MAINTENANCE_BATCH_SIZE).all();
-  if (!(stored.results || []).length && maintenanceAfter > 0) {
-    stored = await env.DB.prepare(`SELECT id,title,summary,body_text,category,url,source,press FROM news_articles
-      ORDER BY id LIMIT ?`).bind(MAINTENANCE_BATCH_SIZE).all();
-  }
-  for (const row of stored.results || []) {
-    const fixedCategory = classify(row.category, row.title, row.body_text);
-    if (fixedCategory !== row.category) await env.DB.prepare('UPDATE news_articles SET category=? WHERE id=?').bind(fixedCategory, row.id).run();
-    if (['NAVER', 'KAKAO', 'GOOGLE'].includes(row.source)) {
-      const fixedSource = articleSource(row.url, row.source, row.press);
-      if (fixedSource !== row.source) await env.DB.prepare('UPDATE news_articles SET source=? WHERE id=?').bind(fixedSource, row.id).run();
+  if (!popularityCandidates.length) {
+    const maintenanceCursor = await env.DB.prepare("SELECT value FROM news_state WHERE key='maintenance_cursor'").first();
+    const maintenanceAfter = Number(maintenanceCursor?.value || 0);
+    let stored = await env.DB.prepare(`SELECT id,title,summary,body_text,category,url,source,press FROM news_articles
+      WHERE id>? ORDER BY id LIMIT ?`).bind(maintenanceAfter, MAINTENANCE_BATCH_SIZE).all();
+    if (!(stored.results || []).length && maintenanceAfter > 0) {
+      stored = await env.DB.prepare(`SELECT id,title,summary,body_text,category,url,source,press FROM news_articles
+        ORDER BY id LIMIT ?`).bind(MAINTENANCE_BATCH_SIZE).all();
     }
-    if (fixedCategory !== '바둑' && row.summary) {
-      const reordered = reorderGeneralSummary(row.summary, row.title);
-      if (!validateGeneralEditorialSummary(reordered, row.title)) {
-        await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
-        diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
-      } else if (reordered !== row.summary) {
-        await env.DB.prepare('UPDATE news_articles SET summary=? WHERE id=?').bind(reordered, row.id).run();
-        diagnostics.general_summaries_reordered = Number(diagnostics.general_summaries_reordered || 0) + 1;
+    for (const row of stored.results || []) {
+      const fixedCategory = classify(row.category, row.title, row.body_text);
+      if (fixedCategory !== row.category) await env.DB.prepare('UPDATE news_articles SET category=? WHERE id=?').bind(fixedCategory, row.id).run();
+      if (['NAVER', 'KAKAO', 'GOOGLE'].includes(row.source)) {
+        const fixedSource = articleSource(row.url, row.source, row.press);
+        if (fixedSource !== row.source) await env.DB.prepare('UPDATE news_articles SET source=? WHERE id=?').bind(fixedSource, row.id).run();
+      }
+      if (fixedCategory !== '바둑' && row.summary) {
+        const reordered = reorderGeneralSummary(row.summary, row.title);
+        if (!validateGeneralEditorialSummary(reordered, row.title)) {
+          await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
+          diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
+        } else if (reordered !== row.summary) {
+          await env.DB.prepare('UPDATE news_articles SET summary=? WHERE id=?').bind(reordered, row.id).run();
+          diagnostics.general_summaries_reordered = Number(diagnostics.general_summaries_reordered || 0) + 1;
+        }
       }
     }
+    const lastMaintainedId = (stored.results || []).at(-1)?.id || 0;
+    await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('maintenance_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(lastMaintainedId).run();
   }
-  const lastMaintainedId = (stored.results || []).at(-1)?.id || 0;
-  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('maintenance_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-    .bind(lastMaintainedId).run();
   // Only summaries that fail the narrow general-news editorial checks above
   // are quarantined. Other published summaries are never demoted routinely.
   if (repair) {
