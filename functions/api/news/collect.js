@@ -306,26 +306,20 @@ async function reserveAiCall(env, diagnostics) {
   return true;
 }
 
-async function reserveAnthropicCall(env, diagnostics, forceRetry = false, category = '') {
+async function reserveAnthropicCall(env, diagnostics, forceRetry = false) {
   const day = new Date().toISOString().slice(0, 10);
   const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_budget_day'").first();
   if (String(dayRow?.value || '') !== day) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_general_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
     ]);
   }
-  const [dailyRow, generalRow] = await Promise.all([
-    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first(),
-    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_general_calls_today'").first()
-  ]);
+  const dailyRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first();
   const daily = Number(dailyRow?.value || 0);
-  const general = Number(generalRow?.value || 0);
   const dailyLimit = forceRetry ? BACKFILL_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT;
   const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
-  const isGeneral = category !== '바둑';
-  if (daily >= dailyLimit || (isGeneral && general >= 2) || !budget.allowed) {
+  if (daily >= dailyLimit || !budget.allowed) {
     diagnostics.anthropic_budget_exhausted = true;
     diagnostics.anthropic_calls_today = daily;
     diagnostics.anthropic_daily_limit = dailyLimit;
@@ -333,9 +327,7 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false, catego
     return false;
   }
   await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
-  if (isGeneral) await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_general_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
   diagnostics.anthropic_calls_today = daily + 1;
-  diagnostics.anthropic_general_calls_today = general + (isGeneral ? 1 : 0);
   diagnostics.anthropic_daily_limit = dailyLimit;
   return true;
 }
@@ -389,7 +381,7 @@ async function collect(env, { backfill = false, repair = false, forceRetry = fal
       await blockAiForToday(env, diagnostics);
     }
 
-    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, payload.category)) {
+    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry)) {
       const anthropicTrace = {};
       const anthropicSummary = await makeBestSummary({
         ...env,

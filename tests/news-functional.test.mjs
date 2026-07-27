@@ -55,8 +55,8 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   assert.match(collector, /NEWSBRIEF_USE_ANTHROPIC: '1'/);
   assert.match(ai, /NEWSBRIEF_USE_ANTHROPIC === '1'/);
   assert.match(ai, /claude-haiku-4-5-20251001/);
-  assert.match(collector, /anthropic_general_calls_today/);
-  assert.match(collector, /general >= 2/);
+  assert.doesNotMatch(collector, /anthropic_general_calls_today/);
+  assert.doesNotMatch(collector, /general >= 2/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {
@@ -166,11 +166,11 @@ test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이
   assert.match(articles, /group\.key !== '일반\|ai:misc'/);
 });
 
-test('Claude 월간 비용은 1.70달러 목표와 1.90달러 절대 한도를 사용한다', async () => {
+test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 1_700_000/);
-  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 1_900_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 2_500_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000/);
   assert.match(budget, /claude_budget_month/);
   assert.match(classifier, /MAX_NEW_ARTICLES_PER_RUN = 40/);
   assert.match(classifier, /recordClaudeUsage/);
