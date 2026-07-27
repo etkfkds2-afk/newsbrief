@@ -118,15 +118,18 @@ async function load({silent=false}={}){
   try{
     if(sub==='home'&&!state.q&&!state.issueKey){
       const catBit=isBaduk?'category=%EB%B0%94%EB%91%91':'exclude_baduk=1';
-      const heroUrl=`/api/news/articles?view=latest&${catBit}&limit=6&hours=24`;
-      const cardsUrl=`/api/news/articles?view=latest&${catBit}&limit=30&hours=24`;
+      const view=isBaduk?'latest':'popular';
+      const homeHours=isBaduk?24:168;
+      const homeLimit=isBaduk?30:10;
+      const heroUrl=`/api/news/articles?view=${view}&${catBit}&limit=6&hours=${homeHours}`;
+      const cardsUrl=`/api/news/articles?view=${view}&${catBit}&limit=${homeLimit}&hours=${homeHours}`;
       const [home,popular]=await Promise.all([fetchJson(cardsUrl),fetchJson(heroUrl)]);
       if(requestId!==state.requestSeq)return;
       state.heroItems=popular.items||[];
       state.items=home.items||[];
       state.issueItems=[];
     }else{
-      const p=new URLSearchParams({limit:isBaduk?'200':'300',view:sub==='saved'?'saved':'latest'});
+      const p=new URLSearchParams({limit:isBaduk?'200':'300',view:sub==='saved'?'saved':(isBaduk?'latest':'popular')});
       if(isBaduk){
         p.set('category','바둑');
       }else{

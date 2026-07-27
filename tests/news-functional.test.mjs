@@ -197,6 +197,15 @@ test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이
   assert.match(collector, /MAX_SCHEDULED_CANDIDATES \+ 4/);
 });
 
+test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 보존한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /const view=isBaduk\?'latest':'popular'/);
+  assert.match(html, /sub==='saved'\?'saved':\(isBaduk\?'latest':'popular'\)/);
+  assert.match(html, /view=\$\{view\}/);
+  assert.match(html, /const homeHours=isBaduk\?24:168/);
+  assert.match(html, /const homeLimit=isBaduk\?30:10/);
+});
+
 test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
