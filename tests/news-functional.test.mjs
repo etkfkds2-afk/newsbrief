@@ -165,6 +165,16 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
   assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 
+test('날짜만 남은 일반기사는 원문 발행시각을 묶음 복구한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(collector, /repairGeneralArticleTimes/);
+  assert.match(collector, /published_at GLOB '....-..-..'/);
+  assert.match(collector, /general_time_repair_cursor/);
+  assert.match(collector, /hasDateOnly/);
+  assert.match(workflow, /repair_times=1/);
+});
+
 test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하되 중복 제목 목록을 만들지 않는다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /issuesPanel/);
@@ -269,7 +279,7 @@ test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시�
 test('이미 정상 요약인 기사는 이미지가 없어도 AI 요약을 다시 호출하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
-  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime\)/);
+  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly\)/);
   assert.match(source, /return 0;\s*}\s*if \(!hasPublicationCapacity/);
 });
 

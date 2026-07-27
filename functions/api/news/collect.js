@@ -188,6 +188,35 @@ async function fetchArticleText(url) {
   }
 }
 
+async function repairGeneralArticleTimes(env, limit = 10) {
+  const cursorKey = 'general_time_repair_cursor';
+  const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
+  const cursor = Number(cursorRow?.value || 0);
+  const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
+    WHERE id>? AND category<>'바둑' AND summary_quality='full'
+      AND published_at GLOB '????-??-??'
+      AND datetime(published_at)>=datetime('now','-30 days')
+    ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+  const candidates = rows.results || [];
+  if (!candidates.length) {
+    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
+      ON CONFLICT(key) DO UPDATE SET value=0`).bind(cursorKey).run();
+    return { attempted: 0, repaired: 0, done: true };
+  }
+  let repaired = 0;
+  for (const row of candidates) {
+    const article = await fetchArticleText(row.url);
+    if (!article.publishedAt || /^\d{4}-\d{2}-\d{2}$/.test(article.publishedAt)) continue;
+    await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?')
+      .bind(article.publishedAt, row.id).run();
+    repaired += 1;
+  }
+  const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
+  await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
+  return { attempted: candidates.length, repaired, done: candidates.length < 10 };
+}
+
 async function naverSearch(env, query, start = 1, display = 5) {
   if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) {
     throw new Error('NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET이 없습니다.');
@@ -743,7 +772,8 @@ async function collect(env, {
     if (exists) {
       if (exists.summary_quality === 'full') {
         const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
-        if (!exists.image_url || hasSyntheticTime) {
+        const hasDateOnly = isPopular && /^\d{4}-\d{2}-\d{2}$/.test(String(exists.published_at || ''));
+        if (!exists.image_url || hasSyntheticTime || hasDateOnly) {
           const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
@@ -870,7 +900,14 @@ export async function onRequestPost({ request, env }) {
     const repair = requestUrl.searchParams.get('repair') === '1';
     const forceRetry = requestUrl.searchParams.get('force_retry') === '1';
     const generalBoost = requestUrl.searchParams.get('general_boost') === '1';
+    const repairTimes = requestUrl.searchParams.get('repair_times') === '1';
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
+    if (repairTimes) {
+      const timeRepair = await repairGeneralArticleTimes(env);
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
+        .bind(new Date().toISOString(), JSON.stringify({ time_repair: timeRepair }), runId).run();
+      return json({ ok: true, time_repair: timeRepair });
+    }
     if (popularityDate) {
       const popularity = await backfillPopularityDate(env, popularityDate);
       const parsedPopularityDate = Date.parse(`${popularityDate.slice(0, 4)}-${popularityDate.slice(4, 6)}-${popularityDate.slice(6, 8)}T00:00:00Z`);

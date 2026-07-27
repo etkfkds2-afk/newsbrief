@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      repair_times:
+        description: '날짜만 남은 일반기사 원문 발행시각 복구'
+        required: false
+        default: false
+        type: boolean
   schedule:
     # GitHub may delay scheduled jobs during busy periods. Running every 15
     # Collect and refresh all news views every three hours. URL keys in D1 make
@@ -121,7 +126,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Discover Google News and trigger collection
-        if: github.event_name != 'workflow_dispatch' || !inputs.repair_popularity
+        if: github.event_name != 'workflow_dispatch' || (!inputs.repair_popularity && !inputs.repair_times)
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           NEWSBRIEF_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && '1' || '0' }}
@@ -160,6 +165,14 @@ jobs:
                 -X POST \
                 -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
                 "https://newsbrief-etkfkds2.pages.dev/api/news/collect?popularity_date=${ymd}"
+            done
+          fi
+          if [ "${{ inputs.repair_times }}" = "true" ]; then
+            for i in $(seq 1 8); do
+              curl --fail-with-body --retry 3 --max-time 120 \
+                -X POST \
+                -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+                "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_times=1"
             done
           fi
 
