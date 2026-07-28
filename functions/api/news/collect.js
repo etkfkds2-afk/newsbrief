@@ -33,6 +33,7 @@ const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const SCHEDULED_CANDIDATES_PER_CATEGORY = 6;
+const SCHEDULED_GOOGLE_DISCOVERIES = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
 
@@ -745,7 +746,11 @@ async function collect(env, {
   // Google News is discovery-only: resolve each headline through the licensed
   // Naver API, then fetch and validate the real article like every other item.
   // Never expose a Google wrapper or its short RSS description as a summary.
-  for (const discovery of googleDiscoveries.slice(0, backfill ? 20 : 2)) {
+  // Discovery is intentionally broader than the processing batch. Some Google
+  // headlines resolve to duplicates, blocked destinations, or pages whose body
+  // cannot be extracted. Resolve enough headlines to still fill the six-item
+  // scheduled baduk batch after those expected losses.
+  for (const discovery of googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
     const discoveredTitle = cleanTitle(discovery?.title || '');
     if (!discoveredTitle || isRejectedTitle(discoveredTitle)) continue;
     try {

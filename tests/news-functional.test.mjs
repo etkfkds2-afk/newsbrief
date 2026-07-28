@@ -199,6 +199,14 @@ test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 �
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /!backfill && !googleDiscoveries\.length/);
   assert.match(collector, /google_fallback_skipped = true/);
+  assert.match(collector, /SCHEDULED_GOOGLE_DISCOVERIES = 10/);
+  assert.match(collector, /backfill \? 20 : SCHEDULED_GOOGLE_DISCOVERIES/);
+});
+
+test('Google 바둑 발견은 한 검색어가 전체 후보를 독점하지 않는다', async () => {
+  const discovery = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
+  assert.match(discovery, /let addedForQuery = 0/);
+  assert.match(discovery, /addedForQuery >= \(full \? 10 : 5\)/);
 });
 
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {

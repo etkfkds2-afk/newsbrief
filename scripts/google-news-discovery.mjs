@@ -49,12 +49,18 @@ for (const query of selected) {
   const response = await fetchWithRetry(endpoint, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief personal feed reader' } });
   if (!response.ok) continue;
   const xml = await response.text();
+  let addedForQuery = 0;
   for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
     const raw = text(match[1], 'title');
     const parts = raw.split(/\s+-\s+/); const press = parts.length > 1 ? parts.pop() : '';
     const title = parts.join(' - ') || raw;
-    if (title.length >= 8 && !found.has(title)) found.set(title, { title, press, pubDate: text(match[1], 'pubDate') });
-    if (found.size >= (full ? 100 : 40)) break;
+    if (title.length >= 8 && !found.has(title)) {
+      found.set(title, { title, press, pubDate: text(match[1], 'pubDate') });
+      addedForQuery += 1;
+    }
+    // Sample every rotated query instead of letting one broad query fill the
+    // entire payload with near-duplicate or repeatedly unresolvable headlines.
+    if (addedForQuery >= (full ? 10 : 5) || found.size >= (full ? 100 : 40)) break;
   }
   if (found.size >= (full ? 100 : 40)) break;
 }
