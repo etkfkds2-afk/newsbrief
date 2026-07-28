@@ -39,7 +39,7 @@ export async function onRequest({ request, env, next }) {
     const response = await next(new Request(request, { headers }));
     // Active browsers remain signed in: renew only during the final week to
     // avoid sending Set-Cookie on every image/API request.
-    if (await sessionNeedsRefresh(cookieHeader, sessionSecret)) {
+    if (await sessionNeedsRefresh(cookieHeader, sessionSecret, session)) {
       const renewed = new Response(response.body, response);
       renewed.headers.append('set-cookie', await createSessionCookie(sessionSecret, session.userId));
       return renewed;

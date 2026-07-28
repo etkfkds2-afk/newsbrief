@@ -759,6 +759,11 @@ test('미들웨어는 브라우저의 위조 사용자 ID를 로그인 계정 ID
   assert.equal(forwardedUser, 'account:member_a');
 });
 
+test('미들웨어는 검증한 세션을 갱신 판단에 재사용한다', async () => {
+  const middleware = await readFile(new URL('../functions/_middleware.js', import.meta.url), 'utf8');
+  assert.match(middleware, /sessionNeedsRefresh\(cookieHeader, sessionSecret, session\)/);
+});
+
 test('삭제 API는 대표 기사와 관련 기사 키를 한 배치로 숨긴다', async () => {
   const bound = [];
   const env = { DB: {

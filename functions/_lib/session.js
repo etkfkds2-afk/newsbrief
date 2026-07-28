@@ -56,9 +56,9 @@ export async function hasValidSession(cookieHeader, secret) {
   return Boolean(await readSession(cookieHeader, secret));
 }
 
-export async function sessionNeedsRefresh(cookieHeader, secret) {
+export async function sessionNeedsRefresh(cookieHeader, secret, verifiedSession = null) {
   const match = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookieHeader || '');
   if (!match) return false;
-  const session = await readSession(cookieHeader, secret);
+  const session = verifiedSession || await readSession(cookieHeader, secret);
   return Boolean(session) && session.expiry - Date.now() <= SESSION_REFRESH_DAYS * 86400000;
 }
