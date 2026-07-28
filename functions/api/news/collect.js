@@ -356,9 +356,12 @@ async function koreanBadukLatest() {
       const title = cleanTitle(block.match(/<dt[^>]*>([\s\S]*?)<\/dt>/i)?.[1] || '');
       if (title.length < 8 || seen.has(url) || isRejectedTitle(title)) continue;
       seen.add(url);
-      const dateText = normalizeText(block.match(/<span[^>]+class=["']date["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || '');
-      const pubDate = /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : '';
-      items.push({ title, link: url, originallink: url, description: '', pubDate, press: '한국기원' });
+      // The listing only gives a date, never a time of day, and the article
+      // page has no timestamp meta either. A date-only value gets parsed as
+      // midnight, which can make a same-day article look >24h old for most of
+      // the day. Leave pubDate empty so published_at falls back to fetched_at
+      // (the actual collection time) instead of a misleading midnight stamp.
+      items.push({ title, link: url, originallink: url, description: '', pubDate: '', press: '한국기원' });
       if (items.length >= 12) break;
     }
     return items;
@@ -872,9 +875,16 @@ async function collect(env, {
     const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (exists.summary_quality === 'full') {
+        const existingDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(exists.published_at || ''));
         const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
-        const hasDateOnly = isPopular && /^\d{4}-\d{2}-\d{2}$/.test(String(exists.published_at || ''));
+        const hasDateOnly = isPopular && existingDateOnly;
         const hasMissingTime = !String(exists.published_at || '').trim();
+        // TRUSTED_BADUK (baduk.or.kr) never has a real timestamp available, so
+        // a date-only value here would otherwise never get repaired by the
+        // generic path below, which refuses to overwrite a value with ''.
+        if (source === 'TRUSTED_BADUK' && existingDateOnly) {
+          await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?').bind('', exists.id).run();
+        }
         if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime) {
           const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
           let article = await fetchArticleText(fetchUrl);

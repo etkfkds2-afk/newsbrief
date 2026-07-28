@@ -238,7 +238,7 @@ test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async
 test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
-  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 12/);
+  assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 60/);
   assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
