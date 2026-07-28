@@ -39,6 +39,10 @@ test('제목의 선수권과 요약 첫 문장의 정식 바둑대회명도 한 
   assert.equal(standaloneEventTitle(sportsCouncil), '대한체육회장배 전국바둑선수권대회');
   assert.equal(isStandaloneEventArticle(gwangju), true);
   assert.equal(standaloneEventTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
+  assert.equal(standaloneEventTitle({
+    title: '영종국제도시배 바둑대회 성료',
+    summary: '1) 인천서해구바둑협회가 지난 18일 수련관에서 열린 영종바둑대회가 성료됐다.'
+  }), '영종국제도시배 바둑대회');
 });
 
 test('반복 등장하는 인물명을 표시해 장윤기 같은 동일 사건을 놓치지 않게 한다', () => {

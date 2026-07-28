@@ -35,11 +35,16 @@ export function standaloneEventTitle(article) {
   const title = String(article?.title || '').replace(/[“”‘’"']/g, '').trim();
   const firstSummary = String(article?.summary || '').split('\n')[0].replace(/^\s*\d+\)\s*/u, '').trim();
   const historicalMention = /(?:과거|경력|출전한 적|참가한 적|우승한 적)/u.test(firstSummary);
+  if (/대회/u.test(title)) {
+    return cleanEventTitle(title
+      .replace(/[,·…].*$/u, '')
+      .replace(/\s+(?:개최|성료|열려|우승|돌입).*$/u, ''));
+  }
   const numberedEvent = firstSummary.match(/제\s*\d+\s*회\s*([가-힣A-Za-z0-9· ]{2,36}?(?:바둑선수권대회|바둑대회|선수권대회))/u);
   if (!historicalMention && numberedEvent?.[1]) return cleanEventTitle(numberedEvent[1]);
   const namedEvent = firstSummary.match(/([가-힣A-Za-z0-9· ]{2,36}?(?:바둑선수권대회|바둑대회|선수권대회))/u);
   if (!historicalMention && namedEvent?.[1]) return cleanEventTitle(namedEvent[1]);
-  if (/(?:대회|선수권)/u.test(title)) {
+  if (/선수권/u.test(title)) {
     return cleanEventTitle(title
       .replace(/[,·…].*$/u, '')
       .replace(/\s+(?:개최|성료|열려|우승|돌입).*$/u, ''));
