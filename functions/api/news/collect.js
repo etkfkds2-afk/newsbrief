@@ -172,7 +172,16 @@ async function fetchArticleText(url) {
     if (!response.ok) return { body: '', image: '', press: '', publishedAt: '' };
     const type = response.headers.get('content-type') || '';
     if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
-    const html = (await response.text()).slice(0, 800000);
+    // Some (mostly smaller/regional) Korean outlets serve EUC-KR bytes but
+    // send a wrong or missing charset in the HTTP header, which made every
+    // regex extraction below silently fail on mojibake. Same detection
+    // heuristic already used in popularPage().
+    const bytes = await response.arrayBuffer();
+    let html = new TextDecoder('utf-8').decode(bytes);
+    if (/euc-?kr|ks_c_5601|cp949/i.test(type) || (html.match(/�/g) || []).length >= 3) {
+      html = new TextDecoder('euc-kr').decode(bytes);
+    }
+    html = html.slice(0, 800000);
     if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
     let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
@@ -197,7 +206,9 @@ async function fetchArticleText(url) {
         for (const found of findArticleBodies(data)) if (found.length > jsonBody.length) jsonBody = found;
       } catch {}
     }
-    const articleStart = html.search(/<(?:article|div)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody)[^"']*["'][^>]*>/i);
+    // Older table-layout sites (common among small/regional outlets) put the
+    // body in a <td>, not an <article>/<div>.
+    const articleStart = html.search(/<(?:article|div|td)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody)[^"']*["'][^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
     if (!image) {
       const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
