@@ -1,5 +1,6 @@
 export const SESSION_COOKIE = 'nb_session';
 const SESSION_DAYS = 30;
+const SESSION_REFRESH_DAYS = 7;
 
 function base64UrlEncode(bytes) {
   let binary = '';
@@ -34,4 +35,12 @@ export async function hasValidSession(cookieHeader, secret) {
   if (Date.now() > Number(expiry)) return false;
   const expected = await hmac(secret, expiry);
   return expected === signature;
+}
+
+export async function sessionNeedsRefresh(cookieHeader, secret) {
+  const match = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookieHeader || '');
+  if (!match) return false;
+  const [expiry] = decodeURIComponent(match[1]).split('.');
+  if (!await hasValidSession(cookieHeader, secret)) return false;
+  return Number(expiry) - Date.now() <= SESSION_REFRESH_DAYS * 86400000;
 }

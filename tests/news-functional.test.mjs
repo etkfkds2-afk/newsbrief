@@ -239,7 +239,7 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 60/);
-  assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24/);
+  assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT \+ 24/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
   assert.match(collector, /canUseClaude/);
@@ -563,6 +563,15 @@ test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', asy
   assert.match(workflow, /backfill=1&force_retry=1/);
   assert.match(workflow, /repair=1&force_retry=1/);
   assert.match(collector, /forceRetry \? 1 : 0/);
+  assert.match(collector, /retryAttemptLimit = forceRetry \? 25 : 24/);
+});
+
+test('만료 직전의 유효한 로그인 세션은 활동 시 갱신한다', async () => {
+  const middleware = await readFile(new URL('../functions/_middleware.js', import.meta.url), 'utf8');
+  const session = await readFile(new URL('../functions/_lib/session.js', import.meta.url), 'utf8');
+  assert.match(middleware, /sessionNeedsRefresh/);
+  assert.match(middleware, /set-cookie/);
+  assert.match(session, /SESSION_REFRESH_DAYS = 7/);
 });
 
 test('바둑 이슈는 캐시가 있으면 정규식 대신 Claude 분류 결과를 사용한다', async () => {

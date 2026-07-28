@@ -29,7 +29,9 @@ const BADUK_SEARCHES = [
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
 const DAILY_ANTHROPIC_CALL_LIMIT = 60;
-const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24;
+// A boost adds 24 calls to the normal allowance. Keeping this below the
+// normal limit made the old "boost" disable Claude once 24 calls were used.
+const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT + 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const SCHEDULED_GENERAL_CANDIDATES = 6;
@@ -724,6 +726,9 @@ async function collect(env, {
     diagnostics.body_recrawl_recovered = recovered.reduce((sum, value) => sum + value, 0);
   }
   const retryRowLimit = popularityCandidates.length ? 0 : (repair ? 4 : (backfill ? 4 : 3));
+  // force_retry gives exhausted rows exactly one additional attempt instead
+  // of excluding attempts=24 forever or reopening them without a ceiling.
+  const retryAttemptLimit = forceRetry ? 25 : 24;
   const retryRows = await env.DB.prepare(`SELECT a.id,a.url_key,a.title,a.raw_summary,a.body_text,a.category FROM news_articles a
     LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
     WHERE a.summary_quality='none' AND length(a.body_text)>=300 AND COALESCE(f.attempts,0)<?
@@ -732,7 +737,7 @@ async function collect(env, {
       AND (? OR f.last_attempt IS NULL OR f.last_attempt < datetime('now','-20 hours'))
     ORDER BY CASE WHEN a.category='바둑' THEN 0 ELSE 1 END,
       COALESCE(f.attempts,0), COALESCE(f.last_attempt,'1970-01-01'), length(a.body_text) DESC LIMIT ?`)
-    .bind(24, generalOnly ? 1 : 0, qualityRepairIds.length ? 1 : 0,
+    .bind(retryAttemptLimit, generalOnly ? 1 : 0, qualityRepairIds.length ? 1 : 0,
       qualityRepairIds.join(','), forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
@@ -965,7 +970,8 @@ async function collect(env, {
       const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
       let article = await fetchArticleText(fetchUrl);
       if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
-        const repaired = await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, null, 'retry');
+        const retryDetail = {};
+        const repaired = await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry');
         const valid = validPublishedSummary(repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
@@ -982,7 +988,13 @@ async function collect(env, {
             article.press, article.press, article.image, article.image, article.body, article.body,
             article.publishedAt || publishedAt, article.publishedAt || publishedAt,
             valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
-        if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
+        if (valid && exists.summary_quality !== 'full') {
+          await env.DB.prepare('DELETE FROM news_summary_attempts WHERE url_key=?').bind(urlKey).run();
+          consumePublicationCapacity(exists.category || category);
+        } else if (retryDetail.ai_attempted && !retryDetail.ai_error) {
+          await env.DB.prepare(`INSERT INTO news_summary_attempts(url_key,attempts,last_attempt) VALUES(?,1,CURRENT_TIMESTAMP)
+            ON CONFLICT(url_key) DO UPDATE SET attempts=attempts+1,last_attempt=CURRENT_TIMESTAMP`).bind(urlKey).run();
+        }
       return outcome(valid ? 'existing_repaired' : 'existing_repair_failed');
     }
 

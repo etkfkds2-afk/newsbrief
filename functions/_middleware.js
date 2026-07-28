@@ -1,4 +1,4 @@
-import { hasValidSession } from './_lib/session.js';
+import { createSessionCookie, hasValidSession, sessionNeedsRefresh } from './_lib/session.js';
 
 // Paths reachable with no session: the login page/API itself, and the two
 // endpoints GitHub Actions calls server-to-server. Those already authorize
@@ -21,7 +21,18 @@ export async function onRequest({ request, env, next }) {
   // rather than lock everyone out of a site with no way to log in.
   if (!env.NEWSBRIEF_SITE_PASSWORD) return next();
 
-  if (await hasValidSession(request.headers.get('cookie'), env.NEWSBRIEF_SITE_PASSWORD)) return next();
+  const cookieHeader = request.headers.get('cookie');
+  if (await hasValidSession(cookieHeader, env.NEWSBRIEF_SITE_PASSWORD)) {
+    const response = await next();
+    // Active browsers remain signed in: renew only during the final week to
+    // avoid sending Set-Cookie on every image/API request.
+    if (await sessionNeedsRefresh(cookieHeader, env.NEWSBRIEF_SITE_PASSWORD)) {
+      const renewed = new Response(response.body, response);
+      renewed.headers.append('set-cookie', await createSessionCookie(env.NEWSBRIEF_SITE_PASSWORD));
+      return renewed;
+    }
+    return response;
+  }
 
   if (url.pathname.startsWith('/api/')) {
     return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {

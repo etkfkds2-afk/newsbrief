@@ -58,6 +58,11 @@ async function fetchJson(url,options){
   for(let attempt=0;attempt<attempts;attempt+=1){
     try{
       const response=await fetchTimed(url,config,15000);
+      if(response.status===401){
+        const next=encodeURIComponent(location.pathname+location.search);
+        location.replace(`/login?next=${next}`);
+        const authError=Error('로그인이 만료되었습니다.');authError.authExpired=true;throw authError;
+      }
       const type=(response.headers.get('content-type')||'').toLowerCase();
       const isJson=type.includes('application/json');
       let data=null;
@@ -67,7 +72,7 @@ async function fetchJson(url,options){
       const retryable=isGet&&(!isJson||response.status===408||response.status===425||response.status===429||response.status>=500);
       if(!retryable)throw Error(message);
       lastError=Error(message);
-    }catch(error){if(error?.name==='AbortError'&&config.signal?.aborted)throw error;lastError=error}
+    }catch(error){if(error?.authExpired)throw error;if(error?.name==='AbortError'&&config.signal?.aborted)throw error;lastError=error}
     if(attempt<attempts-1)await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
   }
   if(isGet){try{const cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(cached){console.warn('NewsBrief API fallback',url);return cached}}catch{}}
