@@ -529,7 +529,9 @@ test('이슈 상세는 직관적인 뒤로가기와 브라우저 앞뒤 탐색 �
   assert.match(html, /history\.replaceState\(\{newsbriefSource:true/);
   assert.match(html, /history\.pushState\(\{newsbriefIssue:true/);
   assert.match(html, /addEventListener\('popstate',e=>restoreLocation\(e\.state\)\)/);
-  assert.match(html, /state\.issueKey=issue;\$\('query'\)\.value='';\s*if\(!issue\)render\(\);\s*return load\(\)/);
+  assert.match(html, /function resetIssueSelectionUi\(\)\{\s*state\.issueKey='';\s*if\(document\.activeElement instanceof HTMLElement\)document\.activeElement\.blur\(\);\s*render\(\);/);
+  assert.match(html, /state\.issueKey=issue;\$\('query'\)\.value='';\s*if\(!issue\)resetIssueSelectionUi\(\);\s*return load\(\)/);
+  assert.match(html, /if\(history\.state\?\.newsbriefIssue\)\{resetIssueSelectionUi\(\);history\.back\(\);return\}/);
   assert.match(html, /url\.searchParams\.set\('issue',issueKey\)/);
   assert.match(html, /initialParams\.get\('issue'\)/);
   assert.doesNotMatch(html, /이슈 목록으로/);
@@ -551,10 +553,10 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
   assert.match(html, /@media\(max-width:680px\)\{\.issueGrid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\);gap:8px\}/);
   assert.doesNotMatch(html, /@media\(max-width:420px\)\{\.issueGrid\{grid-template-columns:1fr\}\}/);
   assert.match(html, /\.issueName\{[^}]*word-break:keep-all;overflow-wrap:anywhere/);
-  assert.match(html, /\.issueCard\{padding:9px;text-align:center\}/);
   assert.doesNotMatch(html, /\.issueCard\{[^}]*min-height:/);
-  assert.doesNotMatch(html, /\.issueCard\{[^}]*justify-content:center/);
-  assert.match(html, /\.issueName\{display:flex;min-height:34\.5px;align-items:center;justify-content:center/);
+  assert.match(html, /\.issueCard\{justify-content:center;padding:9px;text-align:center\}/);
+  assert.match(html, /\.issueName\{display:flex;align-items:center;justify-content:center/);
+  assert.doesNotMatch(html, /\.issueName\{[^}]*min-height:/);
   assert.match(html, /\.issueName>span\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
   assert.match(html, /\.issuePanel\{padding:10px 14px 14px\}/);
   assert.match(html, /\.issueMeta\{flex-direction:column;align-items:center;gap:1px;margin-top:5px;padding-top:0/);
