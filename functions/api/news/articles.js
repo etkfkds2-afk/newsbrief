@@ -283,7 +283,14 @@ export async function onRequestGet({ request, env }) {
         selected = accepted.filter(item => issueKey(item.title, item.category || category, item.summary) === issueKeyFilter);
       }
     }
-    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, ...item }) => item);
+    // A source that only gives a date (no time of day) is stored anchored to
+    // noon Korea time so it still sorts/filters sanely, but showing that
+    // fabricated "12:00" to users reads as a bug. Display just the date, the
+    // same as any other date-only published_at.
+    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, ...item }) => {
+      if (/T03:00:00\.000Z$/.test(String(item.published_at || ''))) item.published_at = String(item.published_at).slice(0, 10);
+      return item;
+    });
     return json({ ok: true, items, issues: issues ? issueList : [] });
   } catch (error) {
     return json({ ok: false, error: error.message }, 500);
