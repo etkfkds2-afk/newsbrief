@@ -982,6 +982,12 @@ async function collect(env, {
     for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
   }
   uniqueCandidates.sort((a, b) => {
+    // Official baduk.or.kr candidates are few (<=12) and high-trust; without
+    // this they get crowded out of the fixed-size baduk batch by noisy
+    // generic-search "new" candidates that mostly fail allowedCandidate(),
+    // so genuinely new or repair-needing official items never get processed.
+    const trustedOrder = Number(b.source === 'TRUSTED_BADUK') - Number(a.source === 'TRUSTED_BADUK');
+    if (trustedOrder) return trustedOrder;
     const newOrder = Number(knownCandidateKeys.has(a.urlKey)) - Number(knownCandidateKeys.has(b.urlKey));
     if (newOrder) return newOrder;
     const badukOrder = Number(b.category === '바둑') - Number(a.category === '바둑');
