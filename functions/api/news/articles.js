@@ -220,7 +220,8 @@ export async function onRequestGet({ request, env }) {
     }
     // Similar stories are collapsed after the query. Read extra rows so that
     // deduplication does not make a requested 100/300 item page needlessly short.
-    const queryLimit = issueKeyFilter ? 300 : limit;
+    const queryLimit = limit;
+    const filterBindings = [...bindings];
     bindings.push(queryLimit);
 
     const order = view === 'popular'
@@ -231,7 +232,7 @@ export async function onRequestGet({ request, env }) {
         ? "CASE WHEN p.title IS NULL AND np.url_key IS NULL THEN 0 ELSE 1 END DESC, MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";
 
-    const result = await env.DB.prepare(`
+    const articleQuery = env.DB.prepare(`
       SELECT a.id, a.url, a.url_key, a.title, a.source, a.press, a.category,
              a.published_at, a.fetched_at, a.summary, a.summary_quality, a.image_url,
              CASE WHEN s.url_key IS NULL THEN 0 ELSE 1 END AS saved
@@ -244,6 +245,17 @@ export async function onRequestGet({ request, env }) {
       ORDER BY ${order}
       LIMIT ?
     `).bind(...bindings).all();
+    const issueScopeQuery = issues ? env.DB.prepare(`
+      SELECT a.url_key,a.title,a.category,a.summary
+      FROM news_articles a
+      LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
+      LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
+      LEFT JOIN news_popularity np ON np.url_key=a.url_key
+      LEFT JOIN news_popular_items p ON p.title=a.title
+      WHERE ${where.join(' AND ')}
+      LIMIT 500
+    `).bind(...filterBindings).all() : Promise.resolve(null);
+    const [result, issueScopeResult] = await Promise.all([articleQuery, issueScopeQuery]);
     const accepted = [];
     for (const item of result.results || []) {
       item.summary = normalizeText(String(item.summary || '').replace(/([1-3][.)])\s*&#10;/gi, '$1 '));
@@ -278,7 +290,9 @@ export async function onRequestGet({ request, env }) {
       ? await loadIssueCache(env, category)
       : (!category && excludeBaduk) ? await loadIssueCache(env, '일반') : null;
     const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;
-    const issueList = cachedIssues ? buildIssuesFromCache(accepted, cachedIssues) : buildIssues(accepted, category);
+    const issueScope = (issueScopeResult?.results || accepted).filter(item =>
+      item.category !== '바둑' || isBadukDisplayRelevant(item.title, item.summary));
+    const issueList = cachedIssues ? buildIssuesFromCache(issueScope, cachedIssues) : buildIssues(accepted, category);
     let selected = accepted;
     if (issueKeyFilter) {
       if (normalizedCachedIssues) {
