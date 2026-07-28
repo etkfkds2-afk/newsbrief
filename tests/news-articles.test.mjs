@@ -42,7 +42,7 @@ test('같은 사건은 대표 기사와 관련 보도로 묶고 실제 언론사
 test('바둑 숨김 설정은 API 조회 조건에도 적용한다', async () => {
   const env = mockEnv([]);
   await onRequestGet({ request: new Request('https://example.com/api/news/articles?exclude_baduk=1'), env });
-  assert.match(env.articleSql, /a\.category <> '바둑'/);
+  assert.match(env.articleSql, /a\.category NOT IN \('바둑','IT\/과학'\)/);
 });
 
 test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', async () => {

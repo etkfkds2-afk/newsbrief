@@ -18,7 +18,7 @@
 <div class="sectionTitle" id="sectionTitle">일간 뉴스 요약</div><main class="grid" id="cards"><div class="empty">뉴스를 불러오는 중입니다.</div></main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
-const cats=['정치','경제','사회','생활/문화','세계','IT/과학'];
+const cats=['정치','경제','사회','생활/문화','세계'];
 const state={section:'baduk',genView:'home',badukView:'home',category:'',q:'',issueKey:'',focusKey:'',items:[],heroItems:[],issueItems:[],requestSeq:0};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

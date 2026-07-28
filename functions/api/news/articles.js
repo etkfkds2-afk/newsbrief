@@ -3,7 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 
-const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', 'IT/과학', '바둑', '기타']);
+const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
   "a.summary_quality='full'", "TRIM(a.summary)<>''",
   "instr(a.title,'�')=0",
@@ -205,7 +205,7 @@ export async function onRequestGet({ request, env }) {
       where.push('a.category = ?');
       bindings.push(issueCategory);
     }
-    if (excludeBaduk && category !== '바둑') where.push("a.category <> '바둑'");
+    if (excludeBaduk && category !== '바둑') where.push("a.category NOT IN ('바둑','IT/과학')");
     if (query) {
       where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.press LIKE ?)');
       const term = `%${query.replace(/[\\%_]/g, '\\$&')}%`;

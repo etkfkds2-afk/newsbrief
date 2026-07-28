@@ -99,7 +99,7 @@ export async function onRequestPost({ request, env }) {
       where.push('a.category = ?');
       bindings.push(dbCategory);
     } else if (category === '일반') {
-      where.push("a.category <> '바둑'");
+      where.push("a.category NOT IN ('바둑','IT/과학')");
     }
     bindings.push(400);
 
