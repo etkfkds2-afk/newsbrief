@@ -419,9 +419,8 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = limit/);
-  assert.match(source, /SELECT a\.url_key,a\.title,a\.category,a\.summary/);
-  assert.match(source, /Promise\.all\(\[articleQuery, issueScopeQuery\]\)/);
+  assert.match(source, /const queryLimit = issues \? 500 : limit/);
+  assert.doesNotMatch(source, /const queryLimit = issueKeyFilter \?/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
 });
