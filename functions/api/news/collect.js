@@ -157,6 +157,10 @@ function articleSource(url, discovery = '', press = '') {
 function allowedCandidate(url, discovery) {
   try {
     const host = new URL(url).hostname.toLowerCase();
+    // Only the broad keyword-search KAKAO path is restricted to Daum's own
+    // news domains, since that query can return arbitrary web results.
+    // KAKAO_RESOLVED already matched a specific known headline by title, so
+    // it just needs the normal spam/UGC blocklist like every other source.
     if (discovery === 'KAKAO') return host === 'v.daum.net' || host.endsWith('.news.daum.net') || host === 'news.daum.net';
     return !/(?:dcinside\.com|tistory\.com|blog\.naver\.com|cafe\.naver\.com|fmkorea\.com|theqoo\.net|ruliweb\.com|clien\.net|ppomppu\.co\.kr|instiz\.net|youtube\.com|namu\.wiki)$/i.test(host);
   } catch { return false; }
@@ -842,7 +846,14 @@ async function collect(env, {
           const right = discoveredTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
           return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
         });
-        if (match) candidates.push({ category: '바둑', item: match, source: 'KAKAO' });
+        // This is resolving an already-known, specific headline (title
+        // matched, not a broad keyword search), so unlike the generic
+        // KAKAO search loop it doesn't need the daum.net-only allowlist -
+        // just the same spam/UGC blocklist every other source uses. That
+        // allowlist was the reason small/regional outlets (their own
+        // domains, not syndicated to Daum) never made it in even when
+        // Kakao's search found them.
+        if (match) candidates.push({ category: '바둑', item: match, source: 'KAKAO_RESOLVED' });
       } catch (error) {
         diagnostics.google_resolve_kakao_error = String(error?.message || error).slice(0, 120);
       }
