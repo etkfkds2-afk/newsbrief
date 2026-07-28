@@ -193,7 +193,7 @@ async function fetchArticleText(url) {
         for (const found of findArticleBodies(data)) if (found.length > jsonBody.length) jsonBody = found;
       } catch {}
     }
-    const articleStart = html.search(/<(?:article|div)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont)[^"']*["'][^>]*>/i);
+    const articleStart = html.search(/<(?:article|div)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody)[^"']*["'][^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
     const body = cleanBody(jsonBody || stripHtml(article
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
