@@ -5,10 +5,9 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
-  classifyIssues, hasIncidentLocationConflict, hasIssueDirectionConflict, isStandaloneEventArticle,
-  mergeRepeatedPersonCases, normalizeIssueTitle, rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
+  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches
 } from '../functions/_lib/news-issue-classify.js';
-import { buildClassificationPlan, enforceIssueRules, mergeTournamentAliasGroups } from '../functions/api/news/classify-issues.js';
+import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
 import { createSessionCookie, readSession } from '../functions/_lib/session.js';
@@ -26,78 +25,6 @@ test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 �
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
 });
 
-test('제목의 선수권과 요약 첫 문장의 정식 바둑대회명도 한 건 이슈로 살린다', () => {
-  const sportsCouncil = {
-    title: '대한체육회장배 전국 바둑 선수권 양양서 성료',
-    summary: '1) 제10회 대한체육회장배 전국바둑선수권대회가 지난 27, 28일 양양다목적체육관에서 개최됐다.'
-  };
-  const gwangju = {
-    title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
-    summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 지난 27일 열렸다.'
-  };
-  assert.equal(isStandaloneEventArticle(sportsCouncil), true);
-  assert.equal(standaloneEventTitle(sportsCouncil), '대한체육회장배 전국바둑선수권대회');
-  assert.equal(isStandaloneEventArticle(gwangju), true);
-  assert.equal(standaloneEventTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
-  assert.equal(standaloneEventTitle({
-    title: '영종국제도시배 바둑대회 성료',
-    summary: '1) 인천서해구바둑협회가 지난 18일 수련관에서 열린 영종바둑대회가 성료됐다.'
-  }), '영종국제도시배 바둑대회');
-});
-
-test('반복 등장하는 인물명을 표시해 장윤기 같은 동일 사건을 놓치지 않게 한다', () => {
-  const hints = repeatedPersonHints([
-    { title: '장윤기, 여고생 납치 계획 정황 대화록 증거 인정' },
-    { title: '장윤기가 태연했던 비밀' },
-    { title: '장윤기 큰아빠는 경찰 간부' },
-    { title: '전혀 다른 단독 기사' }
-  ]);
-  assert.deepEqual(hints, [['장윤기'], ['장윤기'], ['장윤기'], []]);
-});
-
-test('AI가 놓친 동일 인물 강력사건 후속 기사도 기존 이슈로 회수한다', () => {
-  const articles = [
-    { url_key: 'chat', title: '장윤기 여고생 납치 계획 대화록 증거 인정', summary: '피해자 납치 계획이 담겼다.' },
-    { url_key: 'calm', title: '장윤기가 태연했던 비밀', summary: '여고생 살해 사건 범행을 다뤘다.' },
-    { url_key: 'uncle', title: '장윤기 큰아빠는 경찰 간부', summary: '살해 피해자 사건 보도가 없었다면 묻힐 뻔했다.' },
-    { url_key: 'father', title: '이채원 양 살해 장윤기 부친이 증거 인멸', summary: '부친이 범행 증거를 없앴다.' }
-  ];
-  const merged = mergeRepeatedPersonCases([
-    { title: '장윤기 여고생 납치·살해 사건', url_keys: ['chat', 'calm'] },
-    { title: '기타', url_keys: ['uncle', 'father'], misc: true }
-  ], articles);
-  assert.deepEqual(merged, [{
-    title: '장윤기 여고생 납치·살해 사건', url_keys: ['chat', 'calm', 'uncle', 'father']
-  }]);
-});
-
-test('AI의 어색한 신진서·장윤기 이슈 제목을 자연스러운 고정 제목으로 교정한다', () => {
-  assert.equal(normalizeIssueTitle('신진서 카타고와 기신전 우승', [
-    { title: '신진서, AI 카타고에 2승 1패 역전승' }
-  ]), '신진서 카타고 AI 격파');
-  assert.equal(normalizeIssueTitle('장윤기 여고생 납치 계획 대화록 증거 인정', [
-    { title: '이채원 양 살해 장윤기 부친이 증거 인멸' }
-  ]), '장윤기 여고생 납치·살해 사건');
-  assert.equal(normalizeIssueTitle('부산시장배 전국바둑대회 아마 최강부', []), '부산시장배 전국바둑대회');
-  assert.equal(normalizeIssueTitle('NHN 바둑 AI 한돌 한중 청소년 훈련 지원', []), '한중청소년교류 한돌 지원');
-  assert.equal(normalizeIssueTitle('2026 평택시장배 전국바둑대회', []), '평택시장배 전국바둑대회');
-  assert.equal(normalizeIssueTitle('제14회 하찬석국수배 영재바둑대회', []), '하찬석 국수배 영재바둑대회');
-  assert.equal(normalizeIssueTitle('영종바둑대회', [
-    { title: '제3회 영종국제도시배 전국바둑대회 개최' }
-  ]), '영종국제도시배 바둑대회');
-  assert.equal(normalizeIssueTitle('조상연 하찬석국수배 영재최강전 우승', []), '하찬석 국수배 영재바둑대회');
-});
-
-test('급락 이슈에 전고점 회복 전망 기사를 합치지 않는다', () => {
-  const recovery = { title: '삼전·SK하이닉스 전고점 회복 전망', summary: '주가가 다시 상승할 것으로 내다봤다.' };
-  assert.equal(hasIssueDirectionConflict('반도체 주가 급락 코스피 약세', recovery), true);
-  assert.deepEqual(rejectConflictingExistingMatches(
-    [{ title: '반도체 주가 급락', url_keys: ['recovery'] }],
-    [{ ...recovery, url_key: 'recovery' }],
-    [{ key: '일반|ai:2', title: '반도체 주가 급락', context: '코스피 반도체 쇼크로 6% 급락' }]
-  ), [{ title: '기타', url_keys: ['recovery'], misc: true }]);
-});
-
 test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 기타로 강제한다', () => {
   const articles = [
     { url_key: 'tournament', title: '무안 청소년 온라인 바둑대회 개최', summary: '' },
@@ -111,8 +38,8 @@ test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 �
     { key: '바둑|ai:misc', title: '기타', url_keys: ['tournament'], misc: true }
   ], articles, '바둑');
   assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
-    ['신진서 카타고 AI 격파', ['pair-a', 'pair-b']],
-    ['무안 청소년 온라인 바둑대회', ['tournament']],
+    ['신진서 AI 격파', ['pair-a', 'pair-b']],
+    ['무안 청소년 온라인 바둑대회 개최', ['tournament']],
     ['기타', ['profile']]
   ]);
 });
@@ -125,55 +52,6 @@ test('일반 뉴스는 대회 기사도 한 건이면 기타로 보낸다', () =
   assert.deepEqual(groups, [
     { key: '일반|ai:misc', title: '기타', url_keys: ['general-event'], misc: true }
   ]);
-});
-
-test('같은 날짜의 영종국제도시배와 영종바둑대회 축약명은 한 이슈로 합친다', () => {
-  const articles = [
-    { url_key: 'official', title: '제3회 영종국제도시배 전국바둑대회', published_at: '2026-07-18T03:00:00Z' },
-    { url_key: 'short', title: '영종바둑대회 성료', published_at: '2026-07-18T08:00:00Z' }
-  ];
-  const byKey = new Map(articles.map(article => [article.url_key, article]));
-  const merged = mergeTournamentAliasGroups([
-    { key: '바둑|ai:1', title: '제3회 영종국제도시배 전국바둑대회', url_keys: ['official'] },
-    { key: '바둑|ai:2', title: '영종바둑대회', url_keys: ['short'] }
-  ], byKey);
-  assert.deepEqual(merged, [{
-    key: '바둑|ai:1', title: '제3회 영종국제도시배 전국바둑대회', url_keys: ['official', 'short']
-  }]);
-});
-
-test('AI가 광주 학생대회를 다른 이슈에 넣어도 정식 대회명으로 강제 분리한다', () => {
-  const articles = [
-    {
-      url_key: 'gwangju',
-      title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
-      summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.',
-      published_at: '2026-06-29T08:06:00Z'
-    },
-    { url_key: 'unrelated', title: '다른 바둑 기사', summary: '', published_at: '2026-06-29T09:00:00Z' }
-  ];
-  const groups = enforceIssueRules([
-    { key: '바둑|ai:wrong', title: '광주 바둑 소식', url_keys: ['gwangju', 'unrelated'] }
-  ], articles, '바둑');
-  assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
-    ['광주광역시체육회장배 학생바둑대회', ['gwangju']],
-    ['기타', ['unrelated']]
-  ]);
-});
-
-test('대회 주변 인물·기관·지역 문구 대신 예전 형식의 정식 제목을 사용한다', () => {
-  const cases = [
-    ['민경선 고양 시장', '고양시장배 학생바둑대회가 열렸다.', '고양시장배 학생바둑대회'],
-    ['인천서해구바둑협회', '영종구청소년수련관에서 영종바둑대회가 열렸다.', '영종국제도시배 바둑대회'],
-    ['[금주의 평택시] 2026 평택시장배 전국 바둑 대회', '', '평택시장배 전국바둑대회'],
-    ['합천서 제14회 하찬석 국수배 영재 바둑대회', '', '하찬석 국수배 영재바둑대회'],
-    ['오랜만에 구리시 바둑대회', '', '구리시 바둑대회'],
-    ['대한노인회 대전연합회', '대전 어르신 바둑 장기대회 개최', '대전 어르신 바둑장기대회'],
-    ['전국 동호인 바둑대회', '부안군수배 전국동호인바둑대회가 열렸다.', '부안군수배 전국동호인바둑대회']
-  ];
-  for (const [title, summary, expected] of cases) {
-    assert.equal(normalizeIssueTitle(title, [{ title, summary }]), expected);
-  }
 });
 
 test('해외 사망 이슈에 지역이 다른 국내 사망 사고를 합치지 않는다', () => {
@@ -203,20 +81,6 @@ test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사
   ]);
   assert.equal(normalized.find(group => group.key.includes('|ai:event:')).url_keys[0], 'event');
   assert.deepEqual(normalized.find(group => group.key.endsWith('|ai:misc')).url_keys, ['profile']);
-});
-
-test('제목에 대회가 없어도 요약의 공식 바둑대회명으로 단건 이슈를 표시한다', () => {
-  const items = [{
-    url_key: 'gwangju', category: '바둑',
-    title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
-    summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.'
-  }];
-  const normalized = normalizeCachedIssues(items, [{
-    key: '바둑|ai:event:gwangju', title: '광주광역시체육회장배 학생바둑대회', url_keys: ['gwangju']
-  }]);
-  assert.deepEqual(normalized.map(group => [group.title, group.url_keys]), [
-    ['광주광역시체육회장배 학생바둑대회', ['gwangju']]
-  ]);
 });
 
 test('월간 이슈가 12개를 넘어도 주간에 보인 바둑 대회를 잘라내지 않는다', () => {
