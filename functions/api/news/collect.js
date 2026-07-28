@@ -548,9 +548,9 @@ async function collect(env, {
     const trace = detail || {};
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
     if (sourceLength < 300) {
-      return payload.category === '바둑'
-        ? makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace)
-        : '';
+      const extractive = await makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
+      if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
+      return extractive;
     }
 
     let cloudflareReserved = Boolean(env.AI);
@@ -590,8 +590,12 @@ async function collect(env, {
       if (!summary) summary = anthropicSummary;
     }
 
-    if (payload.category !== '바둑') return '';
-    return summary || makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
+    const extractive = summary || await makeBestSummary({
+      AI: undefined,
+      ANTHROPIC_API_KEY: undefined
+    }, payload, trace);
+    if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
+    return extractive;
   };
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.

@@ -439,10 +439,12 @@ test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallba
   assert.match(workflow, /categories\+=\("일반"\)/);
 });
 
-test('일반 뉴스는 코드 추출식 요약을 게시하지 않고 기타 이슈를 마지막에 표시한다', async () => {
+test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 기타 이슈를 마지막에 표시한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
-  assert.match(collector, /if \(payload\.category !== '바둑'\) return ''/);
+  assert.doesNotMatch(collector, /if \(payload\.category !== '바둑'\) return ''/);
+  assert.match(collector, /diagnostics\.extractive_fallback_used/);
+  assert.match(collector, /AI: undefined,\s+ANTHROPIC_API_KEY: undefined/);
   assert.match(articles, /validateGeneralEditorialSummary/);
   assert.doesNotMatch(articles, /group\.key !== '일반\|ai:misc'/);
   assert.match(articles, /return \[\.\.\.rest, \.\.\.misc\]/);
