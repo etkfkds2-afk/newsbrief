@@ -855,6 +855,7 @@ test('브라우저는 사용자 ID를 만들거나 전송하지 않고 삭제 UI
   assert.doesNotMatch(html, /data-view="hidden"/);
   assert.doesNotMatch(html, /data-action="unhide"/);
   assert.match(html, /data-action="hide">삭제/);
+  assert.match(html, /action==='hide'&&!confirm\('이 기사를 삭제하시겠습니까\?'\)\)return/);
   assert.match(html, /기사를 삭제했습니다/);
   assert.match(html, /item\.related\|\|\[\]/);
   assert.match(html, /url_keys:urlKeys/);

@@ -263,6 +263,7 @@ document.addEventListener('click',e=>{
 $('cards').addEventListener('click',async e=>{
   const action=e.target.dataset.action;if(!action)return;
   const button=e.target,card=button.closest('.card'),key=card.dataset.key;
+  if(action==='hide'&&!confirm('이 기사를 삭제하시겠습니까?'))return;
   button.disabled=true;
   try{
     const item=state.items.find(x=>x.url_key===key);
