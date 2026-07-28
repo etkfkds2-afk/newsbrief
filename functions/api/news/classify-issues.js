@@ -75,7 +75,22 @@ export function mergeTournamentAliasGroups(groups, articleByKey) {
 
 export function enforceIssueRules(groups, articles, category) {
   const articleByKey = new Map(articles.map(article => [article.url_key, article]));
-  const claimed = new Set();
+  const forcedTournamentByTitle = new Map();
+  if (category === '바둑') {
+    for (const article of articles) {
+      const eventTitle = standaloneEventTitle(article);
+      if (!eventTitle) continue;
+      const existing = forcedTournamentByTitle.get(eventTitle);
+      if (existing) existing.url_keys.push(article.url_key);
+      else forcedTournamentByTitle.set(eventTitle, {
+        key: `${category}|ai:event:${article.url_key.slice(0, 16)}`,
+        title: eventTitle,
+        url_keys: [article.url_key]
+      });
+    }
+  }
+  const forcedTournamentKeys = new Set([...forcedTournamentByTitle.values()].flatMap(group => group.url_keys));
+  const claimed = new Set(forcedTournamentKeys);
   const mergedByTitle = new Map();
   const miscKeys = [];
   const orderedGroups = [...(groups || [])].sort((left, right) =>
@@ -99,7 +114,7 @@ export function enforceIssueRules(groups, articles, category) {
 
   const kept = [];
   const distinctGroups = category === '바둑'
-    ? mergeTournamentAliasGroups([...mergedByTitle.values()], articleByKey)
+    ? mergeTournamentAliasGroups([...mergedByTitle.values(), ...forcedTournamentByTitle.values()], articleByKey)
     : [...mergedByTitle.values()];
   for (const group of distinctGroups) {
     const standaloneTournament = category === '바둑' && group.url_keys.length === 1

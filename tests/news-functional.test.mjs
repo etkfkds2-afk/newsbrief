@@ -82,6 +82,10 @@ test('AI의 어색한 신진서·장윤기 이슈 제목을 자연스러운 고�
   assert.equal(normalizeIssueTitle('NHN 바둑 AI 한돌 한중 청소년 훈련 지원', []), '한중청소년교류 한돌 지원');
   assert.equal(normalizeIssueTitle('2026 평택시장배 전국바둑대회', []), '평택시장배 전국바둑대회');
   assert.equal(normalizeIssueTitle('제14회 하찬석국수배 영재바둑대회', []), '하찬석 국수배 영재바둑대회');
+  assert.equal(normalizeIssueTitle('영종바둑대회', [
+    { title: '제3회 영종국제도시배 전국바둑대회 개최' }
+  ]), '영종국제도시배 바둑대회');
+  assert.equal(normalizeIssueTitle('조상연 하찬석국수배 영재최강전 우승', []), '하찬석 국수배 영재바둑대회');
 });
 
 test('급락 이슈에 전고점 회복 전망 기사를 합치지 않는다', () => {
@@ -136,6 +140,25 @@ test('같은 날짜의 영종국제도시배와 영종바둑대회 축약명은 
   assert.deepEqual(merged, [{
     key: '바둑|ai:1', title: '제3회 영종국제도시배 전국바둑대회', url_keys: ['official', 'short']
   }]);
+});
+
+test('AI가 광주 학생대회를 다른 이슈에 넣어도 정식 대회명으로 강제 분리한다', () => {
+  const articles = [
+    {
+      url_key: 'gwangju',
+      title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
+      summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.',
+      published_at: '2026-06-29T08:06:00Z'
+    },
+    { url_key: 'unrelated', title: '다른 바둑 기사', summary: '', published_at: '2026-06-29T09:00:00Z' }
+  ];
+  const groups = enforceIssueRules([
+    { key: '바둑|ai:wrong', title: '광주 바둑 소식', url_keys: ['gwangju', 'unrelated'] }
+  ], articles, '바둑');
+  assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
+    ['광주광역시체육회장배 학생바둑대회', ['gwangju']],
+    ['기타', ['unrelated']]
+  ]);
 });
 
 test('해외 사망 이슈에 지역이 다른 국내 사망 사고를 합치지 않는다', () => {
