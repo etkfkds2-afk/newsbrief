@@ -31,6 +31,16 @@ on:
         required: false
         default: false
         type: boolean
+      free_issue_ai:
+        description: '수동 이슈 분류에 비용 없는 Cloudflare AI만 사용'
+        required: false
+        default: false
+        type: boolean
+      regroup_issues:
+        description: '기존 이슈 제목은 유지하고 기사 소속만 다시 분류'
+        required: false
+        default: false
+        type: boolean
       general_boost:
         description: '이번 실행만 일반 인기뉴스 Claude 한도를 24회로 보강'
         required: false
@@ -220,6 +230,7 @@ jobs:
         if: >-
           steps.collection-gate.outputs.should_collect == 'true' &&
           !inputs.rollback_issues &&
+          !inputs.regroup_issues &&
           (github.event_name != 'workflow_dispatch' ||
           (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality))
         env:
@@ -313,6 +324,8 @@ jobs:
           CLASSIFY_CATEGORY: ${{ inputs.classify_category }}
           RESET_ISSUES: ${{ inputs.reset_issues }}
           ROLLBACK_ISSUES: ${{ inputs.rollback_issues }}
+          FREE_ISSUE_AI: ${{ inputs.free_issue_ai }}
+          REGROUP_ISSUES: ${{ inputs.regroup_issues }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             # Baduk always classified first. Both run daily now that Haiku
@@ -327,6 +340,8 @@ jobs:
             reset_query=""
             if [ "${RESET_ISSUES}" = "true" ]; then reset_query="&reset=1"; fi
             if [ "${ROLLBACK_ISSUES}" = "true" ]; then reset_query="&rollback=1"; fi
+            if [ "${FREE_ISSUE_AI}" = "true" ]; then reset_query="${reset_query}&free=1"; fi
+            if [ "${REGROUP_ISSUES}" = "true" ]; then reset_query="${reset_query}&regroup=1"; fi
             curl --fail-with-body -sS --retry 2 --max-time 120 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \

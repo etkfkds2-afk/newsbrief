@@ -91,6 +91,8 @@ export async function onRequestPost({ request, env }) {
     const category = url.searchParams.get('category') || '바둑';
     const resetIssues = url.searchParams.get('reset') === '1';
     const rollbackIssues = url.searchParams.get('rollback') === '1';
+    const forceFree = url.searchParams.get('free') === '1';
+    const regroupIssues = url.searchParams.get('regroup') === '1';
     if (!SUPPORTED_CATEGORIES.has(category)) return json({ error: `지원하지 않는 category: ${category}` }, 400);
     if (rollbackIssues) {
       const previous = await env.DB.prepare(
@@ -150,7 +152,7 @@ export async function onRequestPost({ request, env }) {
     // lets two reports received on different days become an issue without paying
     // to reclassify established groups on every scheduled run.
     const { genuinelyNewArticles, candidateKeys, candidateArticles: newArticles } =
-      buildClassificationPlan(articles, existingPayload, resetIssues);
+      buildClassificationPlan(articles, existingPayload, resetIssues || regroupIssues);
 
     if (!genuinelyNewArticles.length) {
       return json({
@@ -164,7 +166,7 @@ export async function onRequestPost({ request, env }) {
     }
 
     const budget = await canUseClaude(env, ESTIMATED_ISSUE_CALL_MICRO_USD);
-    const useClaude = budget.allowed && Boolean(env?.ANTHROPIC_API_KEY);
+    const useClaude = !forceFree && budget.allowed && Boolean(env?.ANTHROPIC_API_KEY);
     let cloudflare = { allowed: false, used: 0, reason: 'claude-primary' };
     if (!useClaude) cloudflare = await reserveCloudflareCall(env);
     if (!cloudflare.allowed && !useClaude) return json({
@@ -173,11 +175,11 @@ export async function onRequestPost({ request, env }) {
       issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
-    const basePayload = existingPayload
+    const basePayload = (regroupIssues ? [] : existingPayload)
       .map(group => ({ ...group, url_keys: group.url_keys.filter(key => !candidateKeys.has(key)) }))
       .filter(group => group.url_keys.length > 0);
     const articleByKey = new Map(articles.map(article => [article.url_key, article]));
-    const existingIssues = basePayload
+    const existingIssues = (regroupIssues ? existingPayload : basePayload)
       .filter(group => !(group.misc || String(group.key || '').endsWith('|ai:misc')))
       .map(group => {
         const representatives = (group.url_keys || []).slice(0, 2).map(key => articleByKey.get(key)).filter(Boolean);
@@ -235,7 +237,9 @@ export async function onRequestPost({ request, env }) {
       }
       const matched = existingIssues.find(existing => existing.title === group.title);
       if (matched) {
-        byKey.get(matched.key)?.url_keys.push(...group.url_keys);
+        const existing = byKey.get(matched.key);
+        if (existing) existing.url_keys.push(...group.url_keys);
+        else byKey.set(matched.key, { key: matched.key, title: matched.title, url_keys: [...group.url_keys] });
       } else {
         let key;
         do key = `${category}|ai:${nextIndex++}`; while (byKey.has(key));

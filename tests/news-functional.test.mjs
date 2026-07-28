@@ -173,10 +173,28 @@ test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', (
 
 test('Claude 이슈 분류가 가능하면 Cloudflare 호출을 미리 예약하지 않는다', async () => {
   const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(endpoint, /const useClaude = budget\.allowed && Boolean\(env\?\.ANTHROPIC_API_KEY\)/);
+  assert.match(endpoint, /const useClaude = !forceFree && budget\.allowed && Boolean\(env\?\.ANTHROPIC_API_KEY\)/);
   assert.match(endpoint, /if \(!useClaude\) cloudflare = await reserveCloudflareCall/);
   assert.match(endpoint, /classification\.provider === 'anthropic-failed'/);
   assert.doesNotMatch(endpoint, /Promise\.all\(\[\s*reserveCloudflareCall/);
+});
+
+test('수동 이슈 재분류는 비용 없는 Cloudflare AI 전용 모드를 제공한다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(endpoint, /forceFree/);
+  assert.match(endpoint, /!forceFree && budget\.allowed/);
+  assert.match(workflow, /free_issue_ai:/);
+});
+
+test('일반 이슈는 기존 제목을 유지하면서 기사 소속만 재분류할 수 있다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(endpoint, /regroupIssues/);
+  assert.match(endpoint, /regroupIssues \? existingPayload : basePayload/);
+  assert.match(workflow, /regroup_issues:/);
+  const prompt = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(prompt, /핵심 단어가 실제 기사에 없거나 번역투·오타/);
 });
 
 test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 복구 모드를 제공한다', async () => {
@@ -661,8 +679,8 @@ test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 �
   assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000/);
   assert.match(budget, /claude_budget_month/);
   assert.doesNotMatch(classifier, /MAX_NEW_ARTICLES_PER_RUN/);
-  assert.match(classifier, /buildClassificationPlan\(articles, existingPayload, resetIssues\)/);
-  assert.match(classifier, /const existingIssues = basePayload/);
+  assert.match(classifier, /buildClassificationPlan\(articles, existingPayload, resetIssues \|\| regroupIssues\)/);
+  assert.match(classifier, /const existingIssues = \(regroupIssues \? existingPayload : basePayload\)/);
   assert.match(classifier, /recordClaudeUsage/);
   assert.equal(claudeCostMicroUsd('claude-haiku-4-5-20251001', { input_tokens: 1000, output_tokens: 100 }), 1500);
   assert.equal(claudeCostMicroUsd('claude-sonnet-5', { input_tokens: 1000, output_tokens: 100 }), 4500);
