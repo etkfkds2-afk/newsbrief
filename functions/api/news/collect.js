@@ -828,15 +828,24 @@ async function collect(env, {
     } catch (error) {
       diagnostics.google_resolve_error = String(error?.message || error).slice(0, 120);
     }
-    // Many discovered headlines (local/independent outlets) never turn up in
-    // a Naver search at all, so they were silently dropped even though
-    // Google already gave us a working link. Fetch through that link
-    // directly instead of discarding the headline.
-    if (!resolved && discovery?.link) {
-      candidates.push({
-        category: '바둑', source: 'GOOGLE',
-        item: { title: discoveredTitle, link: discovery.link, originallink: discovery.link, description: '', pubDate: discovery.pubDate || '', press: discovery.press || '' }
-      });
+    // discovery.link is a Google News wrapper URL (news.google.com/rss/...)
+    // that only resolves through client-side JS, which a plain fetch can
+    // never follow - it was never actually reaching the real article, just
+    // silently failing as body_too_short on every attempt. Try Kakao's web
+    // search as a second real resolver instead of fetching that dead end.
+    if (!resolved) {
+      try {
+        const matches = await kakaoSearch(env, `"${discoveredTitle}"`, 1, 3);
+        const match = matches.find(item => {
+          const candidateTitle = cleanTitle(item.title);
+          const left = candidateTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
+          const right = discoveredTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
+          return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
+        });
+        if (match) candidates.push({ category: '바둑', item: match, source: 'KAKAO' });
+      } catch (error) {
+        diagnostics.google_resolve_kakao_error = String(error?.message || error).slice(0, 120);
+      }
     }
   }
   diagnostics.google_discovered = googleDiscoveries.length;
