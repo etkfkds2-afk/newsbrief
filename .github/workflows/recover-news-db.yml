@@ -22,10 +22,11 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${account_id}/pages/projects/${project}")
           database_id=$(printf '%s' "$project_json" | jq -r '.result.deployment_configs.production.d1_databases.DB.id // empty')
           test -n "$database_id"
-          response=$(curl --fail-with-body -sS \
+          response=$(curl -sS \
             -X POST \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H 'Content-Type: application/json' \
             --data '{"timestamp":"2026-07-28T12:59:00Z"}' \
             "https://api.cloudflare.com/client/v4/accounts/${account_id}/d1/database/${database_id}/time_travel/restore")
+          printf '%s' "$response" | jq '{success, errors, result}'
           printf '%s' "$response" | jq -e '.success == true and .result.bookmark != null'
