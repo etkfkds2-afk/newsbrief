@@ -17,9 +17,18 @@ export async function onRequest({ request, env, next }) {
   if (OPEN_PATHS.has(url.pathname)) return next();
   if (TOKEN_PROTECTED_PREFIXES.some(prefix => url.pathname.startsWith(prefix))) return next();
 
-  // No password configured yet (e.g. secrets not deployed) - fail open
-  // rather than lock everyone out of a site with no way to log in.
-  if (!env.NEWSBRIEF_SITE_PASSWORD) return next();
+  // A missing password is a deployment/configuration fault. Never expose a
+  // paid feed publicly just because a runtime binding disappeared.
+  if (!env.NEWSBRIEF_SITE_PASSWORD) {
+    const message = 'Service authentication is temporarily unavailable.';
+    if (url.pathname.startsWith('/api/')) {
+      return new Response(JSON.stringify({ ok: false, error: message }), {
+        status: 503,
+        headers: { 'content-type': 'application/json; charset=utf-8', 'retry-after': '60' }
+      });
+    }
+    return new Response(message, { status: 503, headers: { 'retry-after': '60' } });
+  }
 
   const cookieHeader = request.headers.get('cookie');
   if (await hasValidSession(cookieHeader, env.NEWSBRIEF_SITE_PASSWORD)) {

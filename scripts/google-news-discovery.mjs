@@ -83,10 +83,9 @@ if (!response.ok) {
     if (payload.status === 'degraded') {
       const warning = `Collector degraded: ${(payload.warnings || []).join(', ')}`;
       console.warn(`::warning::${warning}`);
-      // Optional providers may be unavailable while the licensed Naver/Kakao
-      // collection still succeeds. Keep the workflow green when articles were
-      // inserted, but retain the degraded status and warning in D1 and logs.
-      if (!Number(payload.inserted || 0)) process.exitCode = 2;
+      // Optional providers may be unavailable while the core collector and
+      // existing feed remain healthy. Preserve the warning in D1/Actions, but
+      // do not turn a Google-only outage into a whole-service outage.
     }
   } catch {
     console.error('Collector returned a non-JSON response');

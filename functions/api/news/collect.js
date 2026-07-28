@@ -1116,6 +1116,16 @@ export async function onRequestPost({ request, env }) {
     await ensureNewsDb(env);
     await env.DB.prepare(`UPDATE news_runs SET finished_at=?,status='error',message='이전 수집이 비정상 종료됨'
       WHERE status='running' AND datetime(started_at) < datetime('now','-10 minutes')`).bind(new Date().toISOString()).run();
+    // Bound operational tables so years of scheduled runs do not gradually
+    // turn every status/popularity query into an ever-growing scan.
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM news_runs WHERE id NOT IN
+        (SELECT id FROM news_runs ORDER BY id DESC LIMIT 500)`),
+      env.DB.prepare("DELETE FROM news_popularity WHERE datetime(collected_at)<datetime('now','-60 days')"),
+      env.DB.prepare("DELETE FROM news_popular_items WHERE datetime(collected_at)<datetime('now','-60 days')"),
+      env.DB.prepare(`DELETE FROM news_summary_attempts WHERE url_key IN
+        (SELECT url_key FROM news_articles WHERE summary_quality='full')`)
+    ]);
     const started = new Date().toISOString();
     const run = await env.DB.prepare("INSERT INTO news_runs(started_at,status) VALUES(?,'running') RETURNING id").bind(started).first();
     runId = run?.id;

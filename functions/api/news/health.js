@@ -32,7 +32,9 @@ export async function onRequestGet({ env }) {
     const finishedAgeHours = run?.finished_at ? (Date.now() - utcMillis(run.finished_at)) / 3600000 : Infinity;
     const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
     const checks = {
-      last_run_ok: run?.status === 'ok',
+      // A degraded run means an optional provider failed, not that the feed or
+      // database is unavailable. Freshness checks below still catch real loss.
+      last_run_ok: run?.status === 'ok' || run?.status === 'degraded',
       last_run_within_6h: finishedAgeHours <= 6,
       automatic_run_within_4h: automaticAgeHours <= 4,
       general_has_recent_news: Number(counts?.general || 0) > 0,
@@ -50,6 +52,7 @@ export async function onRequestGet({ env }) {
       checks,
       metrics: {
         last_run: run || null,
+        last_run_degraded: run?.status === 'degraded',
         last_automatic_run: automaticRun || null,
         finished_age_hours: Number.isFinite(finishedAgeHours) ? Number(finishedAgeHours.toFixed(2)) : null,
         automatic_age_hours: Number.isFinite(automaticAgeHours) ? Number(automaticAgeHours.toFixed(2)) : null,

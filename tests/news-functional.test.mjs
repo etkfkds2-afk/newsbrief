@@ -227,6 +227,12 @@ test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
   }
 });
 
+test('선택적 Google 장애는 전체 수집 워크플로를 중단하지 않는다', async () => {
+  const discovery = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(discovery, /process\.exitCode = 2/);
+  assert.match(discovery, /Google-only outage/);
+});
+
 test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
@@ -572,6 +578,25 @@ test('watchdog은 재시도된 헬스 응답에서도 단일 실행 결정을 �
   assert.match(workflow, /should_collect=\$\{should_collect:-true\}/);
 });
 
+test('배포는 필수 비밀값이 없으면 production 설정을 건드리기 전에 중단한다', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /Validate required deployment secrets/);
+  assert.match(workflow, /production settings were not changed/);
+});
+
+test('Cloudflare Pages 배포는 유지보수 중인 Wrangler action을 사용한다', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /cloudflare\/wrangler-action@v3/);
+  assert.match(workflow, /pages deploy dist --project-name=newsbrief-etkfkds2 --branch=main/);
+  assert.doesNotMatch(workflow, /cloudflare\/pages-action/);
+});
+
+test('운영 테이블은 장기 실행에도 크기가 제한된다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /SELECT id FROM news_runs ORDER BY id DESC LIMIT 500/);
+  assert.match(collector, /datetime\('now','-60 days'\)/);
+});
+
 test('만료 직전의 유효한 로그인 세션은 활동 시 갱신한다', async () => {
   const middleware = await readFile(new URL('../functions/_middleware.js', import.meta.url), 'utf8');
   const session = await readFile(new URL('../functions/_lib/session.js', import.meta.url), 'utf8');
@@ -663,8 +688,8 @@ test('일반 뉴스 카드는 인기 기사 선별 후 발행시간 최신순으
   assert.doesNotMatch(html, /fmt\(x\.published_at\|\|x\.fetched_at\)/);
 });
 
-test('보조 공급자 장애 중 신규 기사가 등록되면 경고만 남긴다', async () => {
+test('보조 공급자 장애는 신규 등록 여부와 무관하게 경고만 남긴다', async () => {
   const script = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
   assert.match(script, /::warning::/);
-  assert.match(script, /if \(!Number\(payload\.inserted \|\| 0\)\) process\.exitCode = 2/);
+  assert.doesNotMatch(script, /process\.exitCode = 2/);
 });

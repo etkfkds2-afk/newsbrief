@@ -2,6 +2,7 @@ name: Deploy to Cloudflare Pages
 
 permissions:
   contents: read
+  deployments: write
   issues: write
 
 on:
@@ -72,6 +73,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate required deployment secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
+          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN NAVER_CLIENT_ID NAVER_CLIENT_SECRET KAKAO_REST_API_KEY NEWSBRIEF_COLLECT_TOKEN ANTHROPIC_API_KEY NEWSBRIEF_SITE_USER NEWSBRIEF_SITE_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Required secret ${name} is missing; production settings were not changed."
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then exit 1; fi
+
       - name: Prepare static site
         run: |
           rm -rf dist
@@ -136,13 +157,13 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/af27f3bbca2209ff9cb2c77a2e47184a/pages/projects/newsbrief-etkfkds2" \
             > /tmp/pages-settings-response.json
 
-      - uses: cloudflare/pages-action@v1
+      - name: Deploy to Cloudflare Pages with supported Wrangler action
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: af27f3bbca2209ff9cb2c77a2e47184a
-          projectName: newsbrief-etkfkds2
-          directory: dist
-          branch: main
+          command: pages deploy dist --project-name=newsbrief-etkfkds2 --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
   collect-news:
     needs: deploy
