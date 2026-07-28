@@ -459,7 +459,9 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.doesNotMatch(articles, /rest\.slice\(0, misc\.length \? 11 : 12\)/);
   assert.match(articles, /reorderGeneralSummary/);
   assert.match(collector, /general_daily_goal = 10/);
-  assert.match(collector, /SCHEDULED_CANDIDATES_PER_CATEGORY = 6/);
+  assert.match(collector, /SCHEDULED_GENERAL_CANDIDATES = 6/);
+  assert.match(collector, /SCHEDULED_BADUK_CANDIDATES = 10/);
+  assert.match(collector, /Date\.parse\(b\.item\?\.pubDate/);
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);
   assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);

@@ -32,7 +32,8 @@ const DAILY_ANTHROPIC_CALL_LIMIT = 12;
 const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
-const SCHEDULED_CANDIDATES_PER_CATEGORY = 6;
+const SCHEDULED_GENERAL_CANDIDATES = 6;
+const SCHEDULED_BADUK_CANDIDATES = 10;
 const SCHEDULED_GOOGLE_DISCOVERIES = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
@@ -940,6 +941,8 @@ async function collect(env, {
     if (badukOrder) return badukOrder;
     const popularOrder = Number(Boolean(b.isPopular)) - Number(Boolean(a.isPopular));
     if (popularOrder) return popularOrder;
+    const recentOrder = (Date.parse(b.item?.pubDate || '') || 0) - (Date.parse(a.item?.pubDate || '') || 0);
+    if (recentOrder) return recentOrder;
     return Number(a.popularityRank || 999) - Number(b.popularityRank || 999);
   });
   const recentGeneral = await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
@@ -949,8 +952,8 @@ async function collect(env, {
   const limitedCandidates = popularityCandidates.length
     ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
     : (backfill ? uniqueCandidates.slice(0, 8) : [
-        ...uniqueCandidates.filter(candidate => candidate.category === '바둑').slice(0, SCHEDULED_CANDIDATES_PER_CATEGORY),
-        ...uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_CANDIDATES_PER_CATEGORY)
+        ...uniqueCandidates.filter(candidate => candidate.category === '바둑').slice(0, SCHEDULED_BADUK_CANDIDATES),
+        ...uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_GENERAL_CANDIDATES)
       ]);
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
