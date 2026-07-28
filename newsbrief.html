@@ -118,7 +118,7 @@ function renderHero(){
   $('date').textContent=new Intl.DateTimeFormat('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'long'}).format(new Date());
   const refreshed=[...state.heroItems,...state.items].map(x=>+parseTime(x.fetched_at||'')).filter(Number.isFinite).sort((a,b)=>b-a)[0];
   $('updated').textContent=refreshed?`${relTime(refreshed)} 갱신`:'';
-  $('hot').innerHTML=state.heroItems.map((x,i)=>`<a class="hotchip" href="#article-${esc(x.url_key)}" data-jump-key="${esc(x.url_key)}"><span class="hotrank">${String(i+1).padStart(2,'0')}</span><span class="hottext">${esc(x.title)}</span>${x.related_count?`<span class="hotrelated">관련 ${x.related_count+1}건</span>`:''}<span aria-hidden="true">↓</span></a>`).join('')||'<div class="empty">핵심 뉴스를 준비하고 있습니다.</div>';
+  $('hot').innerHTML=state.heroItems.map((x,i)=>`<a class="hotchip" href="#article-${esc(x.url_key)}" data-jump-key="${esc(x.url_key)}"><span class="hotrank">${String(i+1).padStart(2,'0')}</span><span class="hottext">${esc(x.title)}</span>${x.related_count?`<span class="hotrelated">관련 ${x.related_count+1}건</span>`:''}<span aria-hidden="true">↓</span></a>`).join('')||'<div class="empty">아직 핵심 뉴스가 없습니다.</div>';
 }
 function renderIssues(){
   const sub=currentSubview();
@@ -149,7 +149,8 @@ function render(){
   const label=selectedIssue?[selectedIssue.title,'']:(state.section==='general'&&state.category?[`${categoryPeriod} ${state.category} 3줄 요약`.trim(),'']:base);
   $('sectionTitle').innerHTML=`${esc(label[0])}${label[1]?`<span class="sectionDesc">${esc(label[1])}</span>`:''}`;
   const visible=state.focusKey?state.items.filter(item=>item.url_key===state.focusKey):state.items;
-  $('cards').innerHTML=visible.length?visible.map(cardHtml).join(''):'<div class="empty">조건에 맞는 뉴스가 아직 없습니다.</div>';
+  const emptyMessage=currentSubview()==='home'&&!state.q?'아직 요약된 뉴스가 없습니다.':'조건에 맞는 뉴스가 없습니다.';
+  $('cards').innerHTML=visible.length?visible.map(cardHtml).join(''):`<div class="empty">${emptyMessage}</div>`;
 }
 async function load({silent=false}={}){
   state.focusKey='';
