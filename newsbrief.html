@@ -22,8 +22,6 @@ const cats=['정치','경제','사회','생활/문화','세계'];
 const state={section:'baduk',genView:'home',badukView:'home',category:'',q:'',issueKey:'',focusKey:'',items:[],heroItems:[],issueItems:[],requestSeq:0};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const USER_KEY='newsbrief_user_id_v1';
-const userId=(()=>{let id=localStorage.getItem(USER_KEY);if(!id){id=crypto.randomUUID();localStorage.setItem(USER_KEY,id)}return id})();
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
 const VIEW_CACHE_TTL=300000,viewCache=new Map(),viewRequests=new Map();let viewCacheGeneration=0;
 let activeLoadController=null,lastSuccessfulLoad=0;
@@ -50,7 +48,7 @@ async function fetchTimed(url,options={},timeout=12000){
   try{return await fetch(url,{...options,signal})}finally{clearTimeout(timer)}
 }
 async function fetchJson(url,options){
-  const config={...(options||{}),headers:{...(options?.headers||{}),'x-news-user':userId}};
+  const config={...(options||{}),headers:{...(options?.headers||{})}};
   const isGet=(config.method||'GET').toUpperCase()==='GET';
   const attempts=isGet?4:1;
   const cacheKey=`${RESPONSE_CACHE_PREFIX}${url}`;
@@ -211,7 +209,7 @@ $('cards').addEventListener('click',async e=>{
   try{
     const item=state.items.find(x=>x.url_key===key);
     const urlKeys=action==='hide'&&item?[key,...(item.related||[]).map(x=>x.url_key)]:[key];
-    const r=await fetchTimed('/api/news/item',{method:'POST',headers:{'content-type':'application/json','x-news-user':userId},body:JSON.stringify({action,url_key:key,url_keys:urlKeys})});
+    const r=await fetchTimed('/api/news/item',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,url_key:key,url_keys:urlKeys})});
     const result=await r.json().catch(()=>null);
     if(!r.ok)throw Error();
     clearResponseCache();

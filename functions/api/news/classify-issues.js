@@ -1,6 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle } from '../../_lib/news-issue-classify.js';
+import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -158,9 +158,17 @@ export async function onRequestPost({ request, env }) {
     const basePayload = existingPayload
       .map(group => ({ ...group, url_keys: group.url_keys.filter(key => !candidateKeys.has(key)) }))
       .filter(group => group.url_keys.length > 0);
+    const articleByKey = new Map(articles.map(article => [article.url_key, article]));
     const existingIssues = basePayload
       .filter(group => !(group.misc || String(group.key || '').endsWith('|ai:misc')))
-      .map(group => ({ key: group.key, title: group.title }));
+      .map(group => {
+        const representatives = (group.url_keys || []).slice(0, 2).map(key => articleByKey.get(key)).filter(Boolean);
+        return {
+          key: group.key,
+          title: group.title,
+          context: representatives.map(item => `${item.title} ${String(item.summary || '').replace(/\n/g, ' ').slice(0, 120)}`).join(' / ')
+        };
+      });
     let classification = await classifyIssues(
       {
         ...env,
@@ -168,7 +176,7 @@ export async function onRequestPost({ request, env }) {
         ANTHROPIC_API_KEY: useClaude ? env.ANTHROPIC_API_KEY : undefined
       },
       newArticles,
-      existingIssues.map(group => ({ key: group.key, title: group.title })),
+      existingIssues,
       { allowStandaloneEvents: category === '바둑' }
     );
     if (classification.provider === 'anthropic-failed' && env?.AI) {
@@ -183,7 +191,8 @@ export async function onRequestPost({ request, env }) {
         classification = { ...fallback, anthropic_error: classification.anthropic_error };
       }
     }
-    const { groups, provider, model, usage, cloudflare_error, anthropic_error } = classification;
+    const { provider, model, usage, cloudflare_error, anthropic_error } = classification;
+    const groups = rejectConflictingExistingMatches(classification.groups, newArticles, existingIssues);
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);
     }

@@ -8,6 +8,13 @@ function base64UrlEncode(bytes) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+function base64UrlDecode(value) {
+  const base64 = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+  const binary = atob(padded);
+  return new Uint8Array([...binary].map(char => char.charCodeAt(0)));
+}
+
 async function hmac(secret, message) {
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
@@ -16,10 +23,12 @@ async function hmac(secret, message) {
   return base64UrlEncode(new Uint8Array(signature));
 }
 
-export async function createSessionCookie(secret) {
+export async function createSessionCookie(secret, userId = 'default') {
   const expiry = Date.now() + SESSION_DAYS * 86400000;
-  const signature = await hmac(secret, String(expiry));
-  const value = `${expiry}.${signature}`;
+  const encodedUser = base64UrlEncode(new TextEncoder().encode(String(userId || 'default').slice(0, 100)));
+  const message = `${expiry}.${encodedUser}`;
+  const signature = await hmac(secret, message);
+  const value = `${message}.${signature}`;
   return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
 }
 
@@ -27,20 +36,29 @@ export function clearSessionCookie() {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
-export async function hasValidSession(cookieHeader, secret) {
+export async function readSession(cookieHeader, secret, legacyUser = 'default') {
   const match = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookieHeader || '');
-  if (!match) return false;
-  const [expiry, signature] = decodeURIComponent(match[1]).split('.');
-  if (!expiry || !signature || !Number.isFinite(Number(expiry))) return false;
-  if (Date.now() > Number(expiry)) return false;
-  const expected = await hmac(secret, expiry);
-  return expected === signature;
+  if (!match || !secret) return null;
+  const parts = decodeURIComponent(match[1]).split('.');
+  const legacy = parts.length === 2;
+  const [expiry, encodedUser, signature] = legacy ? [parts[0], '', parts[1]] : parts;
+  if (!expiry || !signature || !Number.isFinite(Number(expiry)) || Date.now() > Number(expiry)) return null;
+  const expected = await hmac(secret, legacy ? expiry : `${expiry}.${encodedUser}`);
+  if (expected !== signature) return null;
+  if (legacy) return { userId: String(legacyUser || 'default').slice(0, 100), expiry: Number(expiry), legacy: true };
+  try {
+    const userId = new TextDecoder().decode(base64UrlDecode(encodedUser)).slice(0, 100);
+    return userId ? { userId, expiry: Number(expiry), legacy: false } : null;
+  } catch { return null; }
+}
+
+export async function hasValidSession(cookieHeader, secret) {
+  return Boolean(await readSession(cookieHeader, secret));
 }
 
 export async function sessionNeedsRefresh(cookieHeader, secret) {
   const match = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookieHeader || '');
   if (!match) return false;
-  const [expiry] = decodeURIComponent(match[1]).split('.');
-  if (!await hasValidSession(cookieHeader, secret)) return false;
-  return Number(expiry) - Date.now() <= SESSION_REFRESH_DAYS * 86400000;
+  const session = await readSession(cookieHeader, secret);
+  return Boolean(session) && session.expiry - Date.now() <= SESSION_REFRESH_DAYS * 86400000;
 }

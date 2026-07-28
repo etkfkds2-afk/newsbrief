@@ -1,4 +1,4 @@
-import { createSessionCookie, hasValidSession, sessionNeedsRefresh } from './_lib/session.js';
+import { createSessionCookie, readSession, sessionNeedsRefresh } from './_lib/session.js';
 
 // Paths reachable with no session: the login page/API itself, and the two
 // endpoints GitHub Actions calls server-to-server. Those already authorize
@@ -19,7 +19,8 @@ export async function onRequest({ request, env, next }) {
 
   // A missing password is a deployment/configuration fault. Never expose a
   // paid feed publicly just because a runtime binding disappeared.
-  if (!env.NEWSBRIEF_SITE_PASSWORD) {
+  const sessionSecret = env.NEWSBRIEF_SESSION_SECRET || env.NEWSBRIEF_SITE_PASSWORD;
+  if (!sessionSecret) {
     const message = 'Service authentication is temporarily unavailable.';
     if (url.pathname.startsWith('/api/')) {
       return new Response(JSON.stringify({ ok: false, error: message }), {
@@ -31,13 +32,16 @@ export async function onRequest({ request, env, next }) {
   }
 
   const cookieHeader = request.headers.get('cookie');
-  if (await hasValidSession(cookieHeader, env.NEWSBRIEF_SITE_PASSWORD)) {
-    const response = await next();
+  const session = await readSession(cookieHeader, sessionSecret, env.NEWSBRIEF_SITE_USER || 'default');
+  if (session) {
+    const headers = new Headers(request.headers);
+    headers.set('x-news-user', `account:${session.userId}`);
+    const response = await next(new Request(request, { headers }));
     // Active browsers remain signed in: renew only during the final week to
     // avoid sending Set-Cookie on every image/API request.
-    if (await sessionNeedsRefresh(cookieHeader, env.NEWSBRIEF_SITE_PASSWORD)) {
+    if (await sessionNeedsRefresh(cookieHeader, sessionSecret)) {
       const renewed = new Response(response.body, response);
-      renewed.headers.append('set-cookie', await createSessionCookie(env.NEWSBRIEF_SITE_PASSWORD));
+      renewed.headers.append('set-cookie', await createSessionCookie(sessionSecret, session.userId));
       return renewed;
     }
     return response;

@@ -4,10 +4,15 @@ import { readFile } from 'node:fs/promises';
 import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
 import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
-import { classifyIssues, isStandaloneEventArticle } from '../functions/_lib/news-issue-classify.js';
+import {
+  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches
+} from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
+import { createSessionCookie, readSession } from '../functions/_lib/session.js';
+import { onRequest as authMiddleware } from '../functions/_middleware.js';
+import { onRequestPost as login } from '../functions/api/auth/login.js';
 
 test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 된다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
@@ -44,6 +49,22 @@ test('일반 뉴스는 대회 기사도 한 건이면 기타로 보낸다', () =
   assert.deepEqual(groups, [
     { key: '일반|ai:misc', title: '기타', url_keys: ['general-event'], misc: true }
   ]);
+});
+
+test('해외 사망 이슈에 지역이 다른 국내 사망 사고를 합치지 않는다', () => {
+  const domestic = {
+    url_key: 'wanju',
+    title: '전국 극한 폭염 전북 완주서 밭일하던 할머니 숨져',
+    summary: '전북 완주군 농경지에서 100세 여성이 숨진 채 발견됐다.'
+  };
+  const context = '일본 열대야 사망 일본에서 기록적인 열대야로 고령자가 숨졌다.';
+  assert.equal(hasIncidentLocationConflict(context, domestic), true);
+  assert.equal(hasIncidentLocationConflict('전북 폭염 사망 전북 완주군에서 고령자가 숨졌다.', domestic), false);
+  assert.deepEqual(rejectConflictingExistingMatches(
+    [{ title: '일본 열대야 사망', url_keys: ['wanju'] }],
+    [domestic],
+    [{ key: '일반|ai:1', title: '일본 열대야 사망', context }]
+  ), [{ title: '기타', url_keys: ['wanju'], misc: true }]);
 });
 
 test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사용한다', () => {
@@ -683,16 +704,59 @@ test('숨김 목록은 현재 방문자의 숨긴 기사만 조회한다', async
   assert.match(query, /h\.url_key IS NOT NULL/);
 });
 
-test('브라우저는 방문자 ID를 저장·조회 API에 함께 보내고 삭제 UI만 제공한다', async () => {
+test('브라우저는 사용자 ID를 만들거나 전송하지 않고 삭제 UI만 제공한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /localStorage\.getItem\(USER_KEY\)/);
-  assert.match(html, /'x-news-user':userId/);
+  assert.doesNotMatch(html, /USER_KEY/);
+  assert.doesNotMatch(html, /x-news-user/);
   assert.doesNotMatch(html, /data-view="hidden"/);
   assert.doesNotMatch(html, /data-action="unhide"/);
   assert.match(html, /data-action="hide">삭제/);
   assert.match(html, /기사를 삭제했습니다/);
   assert.match(html, /item\.related\|\|\[\]/);
   assert.match(html, /url_keys:urlKeys/);
+});
+
+test('복수 계정 로그인은 서명된 쿠키에 서로 다른 사용자 ID를 저장한다', async () => {
+  const env = {
+    NEWSBRIEF_SITE_USERS: JSON.stringify({ member_a: 'pw-a', member_b: 'pw-b' }),
+    NEWSBRIEF_SESSION_SECRET: 'independent-session-secret'
+  };
+  const responseA = await login({
+    request: new Request('https://example.com/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'member_a', password: 'pw-a' })
+    }), env
+  });
+  const responseB = await login({
+    request: new Request('https://example.com/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'member_b', password: 'pw-b' })
+    }), env
+  });
+  const cookieA = responseA.headers.get('set-cookie');
+  const cookieB = responseB.headers.get('set-cookie');
+  assert.equal(responseA.status, 200);
+  assert.equal(responseB.status, 200);
+  assert.equal((await readSession(cookieA, env.NEWSBRIEF_SESSION_SECRET)).userId, 'member_a');
+  assert.equal((await readSession(cookieB, env.NEWSBRIEF_SESSION_SECRET)).userId, 'member_b');
+});
+
+test('미들웨어는 브라우저의 위조 사용자 ID를 로그인 계정 ID로 덮어쓴다', async () => {
+  const secret = 'middleware-session-secret';
+  const cookie = await createSessionCookie(secret, 'member_a');
+  let forwardedUser = '';
+  const response = await authMiddleware({
+    request: new Request('https://example.com/api/news/articles', {
+      headers: { cookie, 'x-news-user': 'account:member_b' }
+    }),
+    env: { NEWSBRIEF_SESSION_SECRET: secret },
+    next: async request => {
+      forwardedUser = request.headers.get('x-news-user');
+      return new Response('ok');
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(forwardedUser, 'account:member_a');
 });
 
 test('삭제 API는 대표 기사와 관련 기사 키를 한 배치로 숨긴다', async () => {

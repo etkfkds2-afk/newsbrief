@@ -83,6 +83,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
           NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
+          NEWSBRIEF_SITE_USERS: ${{ secrets.NEWSBRIEF_SITE_USERS }}
+          NEWSBRIEF_SESSION_SECRET: ${{ secrets.NEWSBRIEF_SESSION_SECRET }}
         run: |
           missing=0
           for name in CLOUDFLARE_API_TOKEN NAVER_CLIENT_ID NAVER_CLIENT_SECRET KAKAO_REST_API_KEY NEWSBRIEF_COLLECT_TOKEN ANTHROPIC_API_KEY NEWSBRIEF_SITE_USER NEWSBRIEF_SITE_PASSWORD; do
@@ -130,6 +132,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
           NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
+          NEWSBRIEF_SITE_USERS: ${{ secrets.NEWSBRIEF_SITE_USERS }}
+          NEWSBRIEF_SESSION_SECRET: ${{ secrets.NEWSBRIEF_SESSION_SECRET }}
         run: |
           jq -n \
             --arg naver_id "$NAVER_CLIENT_ID" \
@@ -139,7 +143,9 @@ jobs:
             --arg anthropic_key "$ANTHROPIC_API_KEY" \
             --arg site_user "$NEWSBRIEF_SITE_USER" \
             --arg site_password "$NEWSBRIEF_SITE_PASSWORD" \
-            '{deployment_configs:{production:{env_vars:{
+            --arg site_users "$NEWSBRIEF_SITE_USERS" \
+            --arg session_secret "$NEWSBRIEF_SESSION_SECRET" \
+            '({
               NAVER_CLIENT_ID:{type:"secret_text",value:$naver_id},
               NAVER_CLIENT_SECRET:{type:"secret_text",value:$naver_secret},
               KAKAO_REST_API_KEY:{type:"secret_text",value:$kakao_key},
@@ -148,7 +154,10 @@ jobs:
               NEWSBRIEF_SITE_USER:{type:"secret_text",value:$site_user},
               NEWSBRIEF_SITE_PASSWORD:{type:"secret_text",value:$site_password},
               NEWSBRIEF_USE_ANTHROPIC:{type:"plain_text",value:"0"}
-            }}}}' > /tmp/pages-settings.json
+            }
+            + (if $site_users == "" then {} else {NEWSBRIEF_SITE_USERS:{type:"secret_text",value:$site_users}} end)
+            + (if $session_secret == "" then {} else {NEWSBRIEF_SESSION_SECRET:{type:"secret_text",value:$session_secret}} end))
+            | {deployment_configs:{production:{env_vars:.}}}' > /tmp/pages-settings.json
           curl --fail-with-body -sS \
             -X PATCH \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \

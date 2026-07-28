@@ -34,9 +34,50 @@ function buildListing(articles) {
 
 function buildPrompt(newArticles, existingIssues) {
   const existingBlock = existingIssues.length
-    ? `기존 이슈 목록:\n${existingIssues.map(issue => `- ${issue.title}`).join('\n')}\n\n`
+    ? `기존 이슈 목록:\n${existingIssues.map(issue => `- ${issue.title}${issue.context ? ` — ${issue.context}` : ''}`).join('\n')}\n\n`
     : '';
   return `${existingBlock}새 기사 목록:\n${buildListing(newArticles)}`;
+}
+
+const INCIDENT_WORDS = /(?:사망|숨져|숨진|사고|화재|폭발|붕괴|실종|피해)/u;
+const FOREIGN_PLACES = ['일본', '중국', '미국', '러시아', '유럽', '프랑스', '독일', '영국', '인도', '태국', '베트남'];
+const KOREAN_PLACES = ['서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종', '경기', '강원', '충북', '충남', '전북', '전남', '경북', '경남', '제주', '완주', '완도'];
+
+function placeSet(value, places) {
+  const text = String(value || '');
+  return new Set(places.filter(place => text.includes(place)));
+}
+
+export function hasIncidentLocationConflict(existingContext, article) {
+  const incoming = `${article?.title || ''} ${article?.summary || ''}`;
+  const existing = String(existingContext || '');
+  if (!INCIDENT_WORDS.test(existing) || !INCIDENT_WORDS.test(incoming)) return false;
+  const oldForeign = placeSet(existing, FOREIGN_PLACES);
+  const newForeign = placeSet(incoming, FOREIGN_PLACES);
+  const oldKorean = placeSet(existing, KOREAN_PLACES);
+  const newKorean = placeSet(incoming, KOREAN_PLACES);
+  if (oldForeign.size && newKorean.size && !newForeign.size) return true;
+  if (newForeign.size && oldKorean.size && !oldForeign.size) return true;
+  if (oldForeign.size && newForeign.size && ![...oldForeign].some(place => newForeign.has(place))) return true;
+  return false;
+}
+
+export function rejectConflictingExistingMatches(groups, articles, existingIssues) {
+  const issueByTitle = new Map(existingIssues.map(issue => [issue.title, issue]));
+  const kept = [], rejectedKeys = [];
+  for (const group of groups || []) {
+    const existing = issueByTitle.get(group.title);
+    if (!existing?.context) { kept.push(group); continue; }
+    const accepted = [], rejected = [];
+    for (const key of group.url_keys || []) {
+      const article = articles.find(item => item.url_key === key);
+      (hasIncidentLocationConflict(existing.context, article) ? rejected : accepted).push(key);
+    }
+    if (accepted.length) kept.push({ ...group, url_keys: accepted });
+    rejectedKeys.push(...rejected);
+  }
+  if (rejectedKeys.length) kept.push({ title: '기타', url_keys: rejectedKeys, misc: true });
+  return kept;
 }
 
 function stripFences(value) {
