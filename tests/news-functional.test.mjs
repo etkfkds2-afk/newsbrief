@@ -409,7 +409,7 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = issueKeyFilter \? 900/);
+  assert.match(source, /const queryLimit = issueKeyFilter \? 500 : Math\.min\(limit \* 2, 300\)/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
 });
@@ -556,6 +556,7 @@ test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 �
   assert.match(source, /LEFT JOIN news_popularity np ON np\.url_key=a\.url_key/);
   assert.match(source, /LEFT JOIN news_popular_items p ON p\.title=a\.title/);
   assert.doesNotMatch(source, /p\.url_key=a\.url_key OR p\.title=a\.title/);
+  assert.match(source, /similarTokens\(titleTokens, old\.titleTokens/);
 });
 
 test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', async () => {

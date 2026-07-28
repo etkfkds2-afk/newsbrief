@@ -147,8 +147,7 @@ function bigrams(value) {
   return out;
 }
 
-function similar(a, b, threshold = 0.64) {
-  const left = bigrams(a), right = bigrams(b);
+function similarTokens(left, right, threshold = 0.64) {
   if (!left.size || !right.size) return false;
   let common = 0;
   for (const token of left) if (right.has(token)) common += 1;
@@ -220,7 +219,7 @@ export async function onRequestGet({ request, env }) {
     }
     // Similar stories are collapsed after the query. Read extra rows so that
     // deduplication does not make a requested 100/300 item page needlessly short.
-    const queryLimit = issueKeyFilter ? 900 : Math.min(limit * 3, 900);
+    const queryLimit = issueKeyFilter ? 500 : Math.min(limit * 2, 300);
     bindings.push(queryLimit);
 
     const order = view === 'popular'
@@ -260,7 +259,10 @@ export async function onRequestGet({ request, env }) {
       // much stricter threshold so separate games are not collapsed together.
       const titleThreshold = category === '바둑' ? 0.86 : 0.64;
       const summaryThreshold = category === '바둑' ? 0.9 : 0.72;
-      const group = accepted.find(old => similar(item.title, old.title, titleThreshold) || similar(first, old.first, summaryThreshold));
+      const titleTokens = bigrams(item.title);
+      const firstTokens = bigrams(first);
+      const group = accepted.find(old => similarTokens(titleTokens, old.titleTokens, titleThreshold)
+        || similarTokens(firstTokens, old.firstTokens, summaryThreshold));
       if (group) {
         if (!group.related.some(old => old.url_key === item.url_key)) {
           group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });
@@ -268,7 +270,7 @@ export async function onRequestGet({ request, env }) {
         }
         continue;
       }
-      accepted.push({ ...item, first, related: [], related_count: 0 });
+      accepted.push({ ...item, first, titleTokens, firstTokens, related: [], related_count: 0 });
     }
     const cachedIssues = category === '바둑'
       ? await loadIssueCache(env, category)
@@ -288,7 +290,7 @@ export async function onRequestGet({ request, env }) {
     // noon Korea time so it still sorts/filters sanely, but showing that
     // fabricated "12:00" to users reads as a bug. Display just the date, the
     // same as any other date-only published_at.
-    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, ...item }) => {
+    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, titleTokens, firstTokens, ...item }) => {
       if (/T03:00:00\.000Z$/.test(String(item.published_at || ''))) item.published_at = String(item.published_at).slice(0, 10);
       return item;
     });
