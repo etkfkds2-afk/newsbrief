@@ -1,4 +1,8 @@
-const CLASSIFY_MODEL = 'claude-sonnet-5';
+// Haiku instead of Sonnet: issue grouping is a straightforward matching task,
+// and Sonnet's cost (worsened by its extended-thinking output tokens) made a
+// single daily baduk classification run ~$0.06 - too expensive to also run
+// general daily on the same Claude budget that article summaries share.
+const CLASSIFY_MODEL = 'claude-haiku-4-5-20251001';
 const WORKERS_AI_CLASSIFY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function buildInstructions(hasExisting, allowStandaloneEvents = false) {

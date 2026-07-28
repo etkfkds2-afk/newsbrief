@@ -258,8 +258,9 @@ jobs:
           RESET_ISSUES: ${{ inputs.reset_issues }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            categories=("바둑")
-            if [ "$(date -u +%u)" = "7" ]; then categories+=("일반"); fi
+            # Baduk always classified first. Both run daily now that Haiku
+            # (not Sonnet) makes issue classification cheap enough.
+            categories=("바둑" "일반")
           else
             categories=("${CLASSIFY_CATEGORY}")
           fi

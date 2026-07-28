@@ -445,13 +445,11 @@ test('자동 수집은 3시간 주기와 watchdog을 사용하고 화면은 10�
 test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallback한다', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
-  assert.match(workflow, /categories=\("바둑"\)/);
+  assert.match(workflow, /categories=\("바둑" "일반"\)/);
   assert.match(workflow, /remaining Workers AI or Claude/);
   assert.match(classifier, /env\.AI\.run/);
   assert.match(classifier, /WORKERS_AI_CLASSIFY_MODEL/);
   assert.match(classifier, /classifyWithAnthropic/);
-  assert.match(workflow, /date -u \+%u/);
-  assert.match(workflow, /categories\+=\("일반"\)/);
 });
 
 test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 기타 이슈를 마지막에 표시한다', async () => {
