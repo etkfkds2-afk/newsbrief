@@ -78,6 +78,7 @@ jobs:
           mkdir dist
           cp newsbrief.html dist/index.html
           cp newsbrief.html dist/newsbrief.html
+          cp login.html dist/login.html
 
       - name: Ensure Cloudflare Pages project
         env:
@@ -106,6 +107,8 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
+          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
         run: |
           jq -n \
             --arg naver_id "$NAVER_CLIENT_ID" \
@@ -113,12 +116,16 @@ jobs:
             --arg kakao_key "$KAKAO_REST_API_KEY" \
             --arg collect_token "$NEWSBRIEF_COLLECT_TOKEN" \
             --arg anthropic_key "$ANTHROPIC_API_KEY" \
+            --arg site_user "$NEWSBRIEF_SITE_USER" \
+            --arg site_password "$NEWSBRIEF_SITE_PASSWORD" \
             '{deployment_configs:{production:{env_vars:{
               NAVER_CLIENT_ID:{type:"secret_text",value:$naver_id},
               NAVER_CLIENT_SECRET:{type:"secret_text",value:$naver_secret},
               KAKAO_REST_API_KEY:{type:"secret_text",value:$kakao_key},
               NEWSBRIEF_COLLECT_TOKEN:{type:"secret_text",value:$collect_token},
               ANTHROPIC_API_KEY:{type:"secret_text",value:$anthropic_key},
+              NEWSBRIEF_SITE_USER:{type:"secret_text",value:$site_user},
+              NEWSBRIEF_SITE_PASSWORD:{type:"secret_text",value:$site_password},
               NEWSBRIEF_USE_ANTHROPIC:{type:"plain_text",value:"0"}
             }}}}' > /tmp/pages-settings.json
           curl --fail-with-body -sS \

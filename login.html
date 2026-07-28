@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NewsBrief 로그인</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--go:#0f766e}
+*{box-sizing:border-box}
+body{font-family:ui-sans-serif,system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text)}
+.box{width:100%;max-width:360px;padding:32px 28px;border:1px solid var(--line);border-radius:20px;background:var(--card);box-shadow:0 14px 36px rgba(16,24,40,.08)}
+.brand{font-weight:950;font-size:21px;letter-spacing:-.8px;margin-bottom:22px}
+.brand-news{color:#0f172a}.brand-brief{color:var(--go)}
+label{display:block;font-size:12.5px;font-weight:700;color:var(--muted);margin:14px 0 6px}
+input{width:100%;padding:11px 12px;border:1px solid #d1d5db;border-radius:12px;font-size:14.5px;outline:none}
+input:focus{border-color:var(--go);box-shadow:0 0 0 3px rgba(15,118,110,.12)}
+button{width:100%;margin-top:20px;padding:12px;border:none;border-radius:12px;background:#111827;color:#fff;font-weight:800;font-size:14.5px;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+.err{margin-top:12px;color:#dc2626;font-size:13px;min-height:1em}
+</style>
+</head>
+<body>
+<form class="box" id="loginForm" autocomplete="on">
+  <div class="brand"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div>
+  <label for="username">아이디</label>
+  <input id="username" name="username" autocomplete="username" autofocus required>
+  <label for="password">비밀번호</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button id="submitBtn" type="submit">로그인</button>
+  <div class="err" id="err"></div>
+</form>
+<script>
+const params = new URLSearchParams(location.search);
+const next = params.get('next') || '/';
+const form = document.getElementById('loginForm');
+const err = document.getElementById('err');
+const btn = document.getElementById('submitBtn');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.textContent = '';
+  btn.disabled = true;
+  try {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      err.textContent = data.error || '로그인에 실패했습니다.';
+      btn.disabled = false;
+      return;
+    }
+    location.replace(next.startsWith('/') ? next : '/');
+  } catch {
+    err.textContent = '서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
