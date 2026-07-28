@@ -547,9 +547,14 @@ test('이슈 선택 후에도 전체 이슈 목록을 유지하고 선택 타일
 
 test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /@media\(max-width:680px\)\{\.issueGrid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}/);
+  assert.match(html, /@media\(max-width:680px\)\{\.issueGrid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\);gap:8px\}/);
   assert.doesNotMatch(html, /@media\(max-width:420px\)\{\.issueGrid\{grid-template-columns:1fr\}\}/);
-  assert.match(html, /\.issueName\{[^}]*overflow-wrap:anywhere/);
+  assert.match(html, /\.issueName\{[^}]*word-break:keep-all;overflow-wrap:anywhere/);
+  assert.match(html, /\.issueCard\{min-height:108px;[^}]*text-align:center\}/);
+  assert.match(html, /\.issueName\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
+  assert.match(html, /\.issueView\{white-space:nowrap\}/);
+  assert.match(html, /\.issueViewDesktop\{display:none\}/);
+  assert.match(html, /class="issueViewMobile">전체보기 <\/span><span class="issueArrow" aria-hidden="true">↓/);
 });
 
 test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
@@ -687,14 +692,15 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
 
 test('핵심 뉴스는 원문 대신 아래에 선택한 요약 카드 한 장만 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /id="hotShowAll" type="button" hidden>전체 보기/);
+  assert.match(html, /id="hotTitleReset" type="button" disabled>오늘의 핵심 뉴스/);
+  assert.doesNotMatch(html, />전체 보기</);
   assert.match(html, /href="#article-\$\{esc\(x\.url_key\)\}" data-jump-key/);
-  assert.match(html, /\$\('hotShowAll'\)\.hidden=!state\.focusKey/);
+  assert.match(html, /\$\('hotTitleReset'\)\.disabled=!state\.focusKey/);
   assert.match(html, /class="hotchip \$\{selected\?'on':''\}"/);
   assert.match(html, /closest\('\[data-jump-key\]'\)/);
   assert.match(html, /state\.focusKey\?state\.items\.filter\(item=>item\.url_key===state\.focusKey\):state\.items/);
   assert.match(html, /state\.focusKey=jump\.dataset\.jumpKey;render\(\)/);
-  assert.match(html, /closest\('#hotShowAll'\)\)\{state\.focusKey='';render\(\);return\}/);
+  assert.match(html, /closest\('#hotTitleReset'\)\)\{state\.focusKey='';render\(\);return\}/);
   assert.match(html, /state\.focusKey='';/);
   assert.match(html, /scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
   assert.match(html, /card\.classList\.add\('issue-focus'\)/);
