@@ -169,8 +169,12 @@ jobs:
             run_source=scheduled
             if [ "$EVENT_SCHEDULE" = "47 * * * *" ]; then
               run_source=watchdog
-              health=$(curl -sS --retry 2 --max-time 30 "https://newsbrief-etkfkds2.pages.dev/api/news/health" || printf '{}')
-              should_collect=$(echo "$health" | jq -r '((.metrics.automatic_age_hours // 999) > 4)')
+              # curl can print one 503 body per retry. jq then emits several
+              # booleans, which corrupts GITHUB_OUTPUT on the following line.
+              # Keep only the final decision and fail open if health is unreachable.
+              health=$(curl -sS --retry 2 --max-time 30 "https://newsbrief-etkfkds2.pages.dev/api/news/health" || true)
+              should_collect=$(printf '%s' "$health" | jq -r '((.metrics.automatic_age_hours // 999) > 4)' | tail -n 1)
+              should_collect=${should_collect:-true}
             fi
           fi
           echo "should_collect=$should_collect" >> "$GITHUB_OUTPUT"

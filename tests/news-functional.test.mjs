@@ -566,6 +566,12 @@ test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', asy
   assert.match(collector, /retryAttemptLimit = forceRetry \? 25 : 24/);
 });
 
+test('watchdog은 재시도된 헬스 응답에서도 단일 실행 결정을 출력한다', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /jq -r '[^\n]+' \| tail -n 1/);
+  assert.match(workflow, /should_collect=\$\{should_collect:-true\}/);
+});
+
 test('만료 직전의 유효한 로그인 세션은 활동 시 갱신한다', async () => {
   const middleware = await readFile(new URL('../functions/_middleware.js', import.meta.url), 'utf8');
   const session = await readFile(new URL('../functions/_lib/session.js', import.meta.url), 'utf8');
