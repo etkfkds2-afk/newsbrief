@@ -425,6 +425,16 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
 });
 
+test('헤더 로그아웃은 계정 표시와 확인 후 세션 종료를 제공한다', async () => {
+  const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(page, /id="accountName"/);
+  assert.match(page, /id="logoutButton"/);
+  assert.match(page, /confirm\('로그아웃할까요\?'\)/);
+  assert.match(page, /fetch\('\/api\/auth\/logout',\{method:'POST'\}\)/);
+  assert.match(page, /location\.replace\('\/login\?next=%2F'\)/);
+  assert.match(page, /\.accountName,.accountDivider\{display:none\}/);
+});
+
 test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 날짜만 저장한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');

@@ -9,10 +9,10 @@
 .issuePanel{margin:0 0 22px;padding:18px;border:1px solid rgba(15,23,42,.1);border-radius:20px;background:linear-gradient(135deg,#fff,#f8fafc);box-shadow:var(--shadow-sm)}.issueHead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px}.issueTitle{font-size:17px;font-weight:950;letter-spacing:-.35px}.issueDesc{margin-top:3px;color:var(--muted);font-size:11.5px}.issueGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.issueCard{display:block;width:100%;min-width:0;padding:13px;border:1px solid #e2e8f0;border-radius:15px;background:#fff;text-decoration:none;color:var(--text);text-align:left;cursor:pointer;transition:.15s}.issueCard:hover{border-color:#94a3b8;transform:translateY(-1px);box-shadow:var(--shadow-sm)}.issueName{font-size:14px;font-weight:900;line-height:1.35}.issueMeta{margin-top:7px;color:#0f766e;font-size:11px;font-weight:800}.issueEmpty{color:var(--muted);font-size:12px;padding:8px 2px}@media(max-width:680px){.issueGrid{grid-template-columns:1fr 1fr}.issuePanel{padding:14px}}@media(max-width:420px){.issueGrid{grid-template-columns:1fr}}
 </style><style>
 .card.issue-focus{outline:3px solid rgba(15,118,110,.3);outline-offset:3px;box-shadow:0 0 0 6px rgba(15,118,110,.08)}
-.top{padding:18px 20px}.brandBlock{min-width:250px}.brand{font-size:40px;letter-spacing:-2.2px;line-height:.9;transition:transform .18s ease}.brand:hover{transform:translateY(-1px)}.brand:after{width:8px;height:8px;margin:0 0 23px 7px;box-shadow:0 0 0 4px rgba(20,184,166,.12)}.tagline{margin-top:12px}
-@media(max-width:680px){.top{padding:16px}.brand{font-size:34px;letter-spacing:-1.8px}.brand:after{margin-bottom:19px}.brandBlock{min-width:0}}
+.top{padding:18px 20px}.brandBlock{min-width:250px}.brand{font-size:40px;letter-spacing:-2.2px;line-height:.9;transition:transform .18s ease}.brand:hover{transform:translateY(-1px)}.brand:after{width:8px;height:8px;margin:0 0 23px 7px;box-shadow:0 0 0 4px rgba(20,184,166,.12)}.tagline{margin-top:12px}.controls{padding-top:29px}.accountBar{position:absolute;top:14px;right:20px;display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:11.5px;font-weight:750}.accountName{color:#64748b}.accountDivider{color:#cbd5e1}.accountLink,.logoutButton{padding:3px 5px;border:0;background:transparent;color:#64748b;font:inherit;text-decoration:none;cursor:pointer;border-radius:7px}.accountLink:hover,.logoutButton:hover{background:#f1f5f9;color:#0f172a}.logoutButton:disabled{opacity:.55;cursor:wait}
+@media(max-width:680px){.top{padding:16px}.brand{font-size:34px;letter-spacing:-1.8px}.brand:after{margin-bottom:19px}.brandBlock{min-width:0;padding-right:68px}.controls{padding-top:0}.accountBar{top:13px;right:16px}.accountName,.accountDivider{display:none}.accountLink{font-size:11px}.logoutButton{padding:5px 7px}}
 </style></head><body>
-<header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div><a id="adminLink" href="/admin" hidden>계정 관리</a></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
+<header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div></div><div class="accountBar"><a class="accountLink" id="adminLink" href="/admin" hidden>계정 관리</a><span class="accountName" id="accountName"></span><span class="accountDivider" aria-hidden="true">·</span><button class="logoutButton" id="logoutButton" type="button">로그아웃</button></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
 <section class="homehero" id="hero"><div class="home-date" id="date"></div><div class="hotcard"><div class="hothead"><div><span class="hotbadge">24H</span><span class="hotmeta" id="updated"></span><div class="hottitle">오늘의 핵심 뉴스</div></div></div><div class="hotpage" id="hot"></div></div></section>
 <section class="issuePanel" id="issuesPanel" aria-labelledby="issuesTitle"><div class="issueHead"><div><div class="issueTitle" id="issuesTitle">일간 이슈 키워드</div><div class="issueDesc" id="issuesDesc"></div></div></div><div class="issueGrid" id="issues"></div></section>
 <div class="sectionTitle" id="sectionTitle">일간 뉴스 요약</div><main class="grid" id="cards"><div class="empty">뉴스를 불러오는 중입니다.</div></main>
@@ -25,7 +25,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
 const VIEW_CACHE_TTL=300000,viewCache=new Map(),viewRequests=new Map();let viewCacheGeneration=0;
 let activeLoadController=null,lastSuccessfulLoad=0;
-fetch('/api/auth/me').then(r=>r.ok?r.json():null).then(me=>{if(me?.admin)$('adminLink').hidden=false}).catch(()=>{});
+fetch('/api/auth/me').then(r=>r.ok?r.json():null).then(me=>{if(!me)return;$('accountName').textContent=me.username||'';if(me?.admin)$('adminLink').hidden=false}).catch(()=>{});
 const parseTime=v=>new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(v||''))?`${v.replace(' ','T')}Z`:v);
 const sortByArticleTime=items=>[...(items||[])].sort((a,b)=>{
   const right=+parseTime(b.published_at||'');
@@ -43,6 +43,16 @@ const relTime=ms=>{
 };
 let toastTimer;
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1800)}
+$('logoutButton').addEventListener('click',async()=>{
+  if(!confirm('로그아웃할까요?'))return;
+  const button=$('logoutButton');button.disabled=true;
+  try{
+    const response=await fetch('/api/auth/logout',{method:'POST'});
+    if(!response.ok)throw Error('로그아웃 실패');
+    clearResponseCache();
+    location.replace('/login?next=%2F');
+  }catch{button.disabled=false;toast('로그아웃하지 못했습니다. 다시 시도해 주세요.')}
+});
 async function fetchTimed(url,options={},timeout=12000){
   const timeoutController=new AbortController(),timer=setTimeout(()=>timeoutController.abort(),timeout);
   const signal=options.signal&&globalThis.AbortSignal?.any?AbortSignal.any([options.signal,timeoutController.signal]):(options.signal||timeoutController.signal);
