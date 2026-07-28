@@ -471,6 +471,17 @@ test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하
   assert.doesNotMatch(html, /issueRelated/);
 });
 
+test('이슈 상세는 직관적인 뒤로가기와 브라우저 앞뒤 탐색 상태를 제공한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /id="issueBack" aria-label="이전 화면으로">←/);
+  assert.match(html, /history\.replaceState\(\{newsbriefSource:true/);
+  assert.match(html, /history\.pushState\(\{newsbriefIssue:true/);
+  assert.match(html, /addEventListener\('popstate',e=>restoreLocation\(e\.state\)\)/);
+  assert.match(html, /url\.searchParams\.set\('issue',issueKey\)/);
+  assert.match(html, /initialParams\.get\('issue'\)/);
+  assert.doesNotMatch(html, /이슈 목록으로/);
+});
+
 test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
