@@ -18,10 +18,10 @@ import { validPassword, validUsername } from '../functions/_lib/news-users.js';
 import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
 
-test('바둑은 공식 대회·기전 결과를 한 건 독립 이슈 후보로 보존한다', () => {
+test('바둑은 공식 대회·리그 행사만 한 건 독립 이슈 후보로 보존한다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ title: '한중 청소년 바둑 스포츠교류 개최' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), true);
+  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), false);
   assert.equal(isStandaloneEventArticle({ title: '김동한 프로기사 근황', summary: '국제 바둑대회에 출전한 경력이 있다.' }), false);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
 });
@@ -32,10 +32,10 @@ test('요약의 공식 대회명과 바둑 기록 기사도 단건 이슈로 보
     summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.'
   };
   assert.equal(standaloneBadukIssueTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
-  assert.equal(standaloneBadukIssueTitle({ title: '김명훈, 명인전서 통산 500승 달성' }), '김명훈 통산 500승');
-  assert.equal(standaloneBadukIssueTitle({ title: '최정, 여자 바둑 1위 탈환' }), '최정 여자바둑 1위 탈환');
-  assert.equal(standaloneBadukIssueTitle({ title: '"2점 차 랭킹 역전" 최정, 여자 바둑 1위 탈환' }), '최정 여자바둑 1위 탈환');
-  assert.equal(standaloneBadukIssueTitle({ title: '신민준, 박정환 꺾고 GS칼텍스배 탈환' }), '신민준 GS칼텍스배 탈환');
+  assert.equal(standaloneBadukIssueTitle({ title: '김명훈, 명인전서 통산 500승 달성' }), '');
+  assert.equal(standaloneBadukIssueTitle({ title: '최정, 여자 바둑 1위 탈환' }), '');
+  assert.equal(standaloneBadukIssueTitle({ title: '"2점 차 랭킹 역전" 최정, 여자 바둑 1위 탈환' }), '');
+  assert.equal(standaloneBadukIssueTitle({ title: '신민준, 박정환 꺾고 GS칼텍스배 탈환' }), '');
   assert.equal(standaloneBadukIssueTitle({ title: '춘천서 챌린지 바둑 리그 6라운드 개최' }), '챌린지 바둑 리그');
   assert.equal(isStandaloneEventArticle(gwangju), true);
   const normalized = normalizeCachedIssues([{ ...gwangju, url_key: 'gwangju', category: '바둑' }], [{
