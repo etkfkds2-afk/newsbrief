@@ -342,7 +342,9 @@ async function fetchGoogleRss(endpoint, attempts = 3) {
 }
 
 async function koreanBadukLatest() {
-  const base = 'https://www.baduk.or.kr/news/report.asp';
+  // report.asp is a JS shell whose list is loaded client-side from
+  // report_in.asp; fetching report.asp itself always yields an empty list.
+  const base = 'https://www.baduk.or.kr/news/report_in.asp';
   try {
     const response = await fetch(base, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/1.0' } });
     if (!response.ok) return [];
@@ -350,10 +352,13 @@ async function koreanBadukLatest() {
     const items = [], seen = new Set();
     for (const match of html.matchAll(/<a[^>]+href=["']([^"']*report_view\.asp\?[^"']*news_no=\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
       const url = new URL(match[1].replace(/&amp;/g, '&'), base).toString();
-      const title = cleanTitle(match[2]);
+      const block = match[2];
+      const title = cleanTitle(block.match(/<dt[^>]*>([\s\S]*?)<\/dt>/i)?.[1] || '');
       if (title.length < 8 || seen.has(url) || isRejectedTitle(title)) continue;
       seen.add(url);
-      items.push({ title, link: url, originallink: url, description: '', pubDate: '', press: '한국기원' });
+      const dateText = normalizeText(block.match(/<span[^>]+class=["']date["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || '');
+      const pubDate = /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : '';
+      items.push({ title, link: url, originallink: url, description: '', pubDate, press: '한국기원' });
       if (items.length >= 12) break;
     }
     return items;
