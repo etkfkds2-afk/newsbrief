@@ -542,6 +542,7 @@ test('이슈 선택 후에도 전체 이슈 목록을 유지하고 선택 타일
   assert.match(html, /else if\(!state\.issueKey\)state\.issueItems=d\.issues\|\|\[\]/);
   assert.match(html, /indexParams\.delete\('issue_key'\)/);
   assert.match(html, /Promise\.all\(\[fetchViewJson\(detailUrl/);
+  assert.match(html, /@media\(hover:hover\) and \(pointer:fine\)\{\.issueCard:hover/);
 });
 
 test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
