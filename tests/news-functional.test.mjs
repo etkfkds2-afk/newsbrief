@@ -409,7 +409,7 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = issueKeyFilter \? 500 : Math\.min\(limit \* 2, 300\)/);
+  assert.match(source, /const queryLimit = issueKeyFilter \? 300 : limit/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
 });
@@ -575,6 +575,11 @@ test('조회 결과는 5분간 재사용하되 주간·월간 데이터는 사�
   assert.match(html, /viewCache\.clear\(\);viewRequests\.clear\(\)/);
   assert.match(html, /viewCacheGeneration\+=1/);
   assert.match(html, /content-visibility:auto/);
+});
+
+test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', async () => {
+  const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(page, /limit:isBaduk\?'120':'150'/);
 });
 
 test('핵심 뉴스는 원문 대신 아래에 선택한 요약 카드 한 장만 표시한다', async () => {

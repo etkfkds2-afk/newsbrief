@@ -219,7 +219,7 @@ export async function onRequestGet({ request, env }) {
     }
     // Similar stories are collapsed after the query. Read extra rows so that
     // deduplication does not make a requested 100/300 item page needlessly short.
-    const queryLimit = issueKeyFilter ? 500 : Math.min(limit * 2, 300);
+    const queryLimit = issueKeyFilter ? 300 : limit;
     bindings.push(queryLimit);
 
     const order = view === 'popular'

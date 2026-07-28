@@ -163,7 +163,7 @@ async function load({silent=false}={}){
       state.heroItems=state.items.slice(0,6);
       state.issueItems=[];
     }else{
-      const p=new URLSearchParams({limit:isBaduk?'200':'300',view:sub==='saved'?'saved':(isBaduk?'latest':'popular')});
+      const p=new URLSearchParams({limit:isBaduk?'120':'150',view:sub==='saved'?'saved':(isBaduk?'latest':'popular')});
       if(isBaduk){
         p.set('category','바둑');
       }else{
