@@ -2,7 +2,7 @@ import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
 import {
   classifyIssues, isStandaloneEventArticle, mergeRepeatedPersonCases,
-  rejectConflictingExistingMatches, standaloneEventTitle
+  normalizeIssueTitle, rejectConflictingExistingMatches, standaloneEventTitle
 } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
@@ -37,6 +37,42 @@ export function buildClassificationPlan(articles, existingPayload, resetIssues =
   };
 }
 
+function tournamentStem(title) {
+  return String(title || '')
+    .replace(/제\s*\d+\s*회|20\d{2}|전국|바둑|선수권|대회/gu, '')
+    .replace(/[\s·-]/g, '')
+    .replace(/배$/u, '');
+}
+
+function groupDateRange(group, articleByKey) {
+  const times = group.url_keys.map(key => Date.parse(articleByKey.get(key)?.published_at || articleByKey.get(key)?.fetched_at || '')).filter(Number.isFinite);
+  return times.length ? [Math.min(...times), Math.max(...times)] : [NaN, NaN];
+}
+
+export function mergeTournamentAliasGroups(groups, articleByKey) {
+  const merged = groups.map(group => ({ ...group, url_keys: [...group.url_keys] }));
+  for (let index = 0; index < merged.length; index += 1) {
+    const target = merged[index];
+    if (!isStandaloneEventArticle({ title: target.title })) continue;
+    for (let otherIndex = merged.length - 1; otherIndex > index; otherIndex -= 1) {
+      const other = merged[otherIndex];
+      if (!isStandaloneEventArticle({ title: other.title })) continue;
+      const left = tournamentStem(target.title), right = tournamentStem(other.title);
+      const shorter = left.length <= right.length ? left : right;
+      const longer = left.length <= right.length ? right : left;
+      if (shorter.length < 2 || !longer.startsWith(shorter)) continue;
+      const [leftMin, leftMax] = groupDateRange(target, articleByKey);
+      const [rightMin, rightMax] = groupDateRange(other, articleByKey);
+      const dateGap = Math.min(Math.abs(leftMin - rightMax), Math.abs(rightMin - leftMax));
+      if (Number.isFinite(dateGap) && dateGap > 3 * 86400000) continue;
+      target.url_keys = [...new Set([...target.url_keys, ...other.url_keys])];
+      if (right.length > left.length) target.title = other.title;
+      merged.splice(otherIndex, 1);
+    }
+  }
+  return merged;
+}
+
 export function enforceIssueRules(groups, articles, category) {
   const articleByKey = new Map(articles.map(article => [article.url_key, article]));
   const claimed = new Set();
@@ -46,8 +82,8 @@ export function enforceIssueRules(groups, articles, category) {
     Number(Boolean(left?.misc || String(left?.key || '').endsWith('|ai:misc')))
     - Number(Boolean(right?.misc || String(right?.key || '').endsWith('|ai:misc'))));
   for (const group of orderedGroups) {
-    const title = String(group?.title || '').trim().slice(0, 40);
     const keys = [...new Set(group?.url_keys || [])].filter(key => articleByKey.has(key) && !claimed.has(key));
+    const title = normalizeIssueTitle(group?.title, keys.map(key => articleByKey.get(key)));
     keys.forEach(key => claimed.add(key));
     if (!keys.length) continue;
     const isMisc = group?.misc || title === '기타' || String(group?.key || '').endsWith('|ai:misc');
@@ -62,7 +98,10 @@ export function enforceIssueRules(groups, articles, category) {
   for (const key of articleByKey.keys()) if (!claimed.has(key)) miscKeys.push(key);
 
   const kept = [];
-  for (const group of mergedByTitle.values()) {
+  const distinctGroups = category === '바둑'
+    ? mergeTournamentAliasGroups([...mergedByTitle.values()], articleByKey)
+    : [...mergedByTitle.values()];
+  for (const group of distinctGroups) {
     const standaloneTournament = category === '바둑' && group.url_keys.length === 1
       && isStandaloneEventArticle(articleByKey.get(group.url_keys[0]));
     if (group.url_keys.length >= 2 || standaloneTournament) kept.push(group);

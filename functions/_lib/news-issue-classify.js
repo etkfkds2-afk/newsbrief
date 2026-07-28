@@ -15,7 +15,7 @@ ${hasExisting ? '\n각 새 기사가 기존 이슈 중 하나와 실제로 같�
 - 새로 만드는 이슈는 정말로 같은 사건을 다루는 기사가 2건 이상 있을 때만 만든다.
 ${allowStandaloneEvents ? '- 예외: 제목에 대회·선수권이 있거나 요약 첫 문장에 현재 열린 정식 바둑대회명이 있으면 단독 1건도 독립 이슈로 만든다. 과거 경력만 언급한 기사는 제외한다.\n' : ''}
 - 같은 번호를 두 이슈에 중복으로 넣지 않는다.
-- 제목은 핵심 인물·기관과 구체적인 사건·결과가 드러나는 10~22자 한국어 명사구로 쓴다. "논란", "관련 소식", 업종명만으로 뭉뚱그리지 않는다.
+- 제목은 핵심 인물·기관과 구체적인 결과가 드러나는 8~18자의 자연스러운 한국어 명사구로 쓴다. 조사 "와/과"로 사건을 억지로 잇지 말고 "논란", "관련 소식", 업종명만으로 뭉뚱그리지 않는다.
   예시: "신진서 삼성화재배 우승", "한국기원 정기이사회 개최", "이세돌 은퇴 이후 근황"
 - 반드시 아래 JSON 배열 형식으로만 응답한다. 다른 설명, 주석, 마크다운 코드블록은 절대 쓰지 않는다.
 
@@ -24,9 +24,14 @@ ${allowStandaloneEvents ? '- 예외: 제목에 대회·선수권이 있거나 �
 
 function cleanEventTitle(value) {
   return String(value || '')
-    .replace(/^제\s*\d+\s*회\s*/u, '')
+    .replace(/^(?:20\d{2}\s*|제\s*\d+\s*회\s*)+/u, '')
     .replace(/\s+/g, ' ')
+    .replace(/(선수권대회|바둑대회|대회).+$/u, '$1')
     .replace(/(대회)(?:가|이|은|는|에서|를|을)?$/u, '$1')
+    .replace('부산광역시장배', '부산시장배')
+    .replace('고양특례시장배', '고양시장배')
+    .replace('강원특별자치도 장애인', '강원장애인')
+    .replace(/하찬석국수배/u, '하찬석 국수배')
     .trim()
     .slice(0, 40);
 }
@@ -98,6 +103,19 @@ export function mergeRepeatedPersonCases(groups, articles) {
       .filter(key => articleByKey.has(key));
   }
   return next.filter(group => group.url_keys.length > 0);
+}
+
+export function normalizeIssueTitle(title, articles = []) {
+  const raw = String(title || '').replace(/[“”‘’"']/g, '').trim().slice(0, 40);
+  const context = `${raw} ${articles.map(article => `${article?.title || ''} ${article?.summary || ''}`).join(' ')}`;
+  if (/한돌/u.test(context) && /(?:한중|중국)/u.test(context) && /청소년/u.test(context)) return '한중청소년교류 한돌 지원';
+  if (/(?:대회|선수권)/u.test(raw)) return standaloneEventTitle({ title: raw }) || raw;
+  if (/신진서/u.test(context) && /카타고/u.test(context)) {
+    const hasResult = /(?:격파|꺾|승리|우승|완승|2승)/u.test(context);
+    return hasResult ? '신진서 카타고 AI 격파' : '신진서 카타고전 전략';
+  }
+  if (/장윤기/u.test(context) && SERIOUS_CASE_WORDS.test(context)) return '장윤기 여고생 납치·살해 사건';
+  return raw;
 }
 
 function buildListing(articles) {

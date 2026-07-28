@@ -6,9 +6,9 @@ import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSection
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
   classifyIssues, hasIncidentLocationConflict, hasIssueDirectionConflict, isStandaloneEventArticle,
-  mergeRepeatedPersonCases, rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
+  mergeRepeatedPersonCases, normalizeIssueTitle, rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
 } from '../functions/_lib/news-issue-classify.js';
-import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
+import { buildClassificationPlan, enforceIssueRules, mergeTournamentAliasGroups } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
 import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
 import { createSessionCookie, readSession } from '../functions/_lib/session.js';
@@ -71,6 +71,19 @@ test('AI가 놓친 동일 인물 강력사건 후속 기사도 기존 이슈로 
   }]);
 });
 
+test('AI의 어색한 신진서·장윤기 이슈 제목을 자연스러운 고정 제목으로 교정한다', () => {
+  assert.equal(normalizeIssueTitle('신진서 카타고와 기신전 우승', [
+    { title: '신진서, AI 카타고에 2승 1패 역전승' }
+  ]), '신진서 카타고 AI 격파');
+  assert.equal(normalizeIssueTitle('장윤기 여고생 납치 계획 대화록 증거 인정', [
+    { title: '이채원 양 살해 장윤기 부친이 증거 인멸' }
+  ]), '장윤기 여고생 납치·살해 사건');
+  assert.equal(normalizeIssueTitle('부산시장배 전국바둑대회 아마 최강부', []), '부산시장배 전국바둑대회');
+  assert.equal(normalizeIssueTitle('NHN 바둑 AI 한돌 한중 청소년 훈련 지원', []), '한중청소년교류 한돌 지원');
+  assert.equal(normalizeIssueTitle('2026 평택시장배 전국바둑대회', []), '평택시장배 전국바둑대회');
+  assert.equal(normalizeIssueTitle('제14회 하찬석국수배 영재바둑대회', []), '하찬석 국수배 영재바둑대회');
+});
+
 test('급락 이슈에 전고점 회복 전망 기사를 합치지 않는다', () => {
   const recovery = { title: '삼전·SK하이닉스 전고점 회복 전망', summary: '주가가 다시 상승할 것으로 내다봤다.' };
   assert.equal(hasIssueDirectionConflict('반도체 주가 급락 코스피 약세', recovery), true);
@@ -94,7 +107,7 @@ test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 �
     { key: '바둑|ai:misc', title: '기타', url_keys: ['tournament'], misc: true }
   ], articles, '바둑');
   assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
-    ['신진서 AI 격파', ['pair-a', 'pair-b']],
+    ['신진서 카타고 AI 격파', ['pair-a', 'pair-b']],
     ['무안 청소년 온라인 바둑대회', ['tournament']],
     ['기타', ['profile']]
   ]);
@@ -108,6 +121,21 @@ test('일반 뉴스는 대회 기사도 한 건이면 기타로 보낸다', () =
   assert.deepEqual(groups, [
     { key: '일반|ai:misc', title: '기타', url_keys: ['general-event'], misc: true }
   ]);
+});
+
+test('같은 날짜의 영종국제도시배와 영종바둑대회 축약명은 한 이슈로 합친다', () => {
+  const articles = [
+    { url_key: 'official', title: '제3회 영종국제도시배 전국바둑대회', published_at: '2026-07-18T03:00:00Z' },
+    { url_key: 'short', title: '영종바둑대회 성료', published_at: '2026-07-18T08:00:00Z' }
+  ];
+  const byKey = new Map(articles.map(article => [article.url_key, article]));
+  const merged = mergeTournamentAliasGroups([
+    { key: '바둑|ai:1', title: '제3회 영종국제도시배 전국바둑대회', url_keys: ['official'] },
+    { key: '바둑|ai:2', title: '영종바둑대회', url_keys: ['short'] }
+  ], byKey);
+  assert.deepEqual(merged, [{
+    key: '바둑|ai:1', title: '제3회 영종국제도시배 전국바둑대회', url_keys: ['official', 'short']
+  }]);
 });
 
 test('해외 사망 이슈에 지역이 다른 국내 사망 사고를 합치지 않는다', () => {
