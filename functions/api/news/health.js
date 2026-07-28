@@ -64,7 +64,13 @@ export async function onRequestGet({ env }) {
         claude_budget_month: String(state.claude_budget_month || ''),
         summary_exhausted: Number(exhausted?.count || 0)
       }
-    }, failures.length ? 503 : 200);
+    // The endpoint itself is reachable and D1 queries succeeded. Content
+    // freshness/quality failures are operational diagnostics, not an HTTP
+    // service outage. Returning 503 here made curl, Cloudflare and external
+    // monitors retry a healthy endpoint and report misleading server
+    // disconnects. Callers should inspect `ok`/`failures`; 503 is reserved for
+    // an actual health-check execution failure in the catch block below.
+    }, 200);
   } catch (error) {
     return json({ ok: false, failures: ['health_check_error'], error: error.message }, 503);
   }

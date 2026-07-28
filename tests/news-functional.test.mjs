@@ -157,7 +157,7 @@ test('예약 실행은 production 건강 점검 실패 시 GitHub 이슈를 만�
   assert.match(workflow, /gh issue create/);
 });
 
-test('건강 점검 API는 정상 운영과 발행시간 누락 장애를 구분한다', async () => {
+test('건강 점검 API는 콘텐츠 경고를 서버 장애 응답과 분리한다', async () => {
   const makeEnv = missing => ({ DB: {
     async batch() { return []; },
     prepare(sql) {
@@ -185,8 +185,16 @@ test('건강 점검 API는 정상 운영과 발행시간 누락 장애를 구분
   const unhealthy = await getNewsHealth({ env: makeEnv(2) });
   assert.equal(healthy.status, 200);
   assert.equal((await healthy.json()).ok, true);
-  assert.equal(unhealthy.status, 503);
-  assert.deepEqual((await unhealthy.json()).failures, ['published_time_complete']);
+  assert.equal(unhealthy.status, 200);
+  const warning = await unhealthy.json();
+  assert.equal(warning.ok, false);
+  assert.deepEqual(warning.failures, ['published_time_complete']);
+});
+
+test('예약 건강 점검은 HTTP 200이어도 응답의 ok가 false면 경고한다', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /health_ok=\$\(jq -r '\.ok \/\/ false'/);
+  assert.match(workflow, /\[ "\$health_ok" != "true" \]/);
 });
 
 test('정기 수집은 명백히 불량한 일반 요약만 재요약 대기열로 격리한다', async () => {

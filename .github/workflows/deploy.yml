@@ -337,7 +337,8 @@ jobs:
             status="000"
           fi
           cat /tmp/newsbrief-health.json
-          if [ "$status" != "200" ]; then
+          health_ok=$(jq -r '.ok // false' /tmp/newsbrief-health.json 2>/dev/null || printf 'false')
+          if [ "$status" != "200" ] || [ "$health_ok" != "true" ]; then
             echo "unhealthy=true" >> "$GITHUB_OUTPUT"
           else
             echo "unhealthy=false" >> "$GITHUB_OUTPUT"
