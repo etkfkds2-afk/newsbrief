@@ -51,15 +51,18 @@ on:
         default: false
         type: boolean
   schedule:
-    # GitHub may delay scheduled jobs during busy periods. Running every 15
-    # Collect and refresh all news views every three hours. URL keys in D1 make
-    # each collection idempotent, so a slower cadence avoids needless requests.
+    # GitHub may delay or occasionally drop scheduled runs during busy
+    # periods (observed firsthand: gaps of several hours with no trigger at
+    # all, especially on days with many manual/push-triggered runs). Collect
+    # and refresh all news views every three hours; URL keys in D1 make each
+    # collection idempotent, so a slower cadence avoids needless requests.
     - cron: '17 */3 * * *'
     # An hourly watchdog only collects when the last automatic run is over four
     # hours old. The offset avoids GitHub's busiest top-of-hour scheduler window.
     - cron: '47 * * * *'
-    # Update baduk issues daily. General issues run only on Sunday UTC
-    # (Monday morning in Korea) to keep Claude spending low.
+    # Classify issue keywords for both categories daily (baduk first, then
+    # general - see classify-issues job). Haiku (not Sonnet) keeps this cheap
+    # enough to run general daily too instead of only on Sundays.
     - cron: '23 21 * * *'
 
 jobs:
@@ -178,6 +181,11 @@ jobs:
           NEWSBRIEF_RUN_SOURCE: ${{ steps.collection-gate.outputs.run_source }}
         run: node scripts/google-news-discovery.mjs
 
+      # For a plain run (no backfill/repair_* input), this step intentionally
+      # does nothing: runs stays 0, so the loop body below never executes.
+      # The one real collection call for that case already happened in the
+      # previous step - google-news-discovery.mjs POSTs to /api/news/collect
+      # itself. This step only does work for backfill/repair_* flows.
       - name: Trigger NewsBrief collection
         if: steps.collection-gate.outputs.should_collect == 'true'
         env:
@@ -308,16 +316,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # This job has no actions/checkout step, so gh's git-based repo
+          # detection fails ("not a git repository") - every one of these
+          # commands was erroring out instead of ever filing an alert.
+          # --repo makes it explicit and skips that detection entirely.
           title="NewsBrief 자동 운영 경고"
-          issue=$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number // empty')
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')
           body="$(date -u '+%Y-%m-%d %H:%M:%S UTC') 자동 건강 점검 실패
 
           실행: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
           $(cat /tmp/newsbrief-health.json)"
           if [ -n "$issue" ]; then
-            gh issue comment "$issue" --body "$body"
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --title "$title" --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
           fi
           exit 1
