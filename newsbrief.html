@@ -12,7 +12,7 @@
 .top{padding:18px 20px}.brandBlock{min-width:250px}.brand{font-size:40px;letter-spacing:-2.2px;line-height:.9;transition:transform .18s ease}.brand:hover{transform:translateY(-1px)}.brand:after{width:8px;height:8px;margin:0 0 23px 7px;box-shadow:0 0 0 4px rgba(20,184,166,.12)}.tagline{margin-top:12px}
 @media(max-width:680px){.top{padding:16px}.brand{font-size:34px;letter-spacing:-1.8px}.brand:after{margin-bottom:19px}.brandBlock{min-width:0}}
 </style></head><body>
-<header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
+<header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div><a id="adminLink" href="/admin" hidden>계정 관리</a></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
 <section class="homehero" id="hero"><div class="home-date" id="date"></div><div class="hotcard"><div class="hothead"><div><span class="hotbadge">24H</span><span class="hotmeta" id="updated"></span><div class="hottitle">오늘의 핵심 뉴스</div></div></div><div class="hotpage" id="hot"></div></div></section>
 <section class="issuePanel" id="issuesPanel" aria-labelledby="issuesTitle"><div class="issueHead"><div><div class="issueTitle" id="issuesTitle">일간 이슈 키워드</div><div class="issueDesc" id="issuesDesc"></div></div></div><div class="issueGrid" id="issues"></div></section>
 <div class="sectionTitle" id="sectionTitle">일간 뉴스 요약</div><main class="grid" id="cards"><div class="empty">뉴스를 불러오는 중입니다.</div></main>
@@ -25,6 +25,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
 const VIEW_CACHE_TTL=300000,viewCache=new Map(),viewRequests=new Map();let viewCacheGeneration=0;
 let activeLoadController=null,lastSuccessfulLoad=0;
+fetch('/api/auth/me').then(r=>r.ok?r.json():null).then(me=>{if(me?.admin)$('adminLink').hidden=false}).catch(()=>{});
 const parseTime=v=>new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(v||''))?`${v.replace(' ','T')}Z`:v);
 const sortByArticleTime=items=>[...(items||[])].sort((a,b)=>{
   const right=+parseTime(b.published_at||'');

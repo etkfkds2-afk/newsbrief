@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
-import { googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
+import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
   classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches
@@ -13,6 +13,9 @@ import { onRequestPost as updateNewsItem } from '../functions/api/news/item.js';
 import { createSessionCookie, readSession } from '../functions/_lib/session.js';
 import { onRequest as authMiddleware } from '../functions/_middleware.js';
 import { onRequestPost as login } from '../functions/api/auth/login.js';
+import { validPassword, validUsername } from '../functions/_lib/news-users.js';
+import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
+import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
 
 test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 된다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
@@ -157,6 +160,13 @@ test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 �
   assert.match(workflow, /repair_categories:/);
   assert.equal(naverSectionCategory(`sectionId : "100"`), '정치');
   assert.equal(naverSectionCategory(`"section_id":"105"`), '');
+});
+
+test('네이버 외 언론사의 JSON-LD·메타 섹션도 카테고리로 사용한다', () => {
+  assert.equal(articleSectionCategory('<script type="application/ld+json">{"articleSection":"경제"}</script>'), '경제');
+  assert.equal(articleSectionCategory('<meta property="article:section" content="국제">'), '세계');
+  assert.equal(articleSectionCategory('<meta name="section" content="문화/연예">'), '생활/문화');
+  assert.equal(articleSectionCategory('<meta name="section" content="IT과학">'), '');
 });
 
 test('IT 과학 카테고리는 수집·분류·화면·일반 피드에서 제외한다', async () => {
@@ -623,7 +633,16 @@ test('바둑 검색에 섞인 무관한 기사는 Claude 대상으로 분류하�
 
 test('바둑 표현을 비유로만 쓴 환경·기술 기사는 바둑으로 분류하지 않는다', () => {
   assert.equal(isBadukRelevant('일론 머스크가 그린 환경 유토피아', '세계 시장을 바둑판처럼 보는 기술 기사다.'), false);
+  assert.equal(isBadukRelevant("[한경에세이] 일론 머스크의 '로봇 유토피아'", 'AI와 로봇 발전으로 모든 상품과 서비스가 공급되는 사회를 전망했다.'), false);
+  assert.equal(isBadukRelevant('김영훈 장관 "AI시대엔 새 사회제도 발명해야"', '노동 복지 체계를 논의했다.'), false);
   assert.equal(isBadukRelevant('신진서, 세계바둑 결승 진출', '신진서 9단이 결승 대국을 치른다.'), true);
+});
+
+test('기존 바둑 목록은 정상 기사를 보존하고 명백한 AI 일반기사만 숨긴다', () => {
+  assert.equal(isBadukDisplayRelevant('쏘팔코사놀 최고기사 결정전, 최강 vs 어린이 승부 펼쳐', '어린이와 프로의 특별 대국'), true);
+  assert.equal(isBadukDisplayRelevant('알파고 쇼크 10년', '바둑 AI와 함께 성장한 기사들의 이야기'), true);
+  assert.equal(isBadukDisplayRelevant("[한경에세이] 일론 머스크의 '로봇 유토피아'", 'AI와 노동의 미래를 전망했다.'), false);
+  assert.equal(isBadukDisplayRelevant('궤도, AI 시대 경쟁력은 검증과 본질', '기업의 AI 활용을 강연했다.'), false);
 });
 
 test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시도한 순서로 순환한다', async () => {
@@ -754,6 +773,53 @@ test('복수 계정 로그인은 서명된 쿠키에 서로 다른 사용자 ID�
   assert.equal((await readSession(cookieB, env.NEWSBRIEF_SESSION_SECRET)).userId, 'member_b');
 });
 
+test('관리 계정 입력은 소문자 아이디와 4~64자 비밀번호만 허용한다', () => {
+  assert.equal(validUsername('member_01'), true);
+  assert.equal(validUsername('Member_01'), false);
+  assert.equal(validUsername('ab'), false);
+  assert.equal(validPassword('1234'), true);
+  assert.equal(validPassword('123'), false);
+});
+
+test('일반 사용자는 계정 관리 API를 열거나 수정할 수 없다', async () => {
+  const request = new Request('https://example.com/api/admin/users', { headers: { 'x-news-user': 'account:member' } });
+  assert.equal((await listUsers({ request, env: {} })).status, 403);
+  assert.equal((await updateUser({ request: new Request(request, { method: 'POST' }), env: {} })).status, 403);
+});
+
+test('관리자 본인 계정 삭제는 서버에서 거부한다', async () => {
+  const response = await updateUser({
+    request: new Request('https://example.com/api/admin/users', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-news-user': 'account:admin0221' },
+      body: JSON.stringify({ action: 'delete', username: 'admin0221' })
+    }), env: {}
+  });
+  assert.equal(response.status, 400);
+});
+
+test('관리자 화면과 배포 산출물은 관리자 전용 계정 관리를 포함한다', async () => {
+  const page = await readFile(new URL('../admin.html', import.meta.url), 'utf8');
+  const home = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const schema = await readFile(new URL('../functions/_lib/news-db.js', import.meta.url), 'utf8');
+  assert.match(page, /계정 추가/);
+  assert.match(page, /비밀번호 변경/);
+  assert.match(page, /아이디 변경/);
+  assert.match(page, /data-action="delete"/);
+  assert.match(home, /me\?\.admin/);
+  assert.match(workflow, /cp admin\.html dist\/admin\.html/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS news_users/);
+});
+
+test('아이디 변경은 저장·삭제 데이터를 새 계정으로 이전하고 기존 계정을 비활성화한다', async () => {
+  const source = await readFile(new URL('../functions/api/admin/users.js', import.meta.url), 'utf8');
+  assert.match(source, /INSERT OR IGNORE INTO news_saved/);
+  assert.match(source, /INSERT OR IGNORE INTO news_hidden/);
+  assert.match(source, /DELETE FROM news_saved WHERE user_id=/);
+  assert.match(source, /oldUsername === adminUsername/);
+  assert.match(source, /active=0/);
+});
+
 test('미들웨어는 브라우저의 위조 사용자 ID를 로그인 계정 ID로 덮어쓴다', async () => {
   const secret = 'middleware-session-secret';
   const cookie = await createSessionCookie(secret, 'member_a');
@@ -775,6 +841,19 @@ test('미들웨어는 브라우저의 위조 사용자 ID를 로그인 계정 ID
 test('미들웨어는 검증한 세션을 갱신 판단에 재사용한다', async () => {
   const middleware = await readFile(new URL('../functions/_middleware.js', import.meta.url), 'utf8');
   assert.match(middleware, /sessionNeedsRefresh\(cookieHeader, sessionSecret, session\)/);
+});
+
+test('삭제되거나 비밀번호가 변경된 계정의 기존 세션은 즉시 거부한다', async () => {
+  const secret = 'revocation-session-secret';
+  const cookie = await createSessionCookie(secret, 'removed');
+  const env = { NEWSBRIEF_SESSION_SECRET: secret, DB: {
+    prepare() { return { bind() { return this; }, async first() { return { active: 0, updated_at: '2026-07-28 00:00:00' }; } }; }
+  } };
+  const response = await authMiddleware({
+    request: new Request('https://example.com/api/news/articles', { headers: { cookie } }), env,
+    next: async () => new Response('should not run')
+  });
+  assert.equal(response.status, 401);
 });
 
 test('삭제 API는 대표 기사와 관련 기사 키를 한 배치로 숨긴다', async () => {

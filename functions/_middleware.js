@@ -34,6 +34,24 @@ export async function onRequest({ request, env, next }) {
   const cookieHeader = request.headers.get('cookie');
   const session = await readSession(cookieHeader, sessionSecret, env.NEWSBRIEF_SITE_USER || 'default');
   if (session) {
+    if (env.DB && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/admin'))) {
+      const account = await env.DB.prepare('SELECT active,updated_at FROM news_users WHERE username=?').bind(session.userId).first()
+        .catch(error => {
+          if (/no such table/i.test(error.message)) return null;
+          throw error;
+        });
+      const changedText = String(account?.updated_at || '');
+      const changedAt = changedText ? Date.parse(/Z$|[+-]\d\d:\d\d$/.test(changedText) ? changedText : `${changedText.replace(' ', 'T')}Z`) : 0;
+      if (account && (!account.active || !session.issuedAt || changedAt > session.issuedAt)) {
+        if (url.pathname.startsWith('/api/')) {
+          return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+            status: 401,
+            headers: { 'content-type': 'application/json; charset=utf-8' }
+          });
+        }
+        return Response.redirect(`${url.origin}/login?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
+      }
+    }
     const headers = new Headers(request.headers);
     headers.set('x-news-user', `account:${session.userId}`);
     const response = await next(new Request(request, { headers }));

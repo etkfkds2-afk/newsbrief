@@ -42,7 +42,7 @@ on:
         default: false
         type: boolean
       repair_categories:
-        description: '최근 일반기사의 네이버 원문 섹션 기준 카테고리 복구'
+        description: '최근 일반기사의 원문 섹션 기준 카테고리 복구'
         required: false
         default: false
         type: boolean
@@ -102,6 +102,7 @@ jobs:
           cp newsbrief.html dist/index.html
           cp newsbrief.html dist/newsbrief.html
           cp login.html dist/login.html
+          cp admin.html dist/admin.html
 
       - name: Ensure Cloudflare Pages project
         env:

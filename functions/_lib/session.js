@@ -25,8 +25,9 @@ async function hmac(secret, message) {
 
 export async function createSessionCookie(secret, userId = 'default') {
   const expiry = Date.now() + SESSION_DAYS * 86400000;
+  const issuedAt = Date.now();
   const encodedUser = base64UrlEncode(new TextEncoder().encode(String(userId || 'default').slice(0, 100)));
-  const message = `${expiry}.${encodedUser}`;
+  const message = `${expiry}.${encodedUser}.${issuedAt}`;
   const signature = await hmac(secret, message);
   const value = `${message}.${signature}`;
   return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
@@ -41,14 +42,17 @@ export async function readSession(cookieHeader, secret, legacyUser = 'default') 
   if (!match || !secret) return null;
   const parts = decodeURIComponent(match[1]).split('.');
   const legacy = parts.length === 2;
-  const [expiry, encodedUser, signature] = legacy ? [parts[0], '', parts[1]] : parts;
+  const previousUserCookie = parts.length === 3;
+  const [expiry, encodedUser, issuedAt, signature] = legacy
+    ? [parts[0], '', '0', parts[1]]
+    : previousUserCookie ? [parts[0], parts[1], '0', parts[2]] : parts;
   if (!expiry || !signature || !Number.isFinite(Number(expiry)) || Date.now() > Number(expiry)) return null;
-  const expected = await hmac(secret, legacy ? expiry : `${expiry}.${encodedUser}`);
+  const expected = await hmac(secret, legacy ? expiry : previousUserCookie ? `${expiry}.${encodedUser}` : `${expiry}.${encodedUser}.${issuedAt}`);
   if (expected !== signature) return null;
-  if (legacy) return { userId: String(legacyUser || 'default').slice(0, 100), expiry: Number(expiry), legacy: true };
+  if (legacy) return { userId: String(legacyUser || 'default').slice(0, 100), expiry: Number(expiry), issuedAt: 0, legacy: true };
   try {
     const userId = new TextDecoder().decode(base64UrlDecode(encodedUser)).slice(0, 100);
-    return userId ? { userId, expiry: Number(expiry), legacy: false } : null;
+    return userId ? { userId, expiry: Number(expiry), issuedAt: Number(issuedAt) || 0, legacy: previousUserCookie } : null;
   } catch { return null; }
 }
 

@@ -8,6 +8,8 @@ import {
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
+import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
+export { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 
 const SEARCHES = [
   ['바둑', '바둑 대회 프로기사'],
@@ -47,20 +49,6 @@ const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북
 function validPublishedSummary(summary, title, category) {
   return validateThreeLineSummary(summary, title)
     && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
-}
-
-export function isBadukRelevant(title, body = '') {
-  const titleText = String(title || '');
-  const strongTitle = /(?:바둑(?:대회|리그|기전|기사|棋士|계)|대국|기전|한국기원|대한바둑협회|신진서|최정\s*9단|카타고|프로기사)/i;
-  const badukContext = /(?:바둑|대국|기전|한국기원|대한바둑협회|프로기사|입단|단(?:\s|$)|棋士)/i;
-  const badukAction = /(?:대국|우승|준우승|결승|본선|예선|출전|승리|패배|개최|개막|입단|바둑판|흑번|백번|수읽기|포석)/i;
-  if (strongTitle.test(titleText) || (badukContext.test(titleText) && badukAction.test(titleText))) return true;
-  const bodyText = String(body || '').slice(0, 5000);
-  const signals = [
-    /바둑/i, /한국기원/i, /대한바둑협회/i, /신진서/i, /최정\s*9단/i,
-    /카타고/i, /(?:프로|아마추어)\s*기사/i, /(?:본선|결승|예선)\s*대국/i, /바둑리그/i
-  ];
-  return signals.filter(pattern => pattern.test(bodyText)).length >= 2 && badukAction.test(bodyText);
 }
 
 function classify(category, title, body = '') {
@@ -147,6 +135,20 @@ export function naverSectionCategory(html = '') {
   return NAVER_SECTION_CATEGORIES[sectionId] || '';
 }
 
+export function articleSectionCategory(html = '') {
+  const text = String(html || '');
+  const raw = text.match(/["']articleSection["']\s*:\s*["']([^"']+)/i)?.[1]
+    || text.match(/<meta[^>]+(?:property|name)=["'](?:article:section|section)["'][^>]+content=["']([^"']+)/i)?.[1]
+    || text.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:section|section)["']/i)?.[1]
+    || '';
+  if (/(?:정치|국회|대통령)/u.test(raw)) return '정치';
+  if (/(?:경제|금융|증권|부동산|산업|기업)/u.test(raw)) return '경제';
+  if (/(?:사회|지역|교육|사건|법원)/u.test(raw)) return '사회';
+  if (/(?:생활|문화|연예|스포츠|건강|여행)/u.test(raw)) return '생활/문화';
+  if (/(?:세계|국제|글로벌|해외)/u.test(raw)) return '세계';
+  return '';
+}
+
 function articleSource(url, discovery = '', press = '') {
   try {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
@@ -205,7 +207,7 @@ async function fetchArticleText(url) {
       || html.match(/data-date-time=["']([^"']+)/i)?.[1]
       || ''
     );
-    const sectionCategory = naverSectionCategory(html);
+    const sectionCategory = naverSectionCategory(html) || articleSectionCategory(html);
     let jsonBody = '';
     for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
       try {
@@ -233,14 +235,13 @@ async function fetchArticleText(url) {
 }
 
 async function repairGeneralCategories(env, limit = 10) {
-  // Check the newest unchecked portal articles first. The former numeric cursor
+  // Check the newest unchecked articles first. The former numeric cursor
   // walked from the oldest row in batches of ten, so newly reported mistakes
   // could remain visible for many maintenance runs.
   const rows = await env.DB.prepare(`SELECT a.id,a.url_key,a.url,a.title,a.body_text,a.category
     FROM news_articles a
     LEFT JOIN news_category_checks c ON c.url_key=a.url_key
     WHERE a.category<>'바둑' AND a.summary_quality='full' AND c.url_key IS NULL
-      AND (a.source='NAVER' OR lower(a.url) LIKE '%naver.com/%')
       AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-30 days')
     ORDER BY datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC, a.id DESC
     LIMIT ?`).bind(Math.min(Math.max(Number(limit) || 10, 1), 10)).all();

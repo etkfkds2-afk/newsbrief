@@ -2,6 +2,7 @@ import { json, userId } from '../../_lib/news-db.js';
 import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
+import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -254,6 +255,7 @@ export async function onRequestGet({ request, env }) {
       item.outlet = outletFor(item);
       if (!validateThreeLineSummary(item.summary, item.title)) continue;
       if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
+      if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;
       const first = String(item.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '');
       // Baduk headlines legitimately repeat player and tournament names. Use a
       // much stricter threshold so separate games are not collapsed together.
