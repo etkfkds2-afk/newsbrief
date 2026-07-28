@@ -14,7 +14,7 @@
 </style></head><body>
 <header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief"><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
 <section class="homehero" id="hero"><div class="home-date" id="date"></div><div class="hotcard"><div class="hothead"><div><span class="hotbadge">24H</span><span class="hotmeta" id="updated"></span><div class="hottitle">오늘의 핵심 뉴스</div></div></div><div class="hotpage" id="hot"></div></div></section>
-<section class="issuePanel" id="issuesPanel" aria-labelledby="issuesTitle"><div class="issueHead"><div><div class="issueTitle" id="issuesTitle">일간 이슈 키워드</div><div class="issueDesc" id="issuesDesc"></div></div><button class="pill" id="clearIssue" type="button" style="display:none">전체 이슈 보기</button></div><div class="issueGrid" id="issues"></div></section>
+<section class="issuePanel" id="issuesPanel" aria-labelledby="issuesTitle"><div class="issueHead"><div><div class="issueTitle" id="issuesTitle">일간 이슈 키워드</div><div class="issueDesc" id="issuesDesc"></div></div></div><div class="issueGrid" id="issues"></div></section>
 <div class="sectionTitle" id="sectionTitle">일간 뉴스 요약</div><main class="grid" id="cards"><div class="empty">뉴스를 불러오는 중입니다.</div></main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
@@ -58,10 +58,10 @@ async function fetchJson(url,options){
   for(let attempt=0;attempt<attempts;attempt+=1){
     try{
       const response=await fetchTimed(url,config,15000);
-      if(response.status===401){
-        const next=encodeURIComponent(location.pathname+location.search);
+      if(response.status===401||(response.redirected&&new URL(response.url).pathname==='/login')){
+        const next=encodeURIComponent(location.pathname+location.search+location.hash);
         location.replace(`/login?next=${next}`);
-        const authError=Error('로그인이 만료되었습니다.');authError.authExpired=true;throw authError;
+        throw Object.assign(Error('로그인이 필요합니다.'),{name:'AuthRequiredError'});
       }
       const type=(response.headers.get('content-type')||'').toLowerCase();
       const isJson=type.includes('application/json');
@@ -72,8 +72,8 @@ async function fetchJson(url,options){
       const retryable=isGet&&(!isJson||response.status===408||response.status===425||response.status===429||response.status>=500);
       if(!retryable)throw Error(message);
       lastError=Error(message);
-    }catch(error){if(error?.authExpired)throw error;if(error?.name==='AbortError'&&config.signal?.aborted)throw error;lastError=error}
-    if(attempt<attempts-1)await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
+    }catch(error){if(error?.name==='AuthRequiredError'||(error?.name==='AbortError'&&config.signal?.aborted))throw error;lastError=error}
+    if(attempt<attempts-1)await new Promise(resolve=>setTimeout(resolve,400*2**attempt+Math.random()*250));
   }
   if(isGet){try{const cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(cached){console.warn('NewsBrief API fallback',url);return cached}}catch{}}
   throw Error(lastError?.name==='AbortError'?'서버 응답이 지연되고 있습니다. 다시 시도해 주세요.':'서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.');
@@ -87,19 +87,6 @@ async function fetchViewJson(url,options){
   if(options?.signal)return request;
   viewRequests.set(url,request);
   try{return await request}finally{viewRequests.delete(url)}
-}
-function periodUrl(section,sub){
-  const isBaduk=section==='baduk';
-  const p=new URLSearchParams({limit:isBaduk?'200':'300',view:isBaduk?'latest':'popular'});
-  if(isBaduk)p.set('category','바둑');else p.set('exclude_baduk','1');
-  p.set('hours',sub==='weekly'?'168':'720');p.set('issues','1');
-  return`/api/news/articles?${p}`;
-}
-function prefetchPeriods(section){
-  const connection=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
-  if(connection?.saveData||/2g/.test(connection?.effectiveType||''))return;
-  const run=async()=>{for(const sub of ['weekly','monthly']){await fetchViewJson(periodUrl(section,sub)).catch(()=>{});await new Promise(resolve=>setTimeout(resolve,250))}};
-  if(globalThis.requestIdleCallback)requestIdleCallback(run,{timeout:1200});else setTimeout(run,100);
 }
 function clearResponseCache(){viewCacheGeneration+=1;viewCache.clear();viewRequests.clear();for(let i=sessionStorage.length-1;i>=0;i-=1){const key=sessionStorage.key(i);if(key?.startsWith(RESPONSE_CACHE_PREFIX))sessionStorage.removeItem(key)}}
 const SUBVIEWS={
@@ -132,8 +119,7 @@ function renderIssues(){
   if(!show)return;
   $('issuesTitle').textContent=sub==='weekly'?'주간 이슈 키워드':'월간 이슈 키워드';
   $('issuesDesc').textContent='';
-  $('clearIssue').style.display=state.issueKey?'inline-flex':'none';
-  $('issues').innerHTML=state.issueItems.map(issue=>`<button type="button" class="issueCard" data-issue-key="${esc(issue.key)}"><div class="issueName">${esc(issue.title)}</div><div class="issueMeta">관련 기사 ${issue.count}건 · 전체 카드 보기 ↓</div></button>`).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
+  $('issues').innerHTML=state.issueItems.map(issue=>`<button type="button" class="issueCard" data-issue-key="${esc(issue.key)}"><div class="issueName">${esc(issue.title)}</div><div class="issueMeta">관련 기사 ${issue.count}건 · 첫 카드로 이동 ↓</div></button>`).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
 }
 function relatedHtml(item){
   if(!item.related_count)return'';
@@ -163,7 +149,8 @@ async function load({silent=false}={}){
   const loadController=new AbortController();activeLoadController=loadController;
   const requestId=++state.requestSeq;nav();
   const sub=currentSubview();
-  if(!silent){$('cards').innerHTML='<div class="empty">뉴스를 불러오는 중입니다.</div>';$('issuesPanel').style.display='none';$('hero').style.display=sub==='home'?'block':'none';if(sub==='home')$('hot').innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다.</div>'}
+  const hasVisibleData=state.items.length>0;
+  if(!silent&&!hasVisibleData){$('cards').innerHTML='<div class="empty">뉴스를 불러오는 중입니다.</div>';$('issuesPanel').style.display='none';$('hero').style.display=sub==='home'?'block':'none';if(sub==='home')$('hot').innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다.</div>'}
   const isBaduk=state.section==='baduk';
   try{
     if(sub==='home'&&!state.q&&!state.issueKey){
@@ -177,7 +164,6 @@ async function load({silent=false}={}){
       state.items=isBaduk?(home.items||[]):sortByArticleTime(home.items);
       state.heroItems=state.items.slice(0,6);
       state.issueItems=[];
-      prefetchPeriods(state.section);
     }else{
       const p=new URLSearchParams({limit:isBaduk?'200':'300',view:sub==='saved'?'saved':(isBaduk?'latest':'popular')});
       if(isBaduk){
@@ -194,9 +180,10 @@ async function load({silent=false}={}){
       const d=await fetchViewJson(`/api/news/articles?${p}`,{signal:loadController.signal});if(requestId!==state.requestSeq)return;
       state.heroItems=[];state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);state.issueItems=d.issues||[];
     }
-    lastSuccessfulLoad=Date.now();render()
+    lastSuccessfulLoad=Date.now();render();
+    if(state.issueKey){requestAnimationFrame(()=>{const card=$('cards').querySelector('.card');if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}})}
   }
-  catch(e){if(e?.name!=='AbortError'&&requestId===state.requestSeq&&!silent)$('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}
+  catch(e){if(e?.name!=='AbortError'&&e?.name!=='AuthRequiredError'&&requestId===state.requestSeq&&!silent){if(hasVisibleData){render();toast('새 소식을 가져오지 못해 이전 내용을 표시합니다.')}else $('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}}
   finally{if(activeLoadController===loadController)activeLoadController=null}
 }
 document.addEventListener('click',e=>{
@@ -204,7 +191,6 @@ document.addEventListener('click',e=>{
   if(jump){e.preventDefault();state.focusKey=jump.dataset.jumpKey;render();const card=document.getElementById(`article-${state.focusKey}`);if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}return}
   if(e.target.closest('.brand')){setSubview('home');state.category='';state.q='';state.issueKey='';$('query').value='';load();return}
   if(e.target.closest('#retryLoad')){load();return}
-  if(e.target.closest('#clearIssue')){state.issueKey='';load();return}
   const issue=e.target.closest('[data-issue-key]');
   if(issue){
     state.issueKey=issue.dataset.issueKey;

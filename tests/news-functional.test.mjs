@@ -398,7 +398,7 @@ test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하
   assert.match(html, /관련 기사 \$\{issue\.count\}건/);
   assert.match(html, /data-issue-key/);
   assert.match(html, /issue_key/);
-  assert.match(html, /clearIssue/);
+  assert.doesNotMatch(html, /clearIssue/);
   assert.match(html, /sub==='home'&&!state\.q&&!state\.issueKey/);
   assert.match(html, /relatedHtml\(x\)/);
   assert.doesNotMatch(html, /같은 이슈에 속한 기사 전체입니다/);
@@ -425,6 +425,14 @@ test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공
   assert.match(html, /id="retryLoad"/);
   assert.match(html, /closest\('#retryLoad'\)/);
   assert.match(html, /if\(sub==='home'\)\$\('hot'\)\.innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다/);
+});
+
+test('화면은 대용량 기간 선조회를 제거하고 로그인 만료를 서버 장애와 구분한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(html, /prefetchPeriods|requestIdleCallback/);
+  assert.match(html, /response\.redirected&&new URL\(response\.url\)\.pathname==='\/login'/);
+  assert.doesNotMatch(html, /id="clearIssue"/);
+  assert.match(html, /첫 카드로 이동/);
 });
 
 test('읽기 API는 요청마다 D1 스키마 DDL을 다시 실행하지 않는다', async () => {
@@ -503,15 +511,12 @@ test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', as
   assert.match(html, /setSubview\('home'\);state\.category='';state\.q='';state\.issueKey=''/);
 });
 
-test('홈 유휴 시간에 주간·월간 데이터를 미리 받고 5분간 재사용한다', async () => {
+test('조회 결과는 5분간 재사용하되 주간·월간 데이터는 사용자가 열 때만 요청한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /const VIEW_CACHE_TTL=300000/);
-  assert.match(html, /function prefetchPeriods\(section\)/);
-  assert.match(html, /for\(const sub of \['weekly','monthly'\]\)/);
-  assert.match(html, /connection\?\.saveData\|\|\/2g\//);
-  assert.match(html, /setTimeout\(resolve,250\)/);
+  assert.doesNotMatch(html, /function prefetchPeriods\(section\)/);
+  assert.doesNotMatch(html, /requestIdleCallback/);
   assert.match(html, /if\(viewRequests\.has\(url\)\)return viewRequests\.get\(url\)/);
-  assert.match(html, /prefetchPeriods\(state\.section\)/);
   assert.match(html, /await fetchViewJson\(`\/api\/news\/articles\?\$\{p\}`/);
   assert.match(html, /viewCache\.clear\(\);viewRequests\.clear\(\)/);
   assert.match(html, /viewCacheGeneration\+=1/);
@@ -555,6 +560,11 @@ test('바둑 검색에 섞인 무관한 기사는 Claude 대상으로 분류하�
   assert.equal(isBadukRelevant('신진서, 카타고와 세 번째 대국', ''), true);
   assert.equal(isBadukRelevant('희망과 절망', '신진서 9단이 한국기원에서 바둑 인공지능 카타고와 대국했다.'), true);
   assert.equal(isBadukRelevant("tvN 드라마 응답하라 1988 다시보기", '박보검과 혜리가 출연한 가족 드라마가 시청률을 기록했다.'), false);
+});
+
+test('바둑 표현을 비유로만 쓴 환경·기술 기사는 바둑으로 분류하지 않는다', () => {
+  assert.equal(isBadukRelevant('일론 머스크가 그린 환경 유토피아', '세계 시장을 바둑판처럼 보는 기술 기사다.'), false);
+  assert.equal(isBadukRelevant('신진서, 세계바둑 결승 진출', '신진서 9단이 결승 대국을 치른다.'), true);
 });
 
 test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시도한 순서로 순환한다', async () => {
