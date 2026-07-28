@@ -1,6 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches } from '../../_lib/news-issue-classify.js';
+import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneEventTitle } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -72,7 +72,7 @@ export function enforceIssueRules(groups, articles, category) {
       const article = articleByKey.get(key);
       kept.push({
         key: `${category}|ai:event:${key.slice(0, 16)}`,
-        title: String(article?.title || '바둑대회').replace(/[“”‘’"']/g, '').trim().slice(0, 40),
+        title: standaloneEventTitle(article) || '바둑대회',
         url_keys: [key]
       });
     }
@@ -105,7 +105,7 @@ export async function onRequestPost({ request, env }) {
 
     const [result, cacheRow] = await Promise.all([
       env.DB.prepare(`
-        SELECT a.url_key, a.title, a.summary, a.published_at, a.fetched_at
+        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at
         FROM news_articles a
         WHERE ${where.join(' AND ')}
         ORDER BY datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC

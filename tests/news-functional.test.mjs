@@ -5,7 +5,8 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
-  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches
+  classifyIssues, hasIncidentLocationConflict, hasIssueDirectionConflict, isStandaloneEventArticle,
+  rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
@@ -25,6 +26,41 @@ test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 �
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
 });
 
+test('제목의 선수권과 요약 첫 문장의 정식 바둑대회명도 한 건 이슈로 살린다', () => {
+  const sportsCouncil = {
+    title: '대한체육회장배 전국 바둑 선수권 양양서 성료',
+    summary: '1) 제10회 대한체육회장배 전국바둑선수권대회가 지난 27, 28일 양양다목적체육관에서 개최됐다.'
+  };
+  const gwangju = {
+    title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
+    summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 지난 27일 열렸다.'
+  };
+  assert.equal(isStandaloneEventArticle(sportsCouncil), true);
+  assert.equal(standaloneEventTitle(sportsCouncil), '대한체육회장배 전국바둑선수권대회');
+  assert.equal(isStandaloneEventArticle(gwangju), true);
+  assert.equal(standaloneEventTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
+});
+
+test('반복 등장하는 인물명을 표시해 장윤기 같은 동일 사건을 놓치지 않게 한다', () => {
+  const hints = repeatedPersonHints([
+    { title: '장윤기, 여고생 납치 계획 정황 대화록 증거 인정' },
+    { title: '장윤기가 태연했던 비밀' },
+    { title: '장윤기 큰아빠는 경찰 간부' },
+    { title: '전혀 다른 단독 기사' }
+  ]);
+  assert.deepEqual(hints, [['장윤기'], ['장윤기'], ['장윤기'], []]);
+});
+
+test('급락 이슈에 전고점 회복 전망 기사를 합치지 않는다', () => {
+  const recovery = { title: '삼전·SK하이닉스 전고점 회복 전망', summary: '주가가 다시 상승할 것으로 내다봤다.' };
+  assert.equal(hasIssueDirectionConflict('반도체 주가 급락 코스피 약세', recovery), true);
+  assert.deepEqual(rejectConflictingExistingMatches(
+    [{ title: '반도체 주가 급락', url_keys: ['recovery'] }],
+    [{ ...recovery, url_key: 'recovery' }],
+    [{ key: '일반|ai:2', title: '반도체 주가 급락', context: '코스피 반도체 쇼크로 6% 급락' }]
+  ), [{ title: '기타', url_keys: ['recovery'], misc: true }]);
+});
+
 test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 기타로 강제한다', () => {
   const articles = [
     { url_key: 'tournament', title: '무안 청소년 온라인 바둑대회 개최', summary: '' },
@@ -39,7 +75,7 @@ test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 �
   ], articles, '바둑');
   assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
     ['신진서 AI 격파', ['pair-a', 'pair-b']],
-    ['무안 청소년 온라인 바둑대회 개최', ['tournament']],
+    ['무안 청소년 온라인 바둑대회', ['tournament']],
     ['기타', ['profile']]
   ]);
 });
