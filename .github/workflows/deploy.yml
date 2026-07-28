@@ -338,11 +338,6 @@ jobs:
             encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "${category}")
             output="/tmp/classify-${encoded}.json"
             reset_query=""
-            if [ "${{ github.event_name }}" = "schedule" ] && [ "${category}" = "일반" ]; then
-              # Re-evaluate all general memberships with the free provider.
-              # If the daily allocation is gone, the API preserves the cache.
-              reset_query="&regroup=1&free=1"
-            fi
             if [ "${RESET_ISSUES}" = "true" ]; then reset_query="&reset=1"; fi
             if [ "${ROLLBACK_ISSUES}" = "true" ]; then reset_query="&rollback=1"; fi
             if [ "${FREE_ISSUE_AI}" = "true" ]; then reset_query="${reset_query}&free=1"; fi

@@ -185,8 +185,6 @@ test('수동 이슈 재분류는 비용 없는 Cloudflare AI 전용 모드를 �
   assert.match(endpoint, /forceFree/);
   assert.match(endpoint, /!forceFree && budget\.allowed/);
   assert.match(workflow, /free_issue_ai:/);
-  assert.match(workflow, /event_name.*schedule.*category.*일반/);
-  assert.match(workflow, /reset_query="&regroup=1&free=1"/);
 });
 
 test('일반 이슈는 기존 제목을 유지하면서 기사 소속만 재분류할 수 있다', async () => {
