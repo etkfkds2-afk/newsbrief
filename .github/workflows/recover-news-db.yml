@@ -16,11 +16,11 @@ jobs:
         run: |
           set -euo pipefail
           account_id='af27f3bbca2209ff9cb2c77a2e47184a'
-          project='newsbrief-etkfkds2'
-          project_json=$(curl --fail-with-body -sS \
+          databases_json=$(curl --fail-with-body -sS \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            "https://api.cloudflare.com/client/v4/accounts/${account_id}/pages/projects/${project}")
-          database_id=$(printf '%s' "$project_json" | jq -r '.result.deployment_configs.production.d1_databases.DB.id // empty')
+            "https://api.cloudflare.com/client/v4/accounts/${account_id}/d1/database")
+          database_id=$(printf '%s' "$databases_json" | jq -r \
+            '[.result[] | select(.name | test("newsbrief"; "i"))][0].uuid // (if (.result | length) == 1 then .result[0].uuid else empty end)')
           test -n "$database_id"
           response=$(curl -sS \
             -X POST \
