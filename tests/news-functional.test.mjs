@@ -422,7 +422,7 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
   assert.match(collector, /article\.publishedAt \|\| publishedAt/);
   assert.match(collector, /synthetic_times_cleared/);
   assert.match(collector, /published_at=substr\(published_at,1,10\)/);
-  assert.match(articles, /date\(datetime\(COALESCE[\s\S]*'\+9 hours'\)[\s\S]*p\.score DESC/);
+  assert.match(articles, /date\(datetime\(COALESCE[\s\S]*'\+9 hours'\)[\s\S]*MAX\(COALESCE\(p\.score,0\),COALESCE\(np\.score,0\)\) DESC/);
   assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 
@@ -549,6 +549,13 @@ test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 
   assert.match(html, /view=\$\{view\}/);
   assert.match(html, /const homeHours=24/);
   assert.match(html, /const homeLimit=isBaduk\?30:10/);
+});
+
+test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 사용한다', async () => {
+  const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  assert.match(source, /LEFT JOIN news_popularity np ON np\.url_key=a\.url_key/);
+  assert.match(source, /LEFT JOIN news_popular_items p ON p\.title=a\.title/);
+  assert.doesNotMatch(source, /p\.url_key=a\.url_key OR p\.title=a\.title/);
 });
 
 test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', async () => {

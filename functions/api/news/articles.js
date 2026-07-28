@@ -212,7 +212,7 @@ export async function onRequestGet({ request, env }) {
       bindings.push(term, term, term);
     }
     if (view === 'saved') where.push('s.url_key IS NOT NULL');
-    if (view === 'popular') where.push('p.title IS NOT NULL');
+    if (view === 'popular') where.push('(p.title IS NOT NULL OR np.url_key IS NOT NULL)');
     if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
@@ -225,10 +225,10 @@ export async function onRequestGet({ request, env }) {
 
     const order = view === 'popular'
       ? (hours > 0 && hours <= 24
-        ? "p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
-        : "date(datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at),'+9 hours')) DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
+        ? "MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
+        : "date(datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at),'+9 hours')) DESC, MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
       : view === 'home'
-        ? "CASE WHEN p.title IS NULL THEN 0 ELSE 1 END DESC, p.score DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
+        ? "CASE WHEN p.title IS NULL AND np.url_key IS NULL THEN 0 ELSE 1 END DESC, MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";
 
     const result = await env.DB.prepare(`
@@ -238,7 +238,8 @@ export async function onRequestGet({ request, env }) {
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
-      LEFT JOIN news_popular_items p ON (p.url_key=a.url_key OR p.title=a.title)
+      LEFT JOIN news_popularity np ON np.url_key=a.url_key
+      LEFT JOIN news_popular_items p ON p.title=a.title
       WHERE ${where.join(' AND ')}
       ORDER BY ${order}
       LIMIT ?
