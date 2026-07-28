@@ -5,7 +5,8 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
-  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches
+  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
+  standaloneBadukIssueTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
@@ -17,12 +18,27 @@ import { validPassword, validUsername } from '../functions/_lib/news-users.js';
 import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
 
-test('바둑은 대회가 명시된 기사만 한 건 독립 이슈 후보가 된다', () => {
+test('바둑은 공식 대회·기전 결과를 한 건 독립 이슈 후보로 보존한다', () => {
   assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ title: '한중 청소년 바둑 스포츠교류 개최' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), false);
+  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), true);
   assert.equal(isStandaloneEventArticle({ title: '김동한 프로기사 근황', summary: '국제 바둑대회에 출전한 경력이 있다.' }), false);
   assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
+});
+
+test('요약의 공식 대회명과 바둑 기록 기사도 단건 이슈로 보존한다', () => {
+  const gwangju = {
+    title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
+    summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.'
+  };
+  assert.equal(standaloneBadukIssueTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
+  assert.equal(standaloneBadukIssueTitle({ title: '김명훈, 명인전서 통산 500승 달성' }), '김명훈 통산 500승');
+  assert.equal(standaloneBadukIssueTitle({ title: '최정, 여자 바둑 1위 탈환' }), '최정 여자바둑 1위 탈환');
+  assert.equal(isStandaloneEventArticle(gwangju), true);
+  const normalized = normalizeCachedIssues([{ ...gwangju, url_key: 'gwangju', category: '바둑' }], [{
+    key: '바둑|ai:misc', title: '기타', url_keys: ['gwangju']
+  }]);
+  assert.equal(normalized[0].title, '광주광역시체육회장배 학생바둑대회');
 });
 
 test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 기타로 강제한다', () => {
@@ -39,7 +55,7 @@ test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 �
   ], articles, '바둑');
   assert.deepEqual(groups.map(group => [group.title, group.url_keys]), [
     ['신진서 AI 격파', ['pair-a', 'pair-b']],
-    ['무안 청소년 온라인 바둑대회 개최', ['tournament']],
+    ['무안 청소년 온라인 바둑대회', ['tournament']],
     ['기타', ['profile']]
   ]);
 });
@@ -126,6 +142,15 @@ test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제
   assert.match(endpoint, /url\.searchParams\.get\('reset'\) === '1'/);
   assert.match(endpoint, /resetIssues \? \[\] : loadExistingPayload/);
   assert.match(workflow, /reset_issues:/);
+});
+
+test('이슈 재분류 전 캐시 백업과 직전 상태 복원 경로를 제공한다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(endpoint, /news_issue_cache_history/);
+  assert.match(endpoint, /rollbackIssues/);
+  assert.match(workflow, /rollback_issues:/);
+  assert.doesNotMatch(endpoint, /DELETE\s+FROM\s+news_articles/i);
 });
 
 test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', () => {
@@ -419,7 +444,7 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = issues \? 500 : limit/);
+  assert.match(source, /const queryLimit = issueCandidateLimit\(limit, issues, category === '바둑'\)/);
   assert.doesNotMatch(source, /const queryLimit = issueKeyFilter \?/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);

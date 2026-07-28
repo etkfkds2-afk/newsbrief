@@ -9,11 +9,13 @@ function buildInstructions(hasExisting, allowStandaloneEvents = false) {
   return `당신은 한국 뉴스 데스크의 편집자다. ${hasExisting ? '이미 분류된 기존 이슈 목록과, ' : ''}아직 분류되지 않은 새 기사 목록을 준다.
 ${hasExisting ? '\n각 새 기사가 기존 이슈 중 하나와 실제로 같은 사건을 다루면, 그 기존 이슈의 제목을 글자 하나 다르지 않게 정확히 그대로 사용해서 묶는다. 같은 사건을 다루는 기존 이슈가 없으면 새로운 이슈를 만든다.\n' : ''}
 규칙:
+- 같은 인물이 등장해도 구체적인 사건이 다르면 절대 묶지 않는다. 반대로 동일 사건의 후속 보도는 표현이 달라도 함께 묶는다.
 - 서로 다른 대회, 다른 라운드, 다른 인물, 다른 사건의 기사는 절대 같은 이슈로 묶지 않는다.
+- 급락·하락과 상승·회복·반등처럼 방향이 반대인 보도는 별도 이슈로 분리한다.
 - 새로 만드는 이슈는 정말로 같은 사건을 다루는 기사가 2건 이상 있을 때만 만든다.
 ${allowStandaloneEvents ? '- 예외: 기사 제목에 "대회"라는 단어가 명시된 기사는 단독 1건이어도 반드시 독립 이슈로 만든다. 이런 기사를 기타로 보내지 않는다. 본문에 과거 대회 경력만 언급되거나, 리그·기전·행사·교류 등만 있고 제목에 "대회"가 없는 단독 기사는 기타로 보낸다.\n' : ''}
 - 같은 번호를 두 이슈에 중복으로 넣지 않는다.
-- 새로 만드는 이슈 제목은 8~18자 내외의 자연스러운 한국어 명사구로 쓴다. 어색한 번역투, 따옴표, 특수기호를 쓰지 않는다.
+- 새로 만드는 이슈 제목은 기사에 나온 공식 대회명·사건명·정책명을 최우선으로 사용해 8~22자의 자연스러운 한국어 명사구로 쓴다. 기사 주변 인물, 기관, 지역만 떼어 제목으로 쓰지 않는다. 어색한 번역투, 따옴표, 특수기호를 쓰지 않는다.
   예시: "신진서 삼성화재배 우승", "한국기원 정기이사회 개최", "이세돌 은퇴 이후 근황"
 - 반드시 아래 JSON 배열 형식으로만 응답한다. 다른 설명, 주석, 마크다운 코드블록은 절대 쓰지 않는다.
 
@@ -21,7 +23,33 @@ ${allowStandaloneEvents ? '- 예외: 기사 제목에 "대회"라는 단어가 �
 }
 
 export function isStandaloneEventArticle(article) {
-  return /대회/u.test(String(article?.title || ''));
+  return Boolean(standaloneBadukIssueTitle(article));
+}
+
+function cleanEventName(value) {
+  return String(value || '')
+    .replace(/^\s*(?:\[[^\]]+\]|<[^>]+>)\s*/u, '')
+    .replace(/^\s*(?:제\s*)?\d+회\s*/u, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+(?:개최|개막|성료|결승|우승|정상|펼쳐져|열려).*$/u, '')
+    .trim().slice(0, 32);
+}
+
+export function standaloneBadukIssueTitle(article) {
+  const title = String(article?.title || '').replace(/\s+/g, ' ').trim();
+  const first = String(article?.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '').replace(/\s+/g, ' ').trim();
+  const eventSummary = first.replace(/^.*?(?:주최한|주관한|개최한|열린)\s*/u, '');
+  const eventPattern = /(?:제\s*\d+회\s*)?([가-힣A-Za-z0-9· ]{2,38}?(?:전국)?(?:바둑)?(?:선수권대회|바둑대회|결정전|챌린지리그|바둑리그|기전|컵))/u;
+  const titleEvent = title.match(eventPattern)?.[0];
+  if (titleEvent) return cleanEventName(titleEvent);
+  const summaryEvent = eventSummary.match(eventPattern)?.[0];
+  if (summaryEvent && /(?:개최|열렸|성료|결승|우승|대회가|대회를)/u.test(first)) return cleanEventName(summaryEvent);
+  const wins = title.match(/([가-힣]{2,4}).*?통산\s*(\d+승)/u);
+  if (wins) return `${wins[1]} 통산 ${wins[2]}`;
+  const ranking = title.match(/([가-힣]{2,4}).*?(?:여자\s*)?바둑\s*1위\s*탈환/u);
+  if (ranking) return `${ranking[1]} 여자바둑 1위 탈환`;
+  if (/(?:우승|탈환)/u.test(title) && /(?:배|기전|컵|명인전)/u.test(title)) return cleanEventName(title);
+  return '';
 }
 
 function buildListing(articles) {
@@ -124,7 +152,7 @@ function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = fals
     : [];
   for (const index of standaloneLeftover) {
     groups.push({
-      title: String(articles[index].title || '바둑 대회').replace(/[“”‘’"']/g, '').trim().slice(0, 40),
+      title: standaloneBadukIssueTitle(articles[index]) || '바둑 이슈',
       url_keys: [articles[index].url_key]
     });
   }

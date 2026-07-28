@@ -1,6 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches } from '../../_lib/news-issue-classify.js';
+import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -72,7 +72,7 @@ export function enforceIssueRules(groups, articles, category) {
       const article = articleByKey.get(key);
       kept.push({
         key: `${category}|ai:event:${key.slice(0, 16)}`,
-        title: String(article?.title || '바둑대회').replace(/[“”‘’"']/g, '').trim().slice(0, 40),
+        title: standaloneBadukIssueTitle(article) || '바둑 이슈',
         url_keys: [key]
       });
     }
@@ -90,7 +90,25 @@ export async function onRequestPost({ request, env }) {
     const url = new URL(request.url);
     const category = url.searchParams.get('category') || '바둑';
     const resetIssues = url.searchParams.get('reset') === '1';
+    const rollbackIssues = url.searchParams.get('rollback') === '1';
     if (!SUPPORTED_CATEGORIES.has(category)) return json({ error: `지원하지 않는 category: ${category}` }, 400);
+    if (rollbackIssues) {
+      const previous = await env.DB.prepare(
+        `SELECT payload,built_at FROM news_issue_cache_history WHERE category=? ORDER BY id DESC LIMIT 1`
+      ).bind(category).first();
+      if (!previous?.payload) return json({ ok: false, category, error: '복원할 이전 이슈 캐시가 없습니다.' }, 404);
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO news_issue_cache_history (category,payload,built_at)
+           SELECT category,payload,built_at FROM news_issue_cache WHERE category=?`
+        ).bind(category),
+        env.DB.prepare(
+          `INSERT INTO news_issue_cache (category,payload,built_at) VALUES (?,?,CURRENT_TIMESTAMP)
+           ON CONFLICT(category) DO UPDATE SET payload=excluded.payload,built_at=CURRENT_TIMESTAMP`
+        ).bind(category, previous.payload)
+      ]);
+      return json({ ok: true, category, rolled_back: true, restored_built_at: previous.built_at });
+    }
 
     const dbCategory = category === '바둑' ? '바둑' : null;
     const where = [...CONTENT_QUALITY_FILTERS, "datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')"];
@@ -105,7 +123,7 @@ export async function onRequestPost({ request, env }) {
 
     const [result, cacheRow] = await Promise.all([
       env.DB.prepare(`
-        SELECT a.url_key, a.title, a.summary, a.published_at, a.fetched_at
+        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at
         FROM news_articles a
         WHERE ${where.join(' AND ')}
         ORDER BY datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC
@@ -226,10 +244,19 @@ export async function onRequestPost({ request, env }) {
     }
 
     const payload = enforceIssueRules([...byKey.values()], articles, category);
-    await env.DB.prepare(
+    const previousCache = cacheRow?.payload ? loadExistingPayload(cacheRow) : [];
+    const writes = [];
+    if (previousCache.length) {
+      writes.push(env.DB.prepare(
+        `INSERT INTO news_issue_cache_history (category,payload,built_at)
+         SELECT category,payload,built_at FROM news_issue_cache WHERE category=?`
+      ).bind(category));
+    }
+    writes.push(env.DB.prepare(
       `INSERT INTO news_issue_cache (category, payload, built_at) VALUES (?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(category) DO UPDATE SET payload = excluded.payload, built_at = CURRENT_TIMESTAMP`
-    ).bind(category, JSON.stringify(payload)).run();
+    ).bind(category, JSON.stringify(payload)));
+    await env.DB.batch(writes);
 
     return json({
       ok: true,

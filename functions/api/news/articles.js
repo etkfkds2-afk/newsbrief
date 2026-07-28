@@ -3,6 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
+import { standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -88,6 +89,11 @@ function buildIssues(items, category = '') {
     .sort((a, b) => b.count - a.count || String(b.latest).localeCompare(String(a.latest)));
 }
 
+export function issueCandidateLimit(limit, issues, isBaduk = false) {
+  if (!issues) return limit;
+  return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : limit;
+}
+
 async function loadIssueCache(env, category) {
   const row = await env.DB.prepare('SELECT payload FROM news_issue_cache WHERE category=?').bind(category).first();
   if (!row) return null;
@@ -101,6 +107,7 @@ async function loadIssueCache(env, category) {
 
 export function normalizeCachedIssues(items, cached) {
   const itemByKey = new Map(items.map(item => [item.url_key, item]));
+  const standaloneTitle = item => item?.category === '바둑' ? standaloneBadukIssueTitle(item) : '';
   const mapped = cached.map(group => {
     const keys = group.url_keys.filter(key => itemByKey.has(key));
     return { key: group.key, title: group.title, url_keys: keys };
@@ -110,7 +117,7 @@ export function normalizeCachedIssues(items, cached) {
     if (group.key.endsWith('|ai:misc')) return true;
     if (group.url_keys.length >= 2) return true;
     const item = itemByKey.get(group.url_keys[0]);
-    if (item?.category === '바둑' && /대회/u.test(String(item.title || ''))) return true;
+    if (standaloneTitle(item)) return true;
     forcedMisc.push(...group.url_keys);
     return false;
   });
@@ -118,12 +125,12 @@ export function normalizeCachedIssues(items, cached) {
   const miscKeys = [...new Set([...(misc?.url_keys || []), ...forcedMisc])];
   const missedTournaments = miscKeys.filter(key => {
     const item = itemByKey.get(key);
-    return item?.category === '바둑' && /대회/u.test(String(item.title || ''));
+    return Boolean(standaloneTitle(item));
   });
   const missedSet = new Set(missedTournaments);
   for (const key of missedTournaments) {
     const item = itemByKey.get(key);
-    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: item.title.slice(0, 40), url_keys: [key] });
+    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: standaloneTitle(item), url_keys: [key] });
   }
   const normalizedMisc = miscKeys.filter(key => !missedSet.has(key));
   const withoutMisc = valid.filter(group => !group.key.endsWith('|ai:misc'));
@@ -223,7 +230,7 @@ export async function onRequestGet({ request, env }) {
     // Issue counts and issue-click results must be derived from the exact same
     // candidate set. Otherwise a monthly issue can advertise one count and
     // reveal a different set after it is opened.
-    const queryLimit = issues ? 500 : limit;
+    const queryLimit = issueCandidateLimit(limit, issues, category === '바둑');
     bindings.push(queryLimit);
 
     const order = view === 'popular'

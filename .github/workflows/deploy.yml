@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      rollback_issues:
+        description: '선택한 카테고리의 직전 이슈 캐시로 즉시 복원'
+        required: false
+        default: false
+        type: boolean
       general_boost:
         description: '이번 실행만 일반 인기뉴스 Claude 한도를 24회로 보강'
         required: false
@@ -214,6 +219,7 @@ jobs:
       - name: Discover Google News and trigger collection
         if: >-
           steps.collection-gate.outputs.should_collect == 'true' &&
+          !inputs.rollback_issues &&
           (github.event_name != 'workflow_dispatch' ||
           (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality))
         env:
@@ -306,6 +312,7 @@ jobs:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           CLASSIFY_CATEGORY: ${{ inputs.classify_category }}
           RESET_ISSUES: ${{ inputs.reset_issues }}
+          ROLLBACK_ISSUES: ${{ inputs.rollback_issues }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             # Baduk always classified first. Both run daily now that Haiku
@@ -319,6 +326,7 @@ jobs:
             output="/tmp/classify-${encoded}.json"
             reset_query=""
             if [ "${RESET_ISSUES}" = "true" ]; then reset_query="&reset=1"; fi
+            if [ "${ROLLBACK_ISSUES}" = "true" ]; then reset_query="&rollback=1"; fi
             curl --fail-with-body -sS --retry 2 --max-time 120 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \

@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS news_issue_cache (
   payload TEXT NOT NULL,
   built_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS news_issue_cache_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  built_at TEXT NOT NULL,
+  backed_up_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_issue_history_category ON news_issue_cache_history(category, id DESC);
 CREATE TABLE IF NOT EXISTS news_category_checks (
   url_key TEXT PRIMARY KEY,
   checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

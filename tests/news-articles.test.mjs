@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { onRequestGet } from '../functions/api/news/articles.js';
+import { issueCandidateLimit, onRequestGet } from '../functions/api/news/articles.js';
 
 const summary = [
   '1) 신진서 9단은 인공지능 카타고와의 대국에서 최종 승리를 거뒀다.',
@@ -43,6 +43,12 @@ test('바둑 숨김 설정은 API 조회 조건에도 적용한다', async () =>
   const env = mockEnv([]);
   await onRequestGet({ request: new Request('https://example.com/api/news/articles?exclude_baduk=1'), env });
   assert.match(env.articleSql, /a\.category NOT IN \('바둑','IT\/과학'\)/);
+});
+
+test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후보만 읽는다', () => {
+  assert.equal(issueCandidateLimit(150, true), 150);
+  assert.equal(issueCandidateLimit(120, true, true), 240);
+  assert.equal(issueCandidateLimit(60, false), 60);
 });
 
 test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', async () => {
