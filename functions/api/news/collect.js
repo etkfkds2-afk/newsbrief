@@ -804,6 +804,7 @@ async function collect(env, {
   for (const discovery of googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
     const discoveredTitle = cleanTitle(discovery?.title || '');
     if (!discoveredTitle || isRejectedTitle(discoveredTitle)) continue;
+    let resolved = false;
     try {
       const matches = await naverSearch(env, `"${discoveredTitle}"`, 1, 3);
       const match = matches.find(item => {
@@ -812,9 +813,19 @@ async function collect(env, {
         const right = discoveredTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
         return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
       });
-      if (match) candidates.push({ category: '바둑', item: match, source: 'NAVER' });
+      if (match) { candidates.push({ category: '바둑', item: match, source: 'NAVER' }); resolved = true; }
     } catch (error) {
       diagnostics.google_resolve_error = String(error?.message || error).slice(0, 120);
+    }
+    // Many discovered headlines (local/independent outlets) never turn up in
+    // a Naver search at all, so they were silently dropped even though
+    // Google already gave us a working link. Fetch through that link
+    // directly instead of discarding the headline.
+    if (!resolved && discovery?.link) {
+      candidates.push({
+        category: '바둑', source: 'GOOGLE',
+        item: { title: discoveredTitle, link: discovery.link, originallink: discovery.link, description: '', pubDate: discovery.pubDate || '', press: discovery.press || '' }
+      });
     }
   }
   diagnostics.google_discovered = googleDiscoveries.length;

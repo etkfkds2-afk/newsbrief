@@ -55,7 +55,7 @@ for (const query of selected) {
     const parts = raw.split(/\s+-\s+/); const press = parts.length > 1 ? parts.pop() : '';
     const title = parts.join(' - ') || raw;
     if (title.length >= 8 && !found.has(title)) {
-      found.set(title, { title, press, pubDate: text(match[1], 'pubDate') });
+      found.set(title, { title, press, pubDate: text(match[1], 'pubDate'), link: text(match[1], 'link') });
       addedForQuery += 1;
     }
     // Sample every rotated query instead of letting one broad query fill the
