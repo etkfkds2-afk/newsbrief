@@ -382,9 +382,9 @@ jobs:
             "https://newsbrief-etkfkds2.pages.dev/api/auth/login" || true)
           if [ "$login_status" = "200" ]; then
             weekly_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-weekly-check.json -w '%{http_code}' \
-              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=latest&exclude_baduk=1&hours=168&issues=1" || true)
+              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=popular&exclude_baduk=1&hours=168&issues=1" || true)
             monthly_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-monthly-check.json -w '%{http_code}' \
-              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=latest&exclude_baduk=1&hours=720&issues=1" || true)
+              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=popular&exclude_baduk=1&hours=720&issues=1" || true)
             if [ "$weekly_status" = "200" ] && [ "$monthly_status" = "200" ] \
               && jq -e '.ok == true' /tmp/newsbrief-weekly-check.json >/dev/null \
               && jq -e '.ok == true' /tmp/newsbrief-monthly-check.json >/dev/null; then

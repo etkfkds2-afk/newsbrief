@@ -5,7 +5,7 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
-  classifyIssues, hasIncidentLocationConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
+  classifyIssues, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
   standaloneBadukIssueTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
@@ -87,6 +87,12 @@ test('해외 사망 이슈에 지역이 다른 국내 사망 사고를 합치지
     [domestic],
     [{ key: '일반|ai:1', title: '일본 열대야 사망', context }]
   ), [{ title: '기타', url_keys: ['wanju'], misc: true }]);
+});
+
+test('같은 정치인이라도 정치자금 재판과 허위사실공표 고발은 분리한다', () => {
+  const article = { title: '오세훈 허위사실공표 혐의로 고발', summary: '선거 보전액 환수 요구가 제기됐다.' };
+  assert.equal(hasLegalCaseConflict('오세훈 정치자금법 위반 1심 판결', article), true);
+  assert.equal(hasLegalCaseConflict('오세훈 정치자금법 위반 1심 판결', { title: '오세훈 정치자금법 1심 항소' }), false);
 });
 
 test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사용한다', () => {
@@ -489,7 +495,7 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
   assert.match(collector, /article\.publishedAt \|\| publishedAt/);
   assert.match(collector, /synthetic_times_cleared/);
   assert.match(collector, /published_at=substr\(published_at,1,10\)/);
-  assert.match(articles, /date\(datetime\(COALESCE[\s\S]*'\+9 hours'\)[\s\S]*MAX\(COALESCE\(p\.score,0\),COALESCE\(np\.score,0\)\) DESC/);
+  assert.match(articles, /date\(datetime\(COALESCE[\s\S]*'\+9 hours'\)[\s\S]*\$\{popularityScore\} DESC/);
   assert.match(page, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 });
 
@@ -620,10 +626,10 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /diagnostics\.new_candidates/);
 });
 
-test('일반 홈은 인기 랭킹, 주간·월간은 기간 전체 기사, 저장 탭은 저장 기사만 표시한다', async () => {
+test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 저장 기사만 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /const view=isBaduk\?'latest':'popular'/);
-  assert.match(html, /sub==='saved'\?'saved':'latest'/);
+  assert.match(html, /sub==='saved'\?'saved':\(isBaduk\?'latest':'popular'\)/);
   assert.match(html, /view=\$\{view\}/);
   assert.match(html, /const homeHours=24/);
   assert.match(html, /const homeLimit=isBaduk\?30:10/);
@@ -631,10 +637,9 @@ test('일반 홈은 인기 랭킹, 주간·월간은 기간 전체 기사, 저�
 
 test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 사용한다', async () => {
   const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
-  assert.match(source, /LEFT JOIN news_popularity np ON np\.url_key=a\.url_key/);
-  assert.match(source, /LEFT JOIN news_popular_items p ON p\.title=a\.title/);
-  assert.match(source, /const popularityJoins = \['popular', 'home'\]\.includes\(view\)/);
-  assert.doesNotMatch(source, /p\.url_key=a\.url_key OR p\.title=a\.title/);
+  assert.match(source, /EXISTS\(SELECT 1 FROM news_popularity npv WHERE npv\.url_key=a\.url_key\)/);
+  assert.match(source, /EXISTS\(SELECT 1 FROM news_popular_items pp WHERE pp\.title=a\.title\)/);
+  assert.doesNotMatch(source, /LEFT JOIN news_popularity/);
   assert.match(source, /similarTokens\(titleTokens, old\.titleTokens/);
 });
 

@@ -2,8 +2,8 @@ import { json, userId } from '../../_lib/news-db.js';
 import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
-import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
-import { standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
+import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
+import { hasLegalCaseConflict, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -108,11 +108,19 @@ async function loadIssueCache(env, category) {
 export function normalizeCachedIssues(items, cached) {
   const itemByKey = new Map(items.map(item => [item.url_key, item]));
   const standaloneTitle = item => item?.category === '바둑' ? standaloneBadukIssueTitle(item) : '';
+  const forcedMisc = [];
   const mapped = cached.map(group => {
-    const keys = group.url_keys.filter(key => itemByKey.has(key));
+    const keys = group.url_keys.filter(key => {
+      const item = itemByKey.get(key);
+      if (!item) return false;
+      if (!group.key.endsWith('|ai:misc') && hasLegalCaseConflict(group.title, item)) {
+        forcedMisc.push(key);
+        return false;
+      }
+      return true;
+    });
     return { key: group.key, title: group.title, url_keys: keys };
   }).filter(group => group.url_keys.length > 0);
-  const forcedMisc = [];
   const valid = mapped.filter(group => {
     if (group.key.endsWith('|ai:misc')) return true;
     if (group.url_keys.length >= 2) return true;
@@ -222,7 +230,10 @@ export async function onRequestGet({ request, env }) {
       bindings.push(term, term, term);
     }
     if (view === 'saved') where.push('s.url_key IS NOT NULL');
-    if (view === 'popular') where.push('(p.title IS NOT NULL OR np.url_key IS NOT NULL)');
+    if (view === 'popular') where.push(`(
+      EXISTS(SELECT 1 FROM news_popularity npv WHERE npv.url_key=a.url_key)
+      OR EXISTS(SELECT 1 FROM news_popular_items pp WHERE pp.title=a.title)
+    )`);
     // A named cached issue already owns an explicit URL-key set. Query those
     // rows directly instead of loading and validating the entire 150-card
     // period again merely to return two or three cards. Misc stays on the full
@@ -251,16 +262,17 @@ export async function onRequestGet({ request, env }) {
     // Popularity tables are only needed by the compact home/popular feed.
     // Joining them on every latest/saved/issue request was the expensive path
     // behind intermittent Cloudflare "Worker exceeded resource limits" 503s.
-    const popularityJoins = ['popular', 'home'].includes(view) ? `
-      LEFT JOIN news_popularity np ON np.url_key=a.url_key
-      LEFT JOIN news_popular_items p ON p.title=a.title` : '';
+    const popularityScore = `MAX(
+      COALESCE((SELECT score FROM news_popularity nps WHERE nps.url_key=a.url_key),0),
+      COALESCE((SELECT score FROM news_popular_items pps WHERE pps.title=a.title),0)
+    )`;
 
     const order = view === 'popular'
       ? (hours > 0 && hours <= 24
-        ? "MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
-        : "date(datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at),'+9 hours')) DESC, MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC")
+        ? `${popularityScore} DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC`
+        : `date(datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at),'+9 hours')) DESC, ${popularityScore} DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC`)
       : view === 'home'
-        ? "CASE WHEN p.title IS NULL AND np.url_key IS NULL THEN 0 ELSE 1 END DESC, MAX(COALESCE(p.score,0),COALESCE(np.score,0)) DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC"
+        ? `CASE WHEN ${popularityScore}>0 THEN 1 ELSE 0 END DESC, ${popularityScore} DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC`
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";
 
     const result = await env.DB.prepare(`
@@ -270,7 +282,6 @@ export async function onRequestGet({ request, env }) {
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
-      ${popularityJoins}
       WHERE ${where.join(' AND ')}
       ORDER BY ${order}
       LIMIT ?
@@ -284,6 +295,7 @@ export async function onRequestGet({ request, env }) {
       item.press = cleanOutlet(item.press);
       if (item.press === item.source) item.press = '';
       item.outlet = outletFor(item);
+      if (excludeBaduk && item.category !== '바둑' && isBadukRelevant(item.title, item.summary)) continue;
       if (!validateThreeLineSummary(item.summary, item.title)) continue;
       if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
       if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;

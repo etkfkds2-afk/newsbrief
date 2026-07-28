@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, isJunkLine, normalizeText, reorderGeneralSummary, sanitizeStoredSummary, validateGeneralEditorialSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
+import { buildSummary, isJunkLine, isRejectedTitle, normalizeText, reorderGeneralSummary, sanitizeStoredSummary, validateGeneralEditorialSummary, validateThreeLineSummary } from '../functions/_lib/news-summary.js';
 import { makeBestSummary } from '../functions/_lib/news-ai-summary.js';
 
 test('포털 자동요약 안내와 UI 문장을 제거한다', () => {
@@ -11,6 +11,12 @@ test('포털 자동요약 안내와 UI 문장을 제거한다', () => {
   });
   assert.equal(summary.split('\n').length, 3);
   assert.doesNotMatch(summary, /자동\s*요약|음성으로 듣기|타임톡/);
+});
+
+test('여러 소식을 합친 편집 기사와 방송 예고를 제외한다', () => {
+  assert.equal(isRejectedTitle('[건설 Pick] GS건설·대방건설·대우건설'), true);
+  assert.equal(isRejectedTitle('[패트롤] 익산시-익산시체육회'), true);
+  assert.equal(isRejectedTitle("7월 21일 '뉴스 9' 예고"), true);
 });
 
 test('제목 복붙과 중복 문장을 요약에 넣지 않는다', () => {

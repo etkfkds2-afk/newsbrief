@@ -52,7 +52,7 @@ test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후�
   assert.equal(issueCandidateLimit(60, false), 60);
 });
 
-test('이슈 상세는 목록과 같은 후보 수를 쓰고 최신 피드는 인기 테이블을 조인하지 않는다', async () => {
+test('이슈 상세는 목록과 같은 후보 수를 쓰고 인기 테이블을 LEFT JOIN하지 않는다', async () => {
   const env = mockEnv([], [{ key: '일반|ai:0', title: '테스트 이슈', url_keys: ['a', 'b'] }]);
   await onRequestGet({ request: new Request('https://example.com/api/news/articles?limit=150&exclude_baduk=1&issue_key=일반%7Cai%3A0'), env });
   assert.doesNotMatch(env.articleSql, /JOIN news_popularity/);

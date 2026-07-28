@@ -88,6 +88,17 @@ export function hasIncidentLocationConflict(existingContext, article) {
   return false;
 }
 
+export function hasLegalCaseConflict(existingContext, article) {
+  const existing = String(existingContext || '');
+  const incoming = `${article?.title || ''} ${article?.summary || ''}`;
+  // These are separate legal events even when the subject is the same person.
+  // Keep the rule deliberately narrow so ordinary follow-up coverage is not
+  // split merely because one headline omits a legal term.
+  if (/정치자금법/u.test(existing) && /허위사실공표/u.test(incoming) && !/정치자금법/u.test(incoming)) return true;
+  if (/허위사실공표/u.test(existing) && /정치자금법/u.test(incoming) && !/허위사실공표/u.test(incoming)) return true;
+  return false;
+}
+
 export function rejectConflictingExistingMatches(groups, articles, existingIssues) {
   const issueByTitle = new Map(existingIssues.map(issue => [issue.title, issue]));
   const kept = [], rejectedKeys = [];
@@ -97,7 +108,7 @@ export function rejectConflictingExistingMatches(groups, articles, existingIssue
     const accepted = [], rejected = [];
     for (const key of group.url_keys || []) {
       const article = articles.find(item => item.url_key === key);
-      (hasIncidentLocationConflict(existing.context, article) ? rejected : accepted).push(key);
+      (hasIncidentLocationConflict(existing.context, article) || hasLegalCaseConflict(existing.title, article) ? rejected : accepted).push(key);
     }
     if (accepted.length) kept.push({ ...group, url_keys: accepted });
     rejectedKeys.push(...rejected);
