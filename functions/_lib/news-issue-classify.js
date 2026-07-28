@@ -36,9 +36,32 @@ function cleanEventTitle(value) {
     .slice(0, 40);
 }
 
+function knownTournamentTitle(value) {
+  const text = String(value || '').replace(/\s+/g, ' ');
+  const rules = [
+    [/대한체육회장배/u, '대한체육회장배 전국바둑선수권대회'],
+    [/광주광역시체육회장배/u, '광주광역시체육회장배 학생바둑대회'],
+    [/부산(?:광역)?시장배/u, '부산시장배 전국바둑대회'],
+    [/평택시장배/u, '평택시장배 전국바둑대회'],
+    [/하찬석\s*국수배|하찬석국수배/u, '하찬석 국수배 영재바둑대회'],
+    [/영일만\s*사랑배/u, '영일만 사랑배 전국바둑대회'],
+    [/부안군수배/u, '부안군수배 전국동호인바둑대회'],
+    [/영종(?:국제도시배|바둑대회)|영종구청소년수련관/u, '영종국제도시배 바둑대회'],
+    [/고양(?:특례)?시장배|고양시장.*학생.*바둑/u, '고양시장배 학생바둑대회'],
+    [/강원.*장애인.*바둑대회/u, '강원장애인 바둑대회'],
+    [/단양군.*노인회장기/u, '단양군 노인회장기대회'],
+    [/구리시.*바둑대회|구리시장기/u, '구리시 바둑대회'],
+    [/대전.*어르신.*바둑.*장기대회|대한노인회 대전/u, '대전 어르신 바둑장기대회'],
+    [/무안군.*청소년.*바둑대회|무안군.*상숙시/u, '무안군 청소년바둑대회']
+  ];
+  return rules.find(([pattern]) => pattern.test(text))?.[1] || '';
+}
+
 export function standaloneEventTitle(article) {
   const title = String(article?.title || '').replace(/[“”‘’"']/g, '').trim();
   const firstSummary = String(article?.summary || '').split('\n')[0].replace(/^\s*\d+\)\s*/u, '').trim();
+  const known = knownTournamentTitle(`${title} ${firstSummary}`);
+  if (known) return known;
   const historicalMention = /(?:과거|경력|출전한 적|참가한 적|우승한 적)/u.test(firstSummary);
   if (/대회/u.test(title)) {
     return cleanEventTitle(title
@@ -108,6 +131,8 @@ export function mergeRepeatedPersonCases(groups, articles) {
 export function normalizeIssueTitle(title, articles = []) {
   const raw = String(title || '').replace(/[“”‘’"']/g, '').trim().slice(0, 40);
   const context = `${raw} ${articles.map(article => `${article?.title || ''} ${article?.summary || ''}`).join(' ')}`;
+  const knownEvent = knownTournamentTitle(context);
+  if (knownEvent) return knownEvent;
   if (/한돌/u.test(context) && /(?:한중|중국)/u.test(context) && /청소년/u.test(context)) return '한중청소년교류 한돌 지원';
   if (/하찬석국수배|하찬석 국수배/u.test(context)) return '하찬석 국수배 영재바둑대회';
   if (/영종/u.test(context) && /국제도시배/u.test(context)) return '영종국제도시배 바둑대회';
