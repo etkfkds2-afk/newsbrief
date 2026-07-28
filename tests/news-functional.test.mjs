@@ -534,6 +534,16 @@ test('이슈 상세는 직관적인 뒤로가기와 브라우저 앞뒤 탐색 �
   assert.doesNotMatch(html, /이슈 목록으로/);
 });
 
+test('이슈 선택 후에도 전체 이슈 목록을 유지하고 선택 타일만 강조한다', async () => {
+  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /class="issueCard \$\{selected\?'on':''\}"/);
+  assert.match(html, /aria-pressed="\$\{selected\?'true':'false'\}"/);
+  assert.match(html, /선택됨 · /);
+  assert.match(html, /else if\(!state\.issueKey\)state\.issueItems=d\.issues\|\|\[\]/);
+  assert.match(html, /indexParams\.delete\('issue_key'\)/);
+  assert.match(html, /Promise\.all\(\[fetchViewJson\(detailUrl/);
+});
+
 test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
@@ -655,7 +665,8 @@ test('조회 결과는 5분간 재사용하되 주간·월간 데이터는 사�
   assert.doesNotMatch(html, /function prefetchPeriods\(section\)/);
   assert.doesNotMatch(html, /requestIdleCallback/);
   assert.match(html, /if\(viewRequests\.has\(url\)\)return viewRequests\.get\(url\)/);
-  assert.match(html, /await fetchViewJson\(`\/api\/news\/articles\?\$\{p\}`/);
+  assert.match(html, /const detailUrl=`\/api\/news\/articles\?\$\{p\}`/);
+  assert.match(html, /fetchViewJson\(detailUrl/);
   assert.match(html, /viewCache\.clear\(\);viewRequests\.clear\(\)/);
   assert.match(html, /viewCacheGeneration\+=1/);
   assert.match(html, /content-visibility:auto/);
