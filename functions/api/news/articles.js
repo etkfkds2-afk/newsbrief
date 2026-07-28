@@ -91,7 +91,7 @@ function buildIssues(items, category = '') {
 
 export function issueCandidateLimit(limit, issues, isBaduk = false) {
   if (!issues) return limit;
-  return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : Math.min(limit, 100);
+  return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : Math.min(limit, 150);
 }
 
 async function loadIssueCache(env, category) {
@@ -230,8 +230,15 @@ export async function onRequestGet({ request, env }) {
     // Issue counts and issue-click results must be derived from the exact same
     // candidate set. Otherwise a monthly issue can advertise one count and
     // reveal a different set after it is opened.
-    const queryLimit = issueCandidateLimit(limit, issues, category === '바둑');
+    const queryLimit = issueCandidateLimit(limit, issues || Boolean(issueKeyFilter), category === '바둑');
     bindings.push(queryLimit);
+
+    // Popularity tables are only needed by the compact home/popular feed.
+    // Joining them on every latest/saved/issue request was the expensive path
+    // behind intermittent Cloudflare "Worker exceeded resource limits" 503s.
+    const popularityJoins = ['popular', 'home'].includes(view) ? `
+      LEFT JOIN news_popularity np ON np.url_key=a.url_key
+      LEFT JOIN news_popular_items p ON p.title=a.title` : '';
 
     const order = view === 'popular'
       ? (hours > 0 && hours <= 24
@@ -248,8 +255,7 @@ export async function onRequestGet({ request, env }) {
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
-      LEFT JOIN news_popularity np ON np.url_key=a.url_key
-      LEFT JOIN news_popular_items p ON p.title=a.title
+      ${popularityJoins}
       WHERE ${where.join(' AND ')}
       ORDER BY ${order}
       LIMIT ?

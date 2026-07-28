@@ -465,7 +465,7 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = issueCandidateLimit\(limit, issues, category === '바둑'\)/);
+  assert.match(source, /const queryLimit = issueCandidateLimit\(limit, issues \|\| Boolean\(issueKeyFilter\), category === '바둑'\)/);
   assert.doesNotMatch(source, /const queryLimit = issueKeyFilter \?/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
@@ -620,10 +620,10 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /diagnostics\.new_candidates/);
 });
 
-test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 보존한다', async () => {
+test('일반 홈은 인기 랭킹, 주간·월간은 기간 전체 기사, 저장 탭은 저장 기사만 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /const view=isBaduk\?'latest':'popular'/);
-  assert.match(html, /sub==='saved'\?'saved':\(isBaduk\?'latest':'popular'\)/);
+  assert.match(html, /sub==='saved'\?'saved':'latest'/);
   assert.match(html, /view=\$\{view\}/);
   assert.match(html, /const homeHours=24/);
   assert.match(html, /const homeLimit=isBaduk\?30:10/);
@@ -633,6 +633,7 @@ test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 �
   const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   assert.match(source, /LEFT JOIN news_popularity np ON np\.url_key=a\.url_key/);
   assert.match(source, /LEFT JOIN news_popular_items p ON p\.title=a\.title/);
+  assert.match(source, /const popularityJoins = \['popular', 'home'\]\.includes\(view\)/);
   assert.doesNotMatch(source, /p\.url_key=a\.url_key OR p\.title=a\.title/);
   assert.match(source, /similarTokens\(titleTokens, old\.titleTokens/);
 });

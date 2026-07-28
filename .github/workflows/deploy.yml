@@ -358,6 +358,9 @@ jobs:
     steps:
       - name: Check NewsBrief production health
         id: health
+        env:
+          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
+          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
         run: |
           set +e
           status=$(curl -sS -o /tmp/newsbrief-health.json -w '%{http_code}' \
@@ -371,7 +374,24 @@ jobs:
           fi
           cat /tmp/newsbrief-health.json
           health_ok=$(jq -r '.ok // false' /tmp/newsbrief-health.json 2>/dev/null || printf 'false')
-          if [ "$status" != "200" ] || [ "$health_ok" != "true" ]; then
+          feed_ok=false
+          login_status=$(curl -sS --max-time 30 -c /tmp/newsbrief-health-cookie \
+            -o /tmp/newsbrief-login-check.json -w '%{http_code}' \
+            -H 'content-type: application/json' \
+            --data "$(jq -cn --arg username "$NEWSBRIEF_SITE_USER" --arg password "$NEWSBRIEF_SITE_PASSWORD" '{username:$username,password:$password}')" \
+            "https://newsbrief-etkfkds2.pages.dev/api/auth/login" || true)
+          if [ "$login_status" = "200" ]; then
+            weekly_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-weekly-check.json -w '%{http_code}' \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=latest&exclude_baduk=1&hours=168&issues=1" || true)
+            monthly_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-monthly-check.json -w '%{http_code}' \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=latest&exclude_baduk=1&hours=720&issues=1" || true)
+            if [ "$weekly_status" = "200" ] && [ "$monthly_status" = "200" ] \
+              && jq -e '.ok == true' /tmp/newsbrief-weekly-check.json >/dev/null \
+              && jq -e '.ok == true' /tmp/newsbrief-monthly-check.json >/dev/null; then
+              feed_ok=true
+            fi
+          fi
+          if [ "$status" != "200" ] || [ "$health_ok" != "true" ] || [ "$feed_ok" != "true" ]; then
             echo "unhealthy=true" >> "$GITHUB_OUTPUT"
           else
             echo "unhealthy=false" >> "$GITHUB_OUTPUT"

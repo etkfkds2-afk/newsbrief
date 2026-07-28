@@ -46,9 +46,16 @@ test('바둑 숨김 설정은 API 조회 조건에도 적용한다', async () =>
 });
 
 test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후보만 읽는다', () => {
-  assert.equal(issueCandidateLimit(150, true), 100);
+  assert.equal(issueCandidateLimit(150, true), 150);
   assert.equal(issueCandidateLimit(120, true, true), 240);
   assert.equal(issueCandidateLimit(60, false), 60);
+});
+
+test('이슈 상세는 목록과 같은 후보 수를 쓰고 최신 피드는 인기 테이블을 조인하지 않는다', async () => {
+  const env = mockEnv([]);
+  await onRequestGet({ request: new Request('https://example.com/api/news/articles?limit=150&issue_key=일반%7Cai%3Amisc'), env });
+  assert.doesNotMatch(env.articleSql, /JOIN news_popularity/);
+  assert.doesNotMatch(env.articleSql, /JOIN news_popular_items/);
 });
 
 test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', async () => {
