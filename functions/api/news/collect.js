@@ -174,8 +174,12 @@ async function fetchArticleText(url) {
     if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
     const html = (await response.text()).slice(0, 800000);
     if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
-    const image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
+    let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
+    // baduk.or.kr's og:image is a fixed site-wide placeholder, never the real
+    // article photo, so every article ended up with the same thumbnail. Fall
+    // back to the first inline image inside the article body instead.
+    if (/\/\/(?:www\.)?baduk\.or\.kr\//i.test(image) && /\/images\/common\//i.test(image)) image = '';
     const siteName = cleanPressName(html.match(/<meta[^>]+(?:property|name)=["']og:site_name["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:site_name["']/i)?.[1] || '');
     const publishedAt = parseDate(
@@ -195,6 +199,12 @@ async function fetchArticleText(url) {
     }
     const articleStart = html.search(/<(?:article|div)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody)[^"']*["'][^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
+    if (!image) {
+      const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+      if (bodyImageSrc) {
+        try { image = new URL(bodyImageSrc, url).toString(); } catch {}
+      }
+    }
     const body = cleanBody(jsonBody || stripHtml(article
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
@@ -356,12 +366,17 @@ async function koreanBadukLatest() {
       const title = cleanTitle(block.match(/<dt[^>]*>([\s\S]*?)<\/dt>/i)?.[1] || '');
       if (title.length < 8 || seen.has(url) || isRejectedTitle(title)) continue;
       seen.add(url);
+      const dateText = normalizeText(block.match(/<span[^>]+class=["']date["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || '');
       // The listing only gives a date, never a time of day, and the article
-      // page has no timestamp meta either. A date-only value gets parsed as
-      // midnight, which can make a same-day article look >24h old for most of
-      // the day. Leave pubDate empty so published_at falls back to fetched_at
-      // (the actual collection time) instead of a misleading midnight stamp.
-      items.push({ title, link: url, originallink: url, description: '', pubDate: '', press: '한국기원' });
+      // page has no timestamp meta either. Anchor to noon Korea time for that
+      // date: a bare date parses as UTC midnight, which makes a same-day
+      // article look >24h old for most of the day, while falling back to the
+      // collection time (an earlier version of this fix) makes old backlog
+      // articles look freshly published today. Noon keeps old articles on
+      // their real date and still lands same-day articles inside a same-day
+      // recency window for most of the day.
+      const pubDate = /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? `${dateText} 12:00:00` : '';
+      items.push({ title, link: url, originallink: url, description: '', pubDate, press: '한국기원' });
       if (items.length >= 12) break;
     }
     return items;
@@ -879,13 +894,16 @@ async function collect(env, {
         const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
         const hasDateOnly = isPopular && existingDateOnly;
         const hasMissingTime = !String(exists.published_at || '').trim();
-        // TRUSTED_BADUK (baduk.or.kr) never has a real timestamp available, so
-        // a date-only value here would otherwise never get repaired by the
-        // generic path below, which refuses to overwrite a value with ''.
-        if (source === 'TRUSTED_BADUK' && existingDateOnly) {
-          await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?').bind('', exists.id).run();
+        const hasGenericImage = /baduk\.or\.kr\/images\/common\//i.test(String(exists.image_url || ''));
+        // TRUSTED_BADUK (baduk.or.kr) never has a real timestamp, only a date
+        // (see koreanBadukLatest, which now sends noon-KST for that date via
+        // publishedAt). A literal date-only value here would otherwise never
+        // get repaired by the generic path below, which is gated on isPopular
+        // and refuses to overwrite a value with ''.
+        if (source === 'TRUSTED_BADUK' && existingDateOnly && publishedAt) {
+          await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?').bind(publishedAt, exists.id).run();
         }
-        if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime) {
+        if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime || hasGenericImage) {
           const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);

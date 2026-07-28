@@ -554,7 +554,7 @@ test('요약 실패 기사는 같은 날 반복 호출하지 않고 적게 시�
 test('이미 정상 요약인 기사는 메타데이터만 보강하고 AI 요약을 다시 호출하지 않는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
-  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly \|\| hasMissingTime\)/);
+  assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly \|\| hasMissingTime \|\| hasGenericImage\)/);
   assert.match(source, /return outcome\('existing_full'\)/);
   assert.doesNotMatch(source, /hasPublicationCapacity/);
 });
