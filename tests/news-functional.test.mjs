@@ -817,9 +817,52 @@ test('관리자 화면과 배포 산출물은 관리자 전용 계정 관리를 
   assert.match(page, /비밀번호 변경/);
   assert.match(page, /아이디 변경/);
   assert.match(page, /data-action="delete"/);
+  assert.match(page, /무료 DB 저장공간/);
+  assert.match(page, /\/api\/admin\/usage/);
   assert.match(home, /me\?\.admin/);
   assert.match(workflow, /cp admin\.html dist\/admin\.html/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS news_users/);
+});
+
+test('계정 삭제는 해당 계정의 저장·삭제 기록도 함께 제거한다', async () => {
+  const source = await readFile(new URL('../functions/api/admin/users.js', import.meta.url), 'utf8');
+  assert.match(source, /const accountId = `account:\$\{username\}`/);
+  assert.match(source, /DELETE FROM news_saved WHERE user_id=\?/);
+  assert.match(source, /DELETE FROM news_hidden WHERE user_id=\?/);
+  assert.match(source, /preferences_deleted: true/);
+});
+
+test('계정 삭제 API는 대상 계정 저장·삭제 행과 계정을 한 배치로 정리한다', async () => {
+  const executed = [];
+  const env = {
+    NEWSBRIEF_SITE_USER: 'admin0221', NEWSBRIEF_SITE_PASSWORD: 'admin-pass',
+    DB: {
+      prepare(sql) {
+        return { sql, values: [], bind(...values) { this.values = values; return this; } };
+      },
+      async batch(statements) { executed.push(...statements); return statements.map(() => ({})); }
+    }
+  };
+  const response = await updateUser({
+    request: new Request('https://example.com/api/admin/users', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-news-user': 'account:admin0221' },
+      body: JSON.stringify({ action: 'delete', username: 'member01' })
+    }), env
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.preferences_deleted, true);
+  const cleanup = executed.filter(statement => /DELETE FROM news_(?:saved|hidden) WHERE user_id=\?/.test(statement.sql));
+  assert.equal(cleanup.length, 2);
+  assert.deepEqual(cleanup.map(statement => statement.values), [['account:member01'], ['account:member01']]);
+});
+
+test('무료 DB 저장공간 70%는 관리자와 자동 건강 점검에서 경고한다', async () => {
+  const usage = await readFile(new URL('../functions/api/admin/usage.js', import.meta.url), 'utf8');
+  const health = await readFile(new URL('../functions/api/news/health.js', import.meta.url), 'utf8');
+  assert.match(usage, /FREE_DATABASE_BYTES = 500 \* 1024 \* 1024/);
+  assert.match(usage, /storagePercent >= 85 \? 'danger' : storagePercent >= 70 \? 'warning'/);
+  assert.match(health, /database_storage_below_70_percent/);
 });
 
 test('아이디 변경은 저장·삭제 데이터를 새 계정으로 이전하고 기존 계정을 비활성화한다', async () => {

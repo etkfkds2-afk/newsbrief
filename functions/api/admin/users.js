@@ -41,11 +41,16 @@ export async function onRequestPost({ request, env }) {
     if (username === adminUsername(env)) return json({ ok: false, error: '관리자 본인 계정은 삭제할 수 없습니다.' }, 400);
     await ensureNewsDb(env);
     const updatedAt = new Date().toISOString();
-    await env.DB.prepare(`INSERT INTO news_users(username,password_hash,role,active,updated_at)
-      VALUES (?,'','member',0,?)
-      ON CONFLICT(username) DO UPDATE SET password_hash='',active=0,updated_at=excluded.updated_at`)
-      .bind(username, updatedAt).run();
-    return json({ ok: true });
+    const accountId = `account:${username}`;
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM news_saved WHERE user_id=?').bind(accountId),
+      env.DB.prepare('DELETE FROM news_hidden WHERE user_id=?').bind(accountId),
+      env.DB.prepare(`INSERT INTO news_users(username,password_hash,role,active,updated_at)
+        VALUES (?,'','member',0,?)
+        ON CONFLICT(username) DO UPDATE SET password_hash='',active=0,updated_at=excluded.updated_at`)
+        .bind(username, updatedAt)
+    ]);
+    return json({ ok: true, preferences_deleted: true });
   }
   if (action === 'rename') {
     const oldUsername = String(body?.old_username || '').trim();

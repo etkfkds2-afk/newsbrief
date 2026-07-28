@@ -9,7 +9,7 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, automaticRun, counts, missingTime, stateRows, exhausted] = await Promise.all([
+    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -26,11 +26,14 @@ export async function onRequestGet({ env }) {
         ('ai_blocked','claude_monthly_micro_usd','claude_budget_month')`).all(),
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_summary_attempts f
         JOIN news_articles a ON a.url_key=f.url_key
-        WHERE f.attempts>=24 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first()
+        WHERE f.attempts>=24 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
+      env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all()
     ]);
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const finishedAgeHours = run?.finished_at ? (Date.now() - utcMillis(run.finished_at)) / 3600000 : Infinity;
     const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
+    const databaseBytes = Number(storageResult.meta?.size_after || 0);
+    const databaseStoragePercent = databaseBytes > 0 ? databaseBytes / (500 * 1024 * 1024) * 100 : null;
     const checks = {
       // A degraded run means an optional provider failed, not that the feed or
       // database is unavailable. Freshness checks below still catch real loss.
@@ -42,7 +45,8 @@ export async function onRequestGet({ env }) {
       published_time_complete: Number(missingTime?.count || 0) === 0,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: Number(state.claude_monthly_micro_usd || 0) < CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
-      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 5
+      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 5,
+      database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
     };
     const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
     return json({
@@ -62,7 +66,9 @@ export async function onRequestGet({ env }) {
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: Number(state.claude_monthly_micro_usd || 0),
         claude_budget_month: String(state.claude_budget_month || ''),
-        summary_exhausted: Number(exhausted?.count || 0)
+        summary_exhausted: Number(exhausted?.count || 0),
+        database_bytes: databaseBytes || null,
+        database_storage_percent: databaseStoragePercent === null ? null : Number(databaseStoragePercent.toFixed(2))
       }
     // The endpoint itself is reachable and D1 queries succeeded. Content
     // freshness/quality failures are operational diagnostics, not an HTTP
