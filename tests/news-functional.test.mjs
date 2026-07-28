@@ -205,6 +205,20 @@ test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사
   assert.deepEqual(normalized.find(group => group.key.endsWith('|ai:misc')).url_keys, ['profile']);
 });
 
+test('제목에 대회가 없어도 요약의 공식 바둑대회명으로 단건 이슈를 표시한다', () => {
+  const items = [{
+    url_key: 'gwangju', category: '바둑',
+    title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
+    summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.'
+  }];
+  const normalized = normalizeCachedIssues(items, [{
+    key: '바둑|ai:event:gwangju', title: '광주광역시체육회장배 학생바둑대회', url_keys: ['gwangju']
+  }]);
+  assert.deepEqual(normalized.map(group => [group.title, group.url_keys]), [
+    ['광주광역시체육회장배 학생바둑대회', ['gwangju']]
+  ]);
+});
+
 test('월간 이슈가 12개를 넘어도 주간에 보인 바둑 대회를 잘라내지 않는다', () => {
   const items = Array.from({ length: 13 }, (_, index) => ({
     url_key: `event-${index}`, category: '바둑', title: `제${index + 1}회 바둑대회`

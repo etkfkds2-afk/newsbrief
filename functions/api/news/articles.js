@@ -3,6 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
+import { standaloneEventTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -101,6 +102,7 @@ async function loadIssueCache(env, category) {
 
 export function normalizeCachedIssues(items, cached) {
   const itemByKey = new Map(items.map(item => [item.url_key, item]));
+  const tournamentTitle = item => item?.category === '바둑' ? standaloneEventTitle(item) : '';
   const mapped = cached.map(group => {
     const keys = group.url_keys.filter(key => itemByKey.has(key));
     return { key: group.key, title: group.title, url_keys: keys };
@@ -110,7 +112,7 @@ export function normalizeCachedIssues(items, cached) {
     if (group.key.endsWith('|ai:misc')) return true;
     if (group.url_keys.length >= 2) return true;
     const item = itemByKey.get(group.url_keys[0]);
-    if (item?.category === '바둑' && /대회/u.test(String(item.title || ''))) return true;
+    if (tournamentTitle(item)) return true;
     forcedMisc.push(...group.url_keys);
     return false;
   });
@@ -118,12 +120,12 @@ export function normalizeCachedIssues(items, cached) {
   const miscKeys = [...new Set([...(misc?.url_keys || []), ...forcedMisc])];
   const missedTournaments = miscKeys.filter(key => {
     const item = itemByKey.get(key);
-    return item?.category === '바둑' && /대회/u.test(String(item.title || ''));
+    return Boolean(tournamentTitle(item));
   });
   const missedSet = new Set(missedTournaments);
   for (const key of missedTournaments) {
     const item = itemByKey.get(key);
-    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: item.title.slice(0, 40), url_keys: [key] });
+    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: tournamentTitle(item), url_keys: [key] });
   }
   const normalizedMisc = miscKeys.filter(key => !missedSet.has(key));
   const withoutMisc = valid.filter(group => !group.key.endsWith('|ai:misc'));
