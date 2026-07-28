@@ -5,7 +5,10 @@ import { hasValidSession } from './_lib/session.js';
 // with their own Bearer token (see isCollectorAuthorized in news-db.js) and
 // never carry a browser session cookie, so gating them here would silently
 // break the automated collection/classification schedule.
-const OPEN_PATHS = new Set(['/login.html', '/api/auth/login', '/api/news/health']);
+// '/login' (no extension) is included because Cloudflare Pages auto-redirects
+// /login.html -> /login; without it here, that redirect would bounce back
+// into this same gate and loop.
+const OPEN_PATHS = new Set(['/login.html', '/login', '/api/auth/login', '/api/news/health']);
 const TOKEN_PROTECTED_PREFIXES = ['/api/news/collect', '/api/news/classify-issues'];
 
 export async function onRequest({ request, env, next }) {
@@ -27,5 +30,5 @@ export async function onRequest({ request, env, next }) {
     });
   }
   const next_param = encodeURIComponent(url.pathname + url.search);
-  return Response.redirect(`${url.origin}/login.html?next=${next_param}`, 302);
+  return Response.redirect(`${url.origin}/login?next=${next_param}`, 302);
 }

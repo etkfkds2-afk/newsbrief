@@ -225,7 +225,7 @@ $('cards').addEventListener('click',async e=>{
   }catch{button.disabled=false;toast('처리하지 못했습니다. 다시 시도해 주세요.')}
 });
 $('search').onsubmit=e=>{e.preventDefault();state.q=$('query').value.trim();load()};
-$('logoutBtn').onclick=async()=>{try{await fetchTimed('/api/auth/logout',{method:'POST'})}catch{}location.href='/login.html'};
+$('logoutBtn').onclick=async()=>{try{await fetchTimed('/api/auth/logout',{method:'POST'})}catch{}location.href='/login'};
 nav();load();
 // Recheck visible data every ten minutes; the collector and five-minute cache
 // keep this lightweight while making newly collected articles appear promptly.
