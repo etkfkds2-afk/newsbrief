@@ -550,8 +550,10 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
   assert.match(html, /@media\(max-width:680px\)\{\.issueGrid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\);gap:8px\}/);
   assert.doesNotMatch(html, /@media\(max-width:420px\)\{\.issueGrid\{grid-template-columns:1fr\}\}/);
   assert.match(html, /\.issueName\{[^}]*word-break:keep-all;overflow-wrap:anywhere/);
-  assert.match(html, /\.issueCard\{min-height:108px;[^}]*text-align:center\}/);
+  assert.match(html, /\.issueCard\{justify-content:center;min-height:108px;[^}]*text-align:center\}/);
   assert.match(html, /\.issueName\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
+  assert.match(html, /\.issueMeta\{flex-direction:column;align-items:center;gap:1px;margin-top:5px;padding-top:0/);
+  assert.doesNotMatch(html, /\.issueMeta\{[^}]*margin-top:auto/);
   assert.match(html, /\.issueView\{white-space:nowrap\}/);
   assert.match(html, /\.issueViewDesktop\{display:none\}/);
   assert.match(html, /class="issueViewMobile">전체보기 <\/span><span class="issueArrow" aria-hidden="true">↓/);
