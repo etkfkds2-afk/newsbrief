@@ -680,10 +680,14 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
 
 test('핵심 뉴스는 원문 대신 아래에 선택한 요약 카드 한 장만 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  assert.match(html, /id="hotShowAll" type="button" hidden>전체 보기/);
   assert.match(html, /href="#article-\$\{esc\(x\.url_key\)\}" data-jump-key/);
+  assert.match(html, /\$\('hotShowAll'\)\.hidden=!state\.focusKey/);
+  assert.match(html, /class="hotchip \$\{selected\?'on':''\}"/);
   assert.match(html, /closest\('\[data-jump-key\]'\)/);
   assert.match(html, /state\.focusKey\?state\.items\.filter\(item=>item\.url_key===state\.focusKey\):state\.items/);
   assert.match(html, /state\.focusKey=jump\.dataset\.jumpKey;render\(\)/);
+  assert.match(html, /closest\('#hotShowAll'\)\)\{state\.focusKey='';render\(\);return\}/);
   assert.match(html, /state\.focusKey='';/);
   assert.match(html, /scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
   assert.match(html, /card\.classList\.add\('issue-focus'\)/);
