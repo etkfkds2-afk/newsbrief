@@ -46,7 +46,7 @@ test('바둑 숨김 설정은 API 조회 조건에도 적용한다', async () =>
 });
 
 test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후보만 읽는다', () => {
-  assert.equal(issueCandidateLimit(150, true), 150);
+  assert.equal(issueCandidateLimit(150, true), 100);
   assert.equal(issueCandidateLimit(120, true, true), 240);
   assert.equal(issueCandidateLimit(60, false), 60);
 });

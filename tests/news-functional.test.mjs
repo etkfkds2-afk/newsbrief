@@ -34,6 +34,9 @@ test('요약의 공식 대회명과 바둑 기록 기사도 단건 이슈로 보
   assert.equal(standaloneBadukIssueTitle(gwangju), '광주광역시체육회장배 학생바둑대회');
   assert.equal(standaloneBadukIssueTitle({ title: '김명훈, 명인전서 통산 500승 달성' }), '김명훈 통산 500승');
   assert.equal(standaloneBadukIssueTitle({ title: '최정, 여자 바둑 1위 탈환' }), '최정 여자바둑 1위 탈환');
+  assert.equal(standaloneBadukIssueTitle({ title: '"2점 차 랭킹 역전" 최정, 여자 바둑 1위 탈환' }), '최정 여자바둑 1위 탈환');
+  assert.equal(standaloneBadukIssueTitle({ title: '신민준, 박정환 꺾고 GS칼텍스배 탈환' }), '신민준 GS칼텍스배 탈환');
+  assert.equal(standaloneBadukIssueTitle({ title: '춘천서 챌린지 바둑 리그 6라운드 개최' }), '챌린지 바둑 리그');
   assert.equal(isStandaloneEventArticle(gwangju), true);
   const normalized = normalizeCachedIssues([{ ...gwangju, url_key: 'gwangju', category: '바둑' }], [{
     key: '바둑|ai:misc', title: '기타', url_keys: ['gwangju']

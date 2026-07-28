@@ -91,7 +91,7 @@ function buildIssues(items, category = '') {
 
 export function issueCandidateLimit(limit, issues, isBaduk = false) {
   if (!issues) return limit;
-  return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : limit;
+  return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : Math.min(limit, 100);
 }
 
 async function loadIssueCache(env, category) {

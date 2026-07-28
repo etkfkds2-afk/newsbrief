@@ -30,6 +30,7 @@ function cleanEventName(value) {
   return String(value || '')
     .replace(/^\s*(?:\[[^\]]+\]|<[^>]+>)\s*/u, '')
     .replace(/^\s*(?:제\s*)?\d+회\s*/u, '')
+    .replace(/^(?:\d+일\s+)?[가-힣]{2,10}(?:에서|서)\s*/u, '')
     .replace(/\s+/g, ' ')
     .replace(/\s+(?:개최|개막|성료|결승|우승|정상|펼쳐져|열려).*$/u, '')
     .trim().slice(0, 32);
@@ -39,15 +40,17 @@ export function standaloneBadukIssueTitle(article) {
   const title = String(article?.title || '').replace(/\s+/g, ' ').trim();
   const first = String(article?.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '').replace(/\s+/g, ' ').trim();
   const eventSummary = first.replace(/^.*?(?:주최한|주관한|개최한|열린)\s*/u, '');
-  const eventPattern = /(?:제\s*\d+회\s*)?([가-힣A-Za-z0-9· ]{2,38}?(?:전국)?(?:바둑)?(?:선수권대회|바둑대회|결정전|챌린지리그|바둑리그|기전|컵))/u;
+  const wins = title.match(/([가-힣]{2,4}).*?통산\s*(\d+승)/u);
+  if (wins) return `${wins[1]} 통산 ${wins[2]}`;
+  const ranking = title.match(/(최정|김은지|오유진|김채영|신진서|박정환|변상일|신민준).*?(?:여자\s*)?바둑\s*1위\s*탈환/u);
+  if (ranking) return `${ranking[1]} 여자바둑 1위 탈환`;
+  const tournamentResult = title.match(/^([가-힣]{2,4}).*?([A-Za-z가-힣0-9]+배).*?(우승|탈환)/u);
+  if (tournamentResult) return `${tournamentResult[1]} ${tournamentResult[2]} ${tournamentResult[3]}`;
+  const eventPattern = /(?:제\s*\d+회\s*)?([가-힣A-Za-z0-9· ]{2,38}?(?:전국)?(?:바둑)?(?:선수권대회|바둑대회|결정전|챌린지\s*바둑\s*리그|바둑\s*리그|기전|컵))/u;
   const titleEvent = title.match(eventPattern)?.[0];
   if (titleEvent) return cleanEventName(titleEvent);
   const summaryEvent = eventSummary.match(eventPattern)?.[0];
   if (summaryEvent && /(?:개최|열렸|성료|결승|우승|대회가|대회를)/u.test(first)) return cleanEventName(summaryEvent);
-  const wins = title.match(/([가-힣]{2,4}).*?통산\s*(\d+승)/u);
-  if (wins) return `${wins[1]} 통산 ${wins[2]}`;
-  const ranking = title.match(/([가-힣]{2,4}).*?(?:여자\s*)?바둑\s*1위\s*탈환/u);
-  if (ranking) return `${ranking[1]} 여자바둑 1위 탈환`;
   if (/(?:우승|탈환)/u.test(title) && /(?:배|기전|컵|명인전)/u.test(title)) return cleanEventName(title);
   return '';
 }
