@@ -288,17 +288,24 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(workflow, /popularity_date=\$\{ymd\}/);
 });
 
-test('홈 표시 개수는 제한하되 수집 단계에서 정상 기사를 버리지 않는다', async () => {
+test('바둑과 일반 뉴스는 각각 하루 10개까지 게시한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(collector, /DAILY_CATEGORY_PUBLISH_LIMIT/);
+  assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 10/);
   assert.doesNotMatch(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT/);
-  assert.doesNotMatch(collector, /hasPublicationCapacity/);
+  assert.match(collector, /publicationCounts\[bucket\]\.daily >= DAILY_CATEGORY_PUBLISH_LIMIT/);
   assert.match(collector, /home_display_limits = \{ baduk: 30, general: 10 \}/);
   assert.match(collector, /consumePublicationCapacity/);
   assert.match(collector, /publish_counts_before/);
   assert.match(collector, /publish_counts_after/);
   assert.match(collector, /validPublishedSummary\(row\.summary, row\.title, row\.category\)/);
   assert.match(collector, /const dayStart = Date\.UTC/);
+});
+
+test('바둑은 네이버 재확인 없이 한국기원 최신 원문을 직접 수집한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /async function koreanBadukLatest/);
+  assert.match(collector, /source: 'TRUSTED_BADUK'/);
+  assert.match(collector, /official_baduk_found/);
 });
 
 test('Cloudflare AI 3줄 요약은 바둑과 일반 뉴스 모두 대상으로 한다', async () => {

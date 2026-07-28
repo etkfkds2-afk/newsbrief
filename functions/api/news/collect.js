@@ -35,6 +35,7 @@ const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const SCHEDULED_GENERAL_CANDIDATES = 6;
 const SCHEDULED_BADUK_CANDIDATES = 10;
 const SCHEDULED_GOOGLE_DISCOVERIES = 10;
+const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
 
@@ -338,6 +339,27 @@ async function fetchGoogleRss(endpoint, attempts = 3) {
     if (attempt < attempts - 1) await wait(250 * (2 ** attempt));
   }
   throw new Error(`Google News RSS ${lastStatus || 'timeout'}`);
+}
+
+async function koreanBadukLatest() {
+  const base = 'https://www.baduk.or.kr/news/report.asp';
+  try {
+    const response = await fetch(base, { headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/1.0' } });
+    if (!response.ok) return [];
+    const html = await response.text();
+    const items = [], seen = new Set();
+    for (const match of html.matchAll(/<a[^>]+href=["']([^"']*report_view\.asp\?[^"']*news_no=\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+      const url = new URL(match[1].replace(/&amp;/g, '&'), base).toString();
+      const title = cleanTitle(match[2]);
+      if (title.length < 8 || seen.has(url) || isRejectedTitle(title)) continue;
+      seen.add(url);
+      items.push({ title, link: url, originallink: url, description: '', pubDate: '', press: '한국기원' });
+      if (items.length >= 12) break;
+    }
+    return items;
+  } catch {
+    return [];
+  }
 }
 
 export async function googleNewsSearch(query, days = 30) {
@@ -720,6 +742,11 @@ async function collect(env, {
   const selectedSearches = popularityCandidates.length ? [] : backfill
     ? SEARCHES.filter(([category]) => category === '바둑')
     : [SEARCHES[0], generalSearches[slot % generalSearches.length], generalSearches[(slot + 1) % generalSearches.length]];
+  if (!popularityCandidates.length && !backfill) {
+    const official = await koreanBadukLatest();
+    diagnostics.official_baduk_found = official.length;
+    for (const item of official) candidates.push({ category: '바둑', item, source: 'TRUSTED_BADUK' });
+  }
   for (const [category, query] of selectedSearches) {
     // A broad "바둑" query at ever-higher offsets repeatedly returned the same small
     // set of usable portal articles. Search several distinct beats per run instead.
@@ -882,6 +909,11 @@ async function collect(env, {
             valid ? 1 : 0, repaired, valid ? 1 : 0, exists.id).run();
         if (valid && exists.summary_quality !== 'full') consumePublicationCapacity(exists.category || category);
       return outcome(valid ? 'existing_repaired' : 'existing_repair_failed');
+    }
+
+    const bucket = publicationBucket(category);
+    if (!popularityTargetStart && publicationCounts[bucket].daily >= DAILY_CATEGORY_PUBLISH_LIMIT) {
+      return outcome('daily_publish_limit');
     }
 
     const rawSummary = stripHtml(item.description);
