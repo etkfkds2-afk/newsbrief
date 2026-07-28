@@ -8,7 +8,7 @@ const summary = [
   '3) 마지막 대국에서도 안정적인 운영을 이어가며 최종 전적 2승 1패를 기록했다.'
 ].join('\n');
 
-function mockEnv(rows) {
+function mockEnv(rows, issueCache = null) {
   let articleSql = '';
   return {
     get articleSql() { return articleSql; },
@@ -18,6 +18,7 @@ function mockEnv(rows) {
         if (sql.includes('SELECT a.id')) articleSql = sql;
         return {
           bind() { return this; },
+          async first() { return sql.includes('news_issue_cache') && issueCache ? { payload: JSON.stringify(issueCache) } : null; },
           async all() { return { results: sql.includes('SELECT a.id') ? rows : [] }; }
         };
       }
@@ -52,10 +53,11 @@ test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후�
 });
 
 test('이슈 상세는 목록과 같은 후보 수를 쓰고 최신 피드는 인기 테이블을 조인하지 않는다', async () => {
-  const env = mockEnv([]);
-  await onRequestGet({ request: new Request('https://example.com/api/news/articles?limit=150&issue_key=일반%7Cai%3Amisc'), env });
+  const env = mockEnv([], [{ key: '일반|ai:0', title: '테스트 이슈', url_keys: ['a', 'b'] }]);
+  await onRequestGet({ request: new Request('https://example.com/api/news/articles?limit=150&exclude_baduk=1&issue_key=일반%7Cai%3A0'), env });
   assert.doesNotMatch(env.articleSql, /JOIN news_popularity/);
   assert.doesNotMatch(env.articleSql, /JOIN news_popular_items/);
+  assert.match(env.articleSql, /a\.url_key IN \(\?,\?\)/);
 });
 
 test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', async () => {

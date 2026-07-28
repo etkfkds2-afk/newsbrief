@@ -197,6 +197,9 @@ export async function onRequestGet({ request, env }) {
     const maxLimit = 300;
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 60, 1), maxLimit);
     const uid = userId(request);
+    const cachedIssues = category === '바둑'
+      ? await loadIssueCache(env, category)
+      : ((!category && excludeBaduk) || issueCategory === '일반') ? await loadIssueCache(env, '일반') : null;
     const where = [
       view === 'hidden' ? "h.url_key IS NOT NULL" : "h.url_key IS NULL",
       ...CONTENT_QUALITY_FILTERS
@@ -220,6 +223,18 @@ export async function onRequestGet({ request, env }) {
     }
     if (view === 'saved') where.push('s.url_key IS NOT NULL');
     if (view === 'popular') where.push('(p.title IS NOT NULL OR np.url_key IS NOT NULL)');
+    // A named cached issue already owns an explicit URL-key set. Query those
+    // rows directly instead of loading and validating the entire 150-card
+    // period again merely to return two or three cards. Misc stays on the full
+    // candidate path because it also absorbs ungrouped/invalid singleton rows.
+    const directIssue = issueKeyFilter && !issueKeyFilter.endsWith('|ai:misc')
+      ? cachedIssues?.find(group => group.key === issueKeyFilter)
+      : null;
+    const directKeys = [...new Set(directIssue?.url_keys || [])].slice(0, 300);
+    if (directKeys.length) {
+      where.push(`a.url_key IN (${directKeys.map(() => '?').join(',')})`);
+      bindings.push(...directKeys);
+    }
     if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
@@ -290,9 +305,6 @@ export async function onRequestGet({ request, env }) {
       }
       accepted.push({ ...item, first, titleTokens, firstTokens, related: [], related_count: 0 });
     }
-    const cachedIssues = category === '바둑'
-      ? await loadIssueCache(env, category)
-      : (!category && excludeBaduk) ? await loadIssueCache(env, '일반') : null;
     const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;
     const issueList = cachedIssues ? buildIssuesFromCache(accepted, cachedIssues) : buildIssues(accepted, category);
     let selected = accepted;
