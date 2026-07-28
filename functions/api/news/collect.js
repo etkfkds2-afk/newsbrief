@@ -1011,12 +1011,16 @@ async function collect(env, {
     for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
   }
   uniqueCandidates.sort((a, b) => {
-    // Official baduk.or.kr candidates are few (<=12) and high-trust; without
-    // this they get crowded out of the fixed-size baduk batch by noisy
-    // generic-search "new" candidates that mostly fail allowedCandidate(),
-    // so genuinely new or repair-needing official items never get processed.
-    const trustedOrder = Number(b.source === 'TRUSTED_BADUK') - Number(a.source === 'TRUSTED_BADUK');
-    if (trustedOrder) return trustedOrder;
+    // Official baduk.or.kr candidates are few (<=12) and high-trust, so a new
+    // one should never lose its slot to noisy generic-search candidates that
+    // mostly fail allowedCandidate(). But once an official item is already
+    // stored, it doesn't need a slot every single run - only boost it while
+    // it's still new, or every already-published TRUSTED_BADUK item
+    // permanently occupies most of the fixed-size baduk batch forever and
+    // starves out every other source (which is what happened here).
+    const trustedNewOrder = Number(b.source === 'TRUSTED_BADUK' && !knownCandidateKeys.has(b.urlKey))
+      - Number(a.source === 'TRUSTED_BADUK' && !knownCandidateKeys.has(a.urlKey));
+    if (trustedNewOrder) return trustedNewOrder;
     const newOrder = Number(knownCandidateKeys.has(a.urlKey)) - Number(knownCandidateKeys.has(b.urlKey));
     if (newOrder) return newOrder;
     const badukOrder = Number(b.category === '바둑') - Number(a.category === '바둑');
