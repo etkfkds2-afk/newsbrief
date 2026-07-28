@@ -6,7 +6,7 @@ import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSection
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
   classifyIssues, hasIncidentLocationConflict, hasIssueDirectionConflict, isStandaloneEventArticle,
-  rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
+  mergeRepeatedPersonCases, rejectConflictingExistingMatches, repeatedPersonHints, standaloneEventTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
@@ -53,6 +53,22 @@ test('반복 등장하는 인물명을 표시해 장윤기 같은 동일 사건�
     { title: '전혀 다른 단독 기사' }
   ]);
   assert.deepEqual(hints, [['장윤기'], ['장윤기'], ['장윤기'], []]);
+});
+
+test('AI가 놓친 동일 인물 강력사건 후속 기사도 기존 이슈로 회수한다', () => {
+  const articles = [
+    { url_key: 'chat', title: '장윤기 여고생 납치 계획 대화록 증거 인정', summary: '피해자 납치 계획이 담겼다.' },
+    { url_key: 'calm', title: '장윤기가 태연했던 비밀', summary: '여고생 살해 사건 범행을 다뤘다.' },
+    { url_key: 'uncle', title: '장윤기 큰아빠는 경찰 간부', summary: '살해 피해자 사건 보도가 없었다면 묻힐 뻔했다.' },
+    { url_key: 'father', title: '이채원 양 살해 장윤기 부친이 증거 인멸', summary: '부친이 범행 증거를 없앴다.' }
+  ];
+  const merged = mergeRepeatedPersonCases([
+    { title: '장윤기 여고생 납치·살해 사건', url_keys: ['chat', 'calm'] },
+    { title: '기타', url_keys: ['uncle', 'father'], misc: true }
+  ], articles);
+  assert.deepEqual(merged, [{
+    title: '장윤기 여고생 납치·살해 사건', url_keys: ['chat', 'calm', 'uncle', 'father']
+  }]);
 });
 
 test('급락 이슈에 전고점 회복 전망 기사를 합치지 않는다', () => {

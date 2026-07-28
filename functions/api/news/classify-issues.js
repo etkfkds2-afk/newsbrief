@@ -1,6 +1,9 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneEventTitle } from '../../_lib/news-issue-classify.js';
+import {
+  classifyIssues, isStandaloneEventArticle, mergeRepeatedPersonCases,
+  rejectConflictingExistingMatches, standaloneEventTitle
+} from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -192,7 +195,8 @@ export async function onRequestPost({ request, env }) {
       }
     }
     const { provider, model, usage, cloudflare_error, anthropic_error } = classification;
-    const groups = rejectConflictingExistingMatches(classification.groups, newArticles, existingIssues);
+    const personCaseRecovered = mergeRepeatedPersonCases(classification.groups, newArticles);
+    const groups = rejectConflictingExistingMatches(personCaseRecovered, newArticles, existingIssues);
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);
     }

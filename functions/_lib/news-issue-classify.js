@@ -74,6 +74,32 @@ export function repeatedPersonHints(articles) {
   return articleNames.map(names => [...names].filter(name => counts.get(name) >= 2).slice(0, 2));
 }
 
+const SERIOUS_CASE_WORDS = /(?:살해|납치|유괴|시신|증거\s*인멸|범행|피해자|용의자)/u;
+
+export function mergeRepeatedPersonCases(groups, articles) {
+  const next = (groups || []).map(group => ({ ...group, url_keys: [...(group.url_keys || [])] }));
+  const hints = repeatedPersonHints(articles);
+  const articleByKey = new Map(articles.map((article, index) => [article.url_key, { article, names: hints[index] }]));
+  const repeatedNames = new Set(hints.flat());
+  for (const name of repeatedNames) {
+    const relatedKeys = articles.filter((article, index) =>
+      hints[index].includes(name) && SERIOUS_CASE_WORDS.test(`${article.title || ''} ${article.summary || ''}`)
+    ).map(article => article.url_key);
+    if (relatedKeys.length < 2) continue;
+    const relatedSet = new Set(relatedKeys);
+    const target = next.find(group => !group.misc && String(group.title || '').includes(name)
+      && group.url_keys.some(key => relatedSet.has(key)));
+    if (!target) continue;
+    for (const group of next) {
+      if (group === target) continue;
+      group.url_keys = group.url_keys.filter(key => !relatedSet.has(key));
+    }
+    target.url_keys = [...new Set([...target.url_keys, ...relatedKeys])]
+      .filter(key => articleByKey.has(key));
+  }
+  return next.filter(group => group.url_keys.length > 0);
+}
+
 function buildListing(articles) {
   const personHints = repeatedPersonHints(articles);
   return articles.map((item, index) => {
