@@ -138,6 +138,18 @@ test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 �
   assert.equal(naverSectionCategory(`"section_id":"105"`), 'IT/과학');
 });
 
+test('일반 카테고리 복구는 최근 미검사 네이버 기사부터 공식 섹션으로 교정한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const db = await readFile(new URL('../functions/_lib/news-db.js', import.meta.url), 'utf8');
+  assert.equal(naverSectionCategory('sectionId : "101"'), '경제');
+  assert.match(db, /CREATE TABLE IF NOT EXISTS news_category_checks/);
+  assert.match(collector, /LEFT JOIN news_category_checks c ON c\.url_key=a\.url_key/);
+  assert.match(collector, /c\.url_key IS NULL/);
+  assert.match(collector, /ORDER BY datetime\(COALESCE\(NULLIF\(a\.published_at/);
+  assert.match(collector, /INSERT INTO news_category_checks/);
+  assert.doesNotMatch(collector, /general_category_repair_cursor/);
+});
+
 test('일반 저품질 요약은 문제 기사만 격리해 AI 재요약한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
@@ -432,7 +444,8 @@ test('화면은 대용량 기간 선조회를 제거하고 로그인 만료를 �
   assert.doesNotMatch(html, /prefetchPeriods|requestIdleCallback/);
   assert.match(html, /response\.redirected&&new URL\(response\.url\)\.pathname==='\/login'/);
   assert.doesNotMatch(html, /id="clearIssue"/);
-  assert.match(html, /첫 카드로 이동/);
+  assert.match(html, /전체 카드 보기/);
+  assert.doesNotMatch(html, /첫 카드로 이동/);
 });
 
 test('읽기 API는 요청마다 D1 스키마 DDL을 다시 실행하지 않는다', async () => {

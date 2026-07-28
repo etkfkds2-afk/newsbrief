@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS news_issue_cache (
   category TEXT PRIMARY KEY,
   payload TEXT NOT NULL,
   built_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS news_category_checks (
+  url_key TEXT PRIMARY KEY,
+  checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  detected_category TEXT NOT NULL DEFAULT ''
 );`;
 
 export function json(data, status = 200) {

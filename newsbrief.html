@@ -119,7 +119,7 @@ function renderIssues(){
   if(!show)return;
   $('issuesTitle').textContent=sub==='weekly'?'주간 이슈 키워드':'월간 이슈 키워드';
   $('issuesDesc').textContent='';
-  $('issues').innerHTML=state.issueItems.map(issue=>`<button type="button" class="issueCard" data-issue-key="${esc(issue.key)}"><div class="issueName">${esc(issue.title)}</div><div class="issueMeta">관련 기사 ${issue.count}건 · 첫 카드로 이동 ↓</div></button>`).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
+  $('issues').innerHTML=state.issueItems.map(issue=>`<button type="button" class="issueCard" data-issue-key="${esc(issue.key)}"><div class="issueName">${esc(issue.title)}</div><div class="issueMeta">관련 기사 ${issue.count}건 · 전체 카드 보기 ↓</div></button>`).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
 }
 function relatedHtml(item){
   if(!item.related_count)return'';

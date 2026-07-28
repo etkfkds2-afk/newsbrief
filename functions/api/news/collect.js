@@ -235,19 +235,19 @@ async function fetchArticleText(url) {
 }
 
 async function repairGeneralCategories(env, limit = 10) {
-  const cursorKey = 'general_category_repair_cursor';
-  const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
-  const cursor = Number(cursorRow?.value || 0);
-  const rows = await env.DB.prepare(`SELECT id,url,title,body_text,category FROM news_articles
-    WHERE id>? AND category<>'바둑' AND summary_quality='full'
-      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
-    ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+  // Check the newest unchecked portal articles first. The former numeric cursor
+  // walked from the oldest row in batches of ten, so newly reported mistakes
+  // could remain visible for many maintenance runs.
+  const rows = await env.DB.prepare(`SELECT a.id,a.url_key,a.url,a.title,a.body_text,a.category
+    FROM news_articles a
+    LEFT JOIN news_category_checks c ON c.url_key=a.url_key
+    WHERE a.category<>'바둑' AND a.summary_quality='full' AND c.url_key IS NULL
+      AND (a.source='NAVER' OR lower(a.url) LIKE '%naver.com/%')
+      AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-30 days')
+    ORDER BY datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC, a.id DESC
+    LIMIT ?`).bind(Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];
-  if (!candidates.length) {
-    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
-      ON CONFLICT(key) DO UPDATE SET value=0`).bind(cursorKey).run();
-    return { attempted: 0, repaired: 0, done: true };
-  }
+  if (!candidates.length) return { attempted: 0, repaired: 0, done: true };
   let repaired = 0;
   for (const row of candidates) {
     const article = await fetchArticleText(row.url);
@@ -256,10 +256,11 @@ async function repairGeneralCategories(env, limit = 10) {
       await env.DB.prepare('UPDATE news_articles SET category=? WHERE id=?').bind(fixedCategory, row.id).run();
       repaired += 1;
     }
+    await env.DB.prepare(`INSERT INTO news_category_checks(url_key,checked_at,detected_category)
+      VALUES(?,CURRENT_TIMESTAMP,?) ON CONFLICT(url_key) DO UPDATE SET
+      checked_at=CURRENT_TIMESTAMP,detected_category=excluded.detected_category`)
+      .bind(row.url_key, fixedCategory || '').run();
   }
-  const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
-  await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
   return { attempted: candidates.length, repaired, done: candidates.length < 10 };
 }
 
