@@ -156,7 +156,9 @@ test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제
   const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(endpoint, /url\.searchParams\.get\('reset'\) === '1'/);
-  assert.match(endpoint, /resetIssues \? \[\] : loadExistingPayload/);
+  assert.match(endpoint, /const savedPayload = loadExistingPayload/);
+  assert.match(endpoint, /resetIssues \? \[\] : savedPayload/);
+  assert.match(endpoint, /issues: enforceIssueRules\(savedPayload/);
   assert.match(workflow, /reset_issues:/);
 });
 

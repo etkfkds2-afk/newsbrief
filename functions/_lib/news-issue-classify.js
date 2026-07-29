@@ -206,7 +206,7 @@ async function classifyWithAnthropic(env, articles, existingIssues, allowStandal
     },
     body: JSON.stringify({
       model,
-      max_tokens: 8000,
+      max_tokens: model === HIGH_ACCURACY_CLASSIFY_MODEL ? 16000 : 8000,
       system: buildInstructions(existingIssues.length > 0, allowStandaloneEvents),
       messages: [{ role: 'user', content: buildPrompt(articles, existingIssues) }]
     })

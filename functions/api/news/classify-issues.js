@@ -146,7 +146,8 @@ export async function onRequestPost({ request, env }) {
     // Drop url_keys that aged out of the 30-day window (and any group that
     // becomes empty as a result) before deciding what's genuinely new.
     const standaloneEventKeys = new Set(articles.filter(isStandaloneEventArticle).map(article => article.url_key));
-    const existingPayload = (resetIssues ? [] : loadExistingPayload(cacheRow))
+    const savedPayload = loadExistingPayload(cacheRow);
+    const existingPayload = (resetIssues ? [] : savedPayload)
       .map(group => ({
         ...group,
         url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)
@@ -228,7 +229,10 @@ export async function onRequestPost({ request, env }) {
     if (!groups.length) return json({
       ok: true, category, count: articles.length, new_count: genuinelyNewArticles.length,
       provider, cloudflare_error, anthropic_error, monthly_micro_usd: budget.spent,
-      issues: enforceIssueRules(existingPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
+      // A reset starts with an empty working set, but an AI parse/provider
+      // failure must never replace the last good cache with one giant misc
+      // bucket. Preserve the saved payload until a valid grouping exists.
+      issues: enforceIssueRules(savedPayload, articles, category).map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
 
     const byKey = new Map(basePayload.map(group => [group.key, { ...group, url_keys: [...group.url_keys] }]));
