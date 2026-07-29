@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
-import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
+import { articleSectionCategory, fetchArticleText, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
   classifyIssues, hasExistingTopicMismatch, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
@@ -351,6 +351,51 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   assert.match(collector, /titleSimilarity\(row\.title, item\.title\) >= 0\.72/);
   assert.match(collector, /match\?\.originallink \|\| match\?\.link/);
   assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
+});
+
+test('연합뉴스(story-news)와 itemprop=articleBody 본문도 추출한다', async () => {
+  // A large share of general-category candidates resolve to these two markup
+  // patterns (Yonhap wire copy syndicated everywhere via Naver, and mk.co.kr's
+  // schema.org itemprop). Neither used the id/class keywords this regex used
+  // to check, so every such candidate silently failed as body_too_short and
+  // the general feed stayed stuck at ~2 published items a day.
+  const originalFetch = globalThis.fetch;
+  const yonhapHtml = `<html><body><article id="articleWrap" class="article-wrap01">
+    <div class="story-news article">
+      <p>${'가'.repeat(100)} 첫번째 문단입니다.</p>
+      <p>${'나'.repeat(100)} 두번째 문단입니다.</p>
+    </div>
+  </article></body></html>`;
+  const mkHtml = `<html><body><div class="news_cnt_detail_wrap" itemprop="articleBody">
+    <p>${'다'.repeat(100)} 첫번째 문단입니다.</p>
+    <p>${'라'.repeat(100)} 두번째 문단입니다.</p>
+  </div></body></html>`;
+  try {
+    for (const html of [yonhapHtml, mkHtml]) {
+      globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+      const article = await fetchArticleText('https://example.com/article');
+      assert.ok(article.body.length >= 180, `expected extracted body >= 180 chars, got ${article.body.length}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchArticleText의 모든 조기 반환은 sectionCategory를 포함한다', async () => {
+  // A branch missing sectionCategory sent a bare `undefined` into a D1 bind
+  // (the republish path reads article.sectionCategory with no `|| ''`
+  // fallback) and crashed the entire collection run with D1_TYPE_ERROR.
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response('', { status: 500 });
+    assert.equal((await fetchArticleText('https://example.com/a')).sectionCategory, '');
+    globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    assert.equal((await fetchArticleText('https://example.com/b')).sectionCategory, '');
+    globalThis.fetch = async () => { throw new Error('network down'); };
+    assert.equal((await fetchArticleText('https://example.com/c')).sectionCategory, '');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {

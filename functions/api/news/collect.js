@@ -189,16 +189,16 @@ function allowedCandidate(url, discovery) {
   } catch { return false; }
 }
 
-async function fetchArticleText(url) {
+export async function fetchArticleText(url) {
   try {
     const response = await fetch(url, {
       redirect: 'follow',
       headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
       cf: { cacheTtl: 300, cacheEverything: false }
     });
-    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '' };
+    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
+    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     // Some (mostly smaller/regional) Korean outlets serve EUC-KR bytes but
     // send a wrong or missing charset in the HTTP header, which made every
     // regex extraction below silently fail on mojibake. Same detection
@@ -209,7 +209,7 @@ async function fetchArticleText(url) {
       html = new TextDecoder('euc-kr').decode(bytes);
     }
     html = html.slice(0, 800000);
-    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
     // baduk.or.kr's og:image is a fixed site-wide placeholder, never the real
@@ -234,8 +234,11 @@ async function fetchArticleText(url) {
       } catch {}
     }
     // Older table-layout sites (common among small/regional outlets) put the
-    // body in a <td>, not an <article>/<div>.
-    const articleStart = html.search(/<(?:article|div|td)[^>]+(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody)[^"']*["'][^>]*>/i);
+    // body in a <td>, not an <article>/<div>. Yonhap (story-news, syndicated
+    // to most outlets via Naver) and schema.org itemprop="articleBody" sites
+    // (e.g. mk.co.kr) don't use any of the id/class keywords below, so check
+    // for those separately instead of only id/class name matching.
+    const articleStart = html.search(/<(?:article|div|td)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
     if (!image) {
       const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
@@ -248,7 +251,10 @@ async function fetchArticleText(url) {
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
     return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory };
   } catch {
-    return { body: '', image: '', press: '', publishedAt: '' };
+    // Every return path here must share the same shape - a caller reading
+    // article.sectionCategory with no fallback (the exists/republish path)
+    // sent a bare `undefined` into a D1 bind and crashed the whole run.
+    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
   }
 }
 
