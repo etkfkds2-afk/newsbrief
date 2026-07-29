@@ -331,7 +331,7 @@ test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 �
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /!backfill && !googleDiscoveries\.length/);
   assert.match(collector, /google_fallback_skipped = true/);
-  assert.match(collector, /SCHEDULED_GOOGLE_DISCOVERIES = 20/);
+  assert.match(collector, /SCHEDULED_GOOGLE_DISCOVERIES = 6/);
   assert.match(collector, /backfill \? 20 : SCHEDULED_GOOGLE_DISCOVERIES/);
 });
 
@@ -345,7 +345,7 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /const SCHEDULED_GENERAL_CANDIDATES = 12/);
   assert.match(collector, /const naverPages = pages\.slice\(0, 5\)/);
-  assert.match(collector, /const popular = allPopular\.slice\(0, 20\)/);
+  assert.match(collector, /const popular = allPopular\.slice\(0, 8\)/);
   assert.match(collector, /diagnostics\.popular_resolved/);
   assert.match(collector, /await naverSearch\(env, `"\$\{row\.title\}"`, 1, 5\)/);
   assert.match(collector, /titleSimilarity\(row\.title, item\.title\) >= 0\.72/);

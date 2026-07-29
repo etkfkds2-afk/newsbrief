@@ -39,7 +39,15 @@ const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 // than the ten-card home target so those failures do not collapse the feed.
 const SCHEDULED_GENERAL_CANDIDATES = 12;
 const SCHEDULED_BADUK_CANDIDATES = 20;
-const SCHEDULED_GOOGLE_DISCOVERIES = 20;
+// Every discovery resolved here competes for the fixed 20-slot baduk batch
+// against official.baduk.or.kr + search results, which alone usually already
+// fill it. Resolving 20 discoveries (up to 2 subrequests each) was spending
+// the run's Cloudflare subrequest budget on candidates the 20-slot cap then
+// discarded anyway, leaving nothing left to actually fetch article bodies
+// for the batch that got selected - every scheduled run was publishing 0
+// new baduk/general articles with "body_too_short" that was really
+// "Too many subrequests by single Worker invocation".
+const SCHEDULED_GOOGLE_DISCOVERIES = 6;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
@@ -960,7 +968,11 @@ async function collect(env, {
   }
   if (!popularityCandidates.length && !backfill) try {
     const allPopular = await collectPopularity(slot);
-    const popular = allPopular.slice(0, 20);
+    // Resolving each ranked headline costs up to 2 subrequests (title search
+    // + fallback search). Resolving all 20 ate most of a run's Cloudflare
+    // subrequest budget before any candidate body fetch, the same budget
+    // exhaustion that starved baduk - see SCHEDULED_GOOGLE_DISCOVERIES above.
+    const popular = allPopular.slice(0, 8);
     // Naver ranking pages often expose legacy rankingRead links. Those links
     // are useful for ranking discovery but frequently return no article body
     // to Workers. Resolve the ranked headline back to its current article URL
