@@ -257,7 +257,10 @@ export async function fetchArticleText(url) {
     // Every return path here must share the same shape - a caller reading
     // article.sectionCategory with no fallback (the exists/republish path)
     // sent a bare `undefined` into a D1 bind and crashed the whole run.
-    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '', fetchStatus: `error_${String(error?.name || 'unknown')}` };
+    return {
+      body: '', image: '', press: '', publishedAt: '', sectionCategory: '',
+      fetchStatus: `error_${String(error?.name || 'unknown')}:${String(error?.message || '').slice(0, 80)}`
+    };
   }
 }
 
