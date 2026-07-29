@@ -21,9 +21,16 @@ function loadExistingPayload(row) {
 export function buildClassificationPlan(articles, existingPayload, resetIssues = false) {
   const cachedKeys = new Set(existingPayload.flatMap(group => group.url_keys || []));
   const genuinelyNewArticles = resetIssues ? articles : articles.filter(article => !cachedKeys.has(article.url_key));
+  // Do not send an ever-growing 30-day misc bucket back to the model every
+  // day. It both wastes tokens and lets an unrelated old singleton get pulled
+  // into a fresh issue. A recent bounded tail is enough to join reports that
+  // arrived on adjacent collection runs.
+  const recentMiscKeys = new Set(articles.slice(0, 80).map(article => article.url_key));
   const miscKeys = new Set(existingPayload
     .filter(group => group.misc || String(group.key || '').endsWith('|ai:misc'))
-    .flatMap(group => group.url_keys || []));
+    .flatMap(group => group.url_keys || [])
+    .filter(key => recentMiscKeys.has(key))
+    .slice(0, 40));
   const candidateKeys = new Set(resetIssues
     ? articles.map(article => article.url_key)
     : [...genuinelyNewArticles.map(article => article.url_key), ...miscKeys]);

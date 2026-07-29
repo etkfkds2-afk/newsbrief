@@ -5,7 +5,7 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
-  classifyIssues, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
+  classifyIssues, hasExistingTopicMismatch, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
   standaloneBadukIssueTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
@@ -93,6 +93,13 @@ test('같은 정치인이라도 정치자금 재판과 허위사실공표 고발
   const article = { title: '오세훈 허위사실공표 혐의로 고발', summary: '선거 보전액 환수 요구가 제기됐다.' };
   assert.equal(hasLegalCaseConflict('오세훈 정치자금법 위반 1심 판결', article), true);
   assert.equal(hasLegalCaseConflict('오세훈 정치자금법 위반 1심 판결', { title: '오세훈 정치자금법 1심 항소' }), false);
+});
+
+test('기존 이슈와 핵심어가 겹치지 않는 기사는 편입하지 않는다', () => {
+  const bibi = { title: '가수 비비, 새 앨범 발매', summary: '비비가 신곡과 공연 계획을 공개했다.' };
+  const nike = { title: '나이키, 중국 매장 전략 재편', summary: '나이키가 중국 시장 전략을 바꾼다.' };
+  assert.equal(hasExistingTopicMismatch('나이키 중국 시장 전략 전환', bibi), true);
+  assert.equal(hasExistingTopicMismatch('나이키 중국 시장 전략 전환', nike), false);
 });
 
 test('기간별 이슈 표시와 클릭 필터는 같은 보정된 캐시를 사용한다', () => {
@@ -649,7 +656,8 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(articles, /reorderGeneralSummary/);
   assert.match(collector, /general_daily_goal = 10/);
   assert.match(collector, /SCHEDULED_GENERAL_CANDIDATES = 6/);
-  assert.match(collector, /SCHEDULED_BADUK_CANDIDATES = 10/);
+  assert.match(collector, /SCHEDULED_BADUK_CANDIDATES = 20/);
+  assert.match(collector, /The broad query is the freshest view users see on Naver/);
   assert.match(collector, /Date\.parse\(b\.item\?\.pubDate/);
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);

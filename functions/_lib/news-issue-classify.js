@@ -99,6 +99,27 @@ export function hasLegalCaseConflict(existingContext, article) {
   return false;
 }
 
+const TOPIC_STOPWORDS = new Set([
+  '관련', '사건', '소식', '뉴스', '보도', '발표', '전략', '시장', '전환', '전망', '우려',
+  '결과', '영향', '추진', '참여', '진행', '오늘', '이번', '한국', '중국', '미국', '일본'
+]);
+
+function topicTokens(value) {
+  return [...new Set(String(value || '').match(/[0-9A-Za-z가-힣]{2,}/gu) || [])]
+    .filter(token => !TOPIC_STOPWORDS.has(token) && !/^\d+$/.test(token));
+}
+
+export function hasExistingTopicMismatch(existingTitle, article) {
+  const tokens = topicTokens(existingTitle);
+  if (!tokens.length) return false;
+  const incoming = `${article?.title || ''} ${article?.summary || ''}`.replace(/\s+/g, '');
+  const matches = tokens.filter(token => incoming.includes(token));
+  // Existing-issue assignment should have concrete textual evidence. Two
+  // shared terms, or one distinctive 3+ character term, still permits normal
+  // follow-up headlines while rejecting unrelated celebrity/business stories.
+  return matches.length < 2 && !matches.some(token => token.length >= 3);
+}
+
 export function rejectConflictingExistingMatches(groups, articles, existingIssues) {
   const issueByTitle = new Map(existingIssues.map(issue => [issue.title, issue]));
   const kept = [], rejectedKeys = [];
@@ -108,7 +129,9 @@ export function rejectConflictingExistingMatches(groups, articles, existingIssue
     const accepted = [], rejected = [];
     for (const key of group.url_keys || []) {
       const article = articles.find(item => item.url_key === key);
-      (hasIncidentLocationConflict(existing.context, article) || hasLegalCaseConflict(existing.title, article) ? rejected : accepted).push(key);
+      (hasIncidentLocationConflict(existing.context, article)
+        || hasLegalCaseConflict(existing.title, article)
+        || hasExistingTopicMismatch(existing.title, article) ? rejected : accepted).push(key);
     }
     if (accepted.length) kept.push({ ...group, url_keys: accepted });
     rejectedKeys.push(...rejected);

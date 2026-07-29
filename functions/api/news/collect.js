@@ -36,7 +36,7 @@ const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT + 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 const SCHEDULED_GENERAL_CANDIDATES = 6;
-const SCHEDULED_BADUK_CANDIDATES = 10;
+const SCHEDULED_BADUK_CANDIDATES = 20;
 const SCHEDULED_GOOGLE_DISCOVERIES = 20;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
 const MAINTENANCE_BATCH_SIZE = 40;
@@ -797,15 +797,21 @@ async function collect(env, {
     // A broad "바둑" query at ever-higher offsets repeatedly returned the same small
     // set of usable portal articles. Search several distinct beats per run instead.
     const effectiveQueries = category === '바둑'
-      ? Array.from({ length: backfill ? 3 : 1 }, (_, index) =>
-          BADUK_SEARCHES[(slot * (backfill ? 3 : 1) + index) % BADUK_SEARCHES.length])
+      ? [...new Set([
+          // The broad query is the freshest view users see on Naver. Always
+          // run it instead of waiting for the 35-query rotation to return to
+          // it, then add rotated specialist queries for long-tail coverage.
+          '바둑',
+          ...Array.from({ length: backfill ? 3 : 1 }, (_, index) =>
+            BADUK_SEARCHES[(slot * (backfill ? 3 : 1) + index) % BADUK_SEARCHES.length])
+        ])]
       : [query];
     for (const effectiveQuery of effectiveQueries) {
       const pageBand = backfill ? Math.floor(slot / Math.ceil(BADUK_SEARCHES.length / 4)) % 5 : 0;
       const start = category === '바둑' ? pageBand * 20 + 1 : (backfill ? backfillStart : 1);
-      const display = category === '바둑' ? 10 : (backfill ? 10 : 4);
+      const display = category === '바둑' ? 20 : (backfill ? 10 : 4);
       const items = await naverSearch(env, effectiveQuery, start, display);
-      const naverTake = category === '바둑' ? (backfill ? 4 : 3) : (backfill ? 2 : 2);
+      const naverTake = category === '바둑' ? (backfill ? 6 : 10) : (backfill ? 2 : 2);
       for (const item of items.slice(0, naverTake)) candidates.push({ category, item, source: 'NAVER' });
       try {
         const page = category === '바둑' ? pageBand + 1 : (backfill ? (slot % 10) * 5 + 1 : 1);
