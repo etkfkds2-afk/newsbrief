@@ -363,26 +363,9 @@ jobs:
 
   health-check:
     needs: [collect-news, classify-issues]
-    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: always() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - name: TEMP - inspect why general home cards stop at 8 of 10
-        env:
-          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
-          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
-        run: |
-          curl -sS --max-time 30 -c /tmp/verify-cookie -o /dev/null \
-            -H 'content-type: application/json' \
-            --data "$(jq -cn --arg username "$NEWSBRIEF_SITE_USER" --arg password "$NEWSBRIEF_SITE_PASSWORD" '{username:$username,password:$password}')" \
-            "https://newsbrief-etkfkds2.pages.dev/api/auth/login"
-          echo "=== view=popular&exclude_baduk=1&hours=24&limit=20 (what the home card feed queries) ==="
-          curl -sS --max-time 30 -b /tmp/verify-cookie \
-            "https://newsbrief-etkfkds2.pages.dev/api/news/articles?view=popular&exclude_baduk=1&limit=20&hours=24" \
-            | jq '{ok, count: (.items|length), items: [.items[] | {title, category, summary_quality, related_count, published_at}]}'
-          echo "=== /api/news/status (publishable counts, category breakdown) ==="
-          curl -sS --max-time 30 -b /tmp/verify-cookie \
-            "https://newsbrief-etkfkds2.pages.dev/api/news/status" | jq '{categories, last_run}'
-
       - name: Check NewsBrief production health
         id: health
         env:
