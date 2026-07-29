@@ -972,7 +972,12 @@ async function collect(env, {
     // + fallback search). Resolving all 20 ate most of a run's Cloudflare
     // subrequest budget before any candidate body fetch, the same budget
     // exhaustion that starved baduk - see SCHEDULED_GOOGLE_DISCOVERIES above.
-    const popular = allPopular.slice(0, 8);
+    // 8 was overly conservative once the double collect() call (see
+    // deploy.yml) freed up headroom - test runs showed 0 body_too_short with
+    // slack left in the general processing slot, so 12 trades a little of
+    // that slack back for a bigger "popular" pool (drives view=popular's
+    // home card count) without reintroducing the subrequest exhaustion.
+    const popular = allPopular.slice(0, 12);
     // Naver ranking pages often expose legacy rankingRead links. Those links
     // are useful for ranking discovery but frequently return no article body
     // to Workers. Resolve the ranked headline back to its current article URL
