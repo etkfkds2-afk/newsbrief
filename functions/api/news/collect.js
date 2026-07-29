@@ -910,15 +910,31 @@ async function collect(env, {
   if (!popularityCandidates.length && !backfill) try {
     const allPopular = await collectPopularity(slot);
     const popular = allPopular.slice(0, 20);
+    // Naver ranking pages often expose legacy rankingRead links. Those links
+    // are useful for ranking discovery but frequently return no article body
+    // to Workers. Resolve the ranked headline back to its current article URL
+    // before fetching and summarizing it.
+    const resolvedPopular = await Promise.all(popular.map(async row => {
+      if (row.source !== 'NAVER' || !/\/main\/ranking\//i.test(row.href)) return row;
+      try {
+        const matches = await naverSearch(env, `"${row.title}"`, 1, 3);
+        const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
+        const match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '') === wanted);
+        const resolvedUrl = match?.link || match?.originallink || '';
+        if (resolvedUrl) return { ...row, href: resolvedUrl };
+      } catch {}
+      return row;
+    }));
+    diagnostics.popular_resolved = resolvedPopular.filter((row, index) => row.href !== popular[index].href).length;
     diagnostics.popular_found = popular.length;
-    for (const row of popular) candidates.push({
+    for (const row of resolvedPopular) candidates.push({
       category: row.category,
       source: row.source,
       isPopular: true,
       popularityRank: row.rank,
       item: { title: row.title, link: row.href, originallink: row.href, description: '', pubDate: '' }
     });
-    for (const row of popular) {
+    for (const row of resolvedPopular) {
       const key = await sha256(canonicalUrl(row.href));
       await env.DB.prepare(`INSERT INTO news_popularity(url_key,score,rank,source,collected_at)
         VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(url_key) DO UPDATE SET
