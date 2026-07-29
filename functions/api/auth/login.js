@@ -22,9 +22,13 @@ export async function onRequestPost({ request, env }) {
   }
   const username = String(body?.username || '');
   const password = String(body?.password || '');
-  if (!await verifyAccount(env, username, password)) {
-    return json({ ok: false, error: '아이디 또는 비밀번호가 올바르지 않습니다.' }, 401);
+  try {
+    if (!await verifyAccount(env, username, password)) {
+      return json({ ok: false, error: '아이디 또는 비밀번호가 올바르지 않습니다.' }, 401);
+    }
+    const cookie = await createSessionCookie(sessionSecret, username);
+    return json({ ok: true }, 200, { 'set-cookie': cookie });
+  } catch (error) {
+    return json({ ok: false, error: error.message }, 500);
   }
-  const cookie = await createSessionCookie(sessionSecret, username);
-  return json({ ok: true }, 200, { 'set-cookie': cookie });
 }

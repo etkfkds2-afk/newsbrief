@@ -26,14 +26,26 @@ async function mergedUsers(env) {
 
 export async function onRequestGet({ request, env }) {
   if (!authorized(request, env)) return json({ ok: false, error: '관리자 권한이 필요합니다.' }, 403);
-  const users = await mergedUsers(env);
-  return json({ ok: true, users, count: users.length, max_users: MAX_USERS });
+  try {
+    const users = await mergedUsers(env);
+    return json({ ok: true, users, count: users.length, max_users: MAX_USERS });
+  } catch (error) {
+    return json({ ok: false, error: error.message }, 500);
+  }
 }
 
 export async function onRequestPost({ request, env }) {
   if (!authorized(request, env)) return json({ ok: false, error: '관리자 권한이 필요합니다.' }, 403);
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: '잘못된 요청입니다.' }, 400); }
+  try {
+    return await handleUsersPost(env, body);
+  } catch (error) {
+    return json({ ok: false, error: error.message }, 500);
+  }
+}
+
+async function handleUsersPost(env, body) {
   const action = String(body?.action || '');
   const username = String(body?.username || '').trim();
   if (!validUsername(username)) return json({ ok: false, error: '아이디는 영문 소문자·숫자·._- 조합 3~32자로 입력하세요.' }, 400);
