@@ -717,9 +717,19 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);
   assert.match(collector, /candidate_outcomes_by_category/);
-  assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
+  assert.match(collector, /SELECT url_key FROM news_articles WHERE summary_quality='full' AND url_key IN/);
   assert.match(collector, /const newOrder = Number\(knownCandidateKeys\.has/);
   assert.match(collector, /diagnostics\.new_candidates/);
+});
+
+test('아직 발행되지 않은 기존 후보는 새 후보와 동등하게 재시도 기회를 얻는다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  // A row that exists but never reached summary_quality='full' (body_too_short,
+  // failed AI validation, etc.) must not count as "known" - otherwise it is
+  // permanently outranked by whatever noisy new candidates each run turns up,
+  // and never gets a retry even after a fix improves its odds.
+  assert.match(collector, /summary_quality='full' AND url_key IN/);
+  assert.doesNotMatch(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
 });
 
 test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 저장 기사만 표시한다', async () => {

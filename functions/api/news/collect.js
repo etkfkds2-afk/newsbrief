@@ -1136,8 +1136,15 @@ async function collect(env, {
   }
   const knownCandidateKeys = new Set();
   if (uniqueCandidates.length) {
+    // "Known" must mean already published, not merely already attempted.
+    // A candidate that previously failed (body_too_short, etc.) still has a
+    // row here with summary_quality<>'full'; counting that as known buried it
+    // behind every fresh candidate forever; since each run's search/popularity
+    // pass turns up a fresh batch of noisy, mostly-failing candidates, a
+    // once-failed item never resurfaced to get retried with a better URL.
     const placeholders = uniqueCandidates.map(() => '?').join(',');
-    const knownRows = await env.DB.prepare(`SELECT url_key FROM news_articles WHERE url_key IN (${placeholders})`)
+    const knownRows = await env.DB.prepare(
+      `SELECT url_key FROM news_articles WHERE summary_quality='full' AND url_key IN (${placeholders})`)
       .bind(...uniqueCandidates.map(candidate => candidate.urlKey)).all();
     for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
   }
