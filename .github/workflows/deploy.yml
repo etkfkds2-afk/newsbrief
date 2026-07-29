@@ -363,9 +363,22 @@ jobs:
 
   health-check:
     needs: [collect-news, classify-issues]
-    if: always() && github.event_name == 'schedule'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
+      - name: TEMP - verify the 워터밤/비비 article's category was fixed
+        env:
+          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
+          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
+        run: |
+          curl -sS --max-time 30 -c /tmp/verify-cookie -o /dev/null \
+            -H 'content-type: application/json' \
+            --data "$(jq -cn --arg username "$NEWSBRIEF_SITE_USER" --arg password "$NEWSBRIEF_SITE_PASSWORD" '{username:$username,password:$password}')" \
+            "https://newsbrief-etkfkds2.pages.dev/api/auth/login"
+          curl -sS --max-time 30 -b /tmp/verify-cookie \
+            --get --data-urlencode "q=워터밤" --data-urlencode "hours=720" --data-urlencode "limit=20" \
+            "https://newsbrief-etkfkds2.pages.dev/api/news/articles" | jq '.items[] | {title, category}'
+
       - name: Check NewsBrief production health
         id: health
         env:
