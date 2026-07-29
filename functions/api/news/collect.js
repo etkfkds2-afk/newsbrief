@@ -858,6 +858,10 @@ async function collect(env, {
       }
     }
   }
+  const recentGeneral = backfill ? null : await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+    WHERE category<>'바둑' AND summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
+  const generalBelowDailyGoal = backfill ? false : Number(recentGeneral?.count || 0) < 10;
   // Google News is discovery-only: resolve each headline through the licensed
   // Naver API, then fetch and validate the real article like every other item.
   // Never expose a Google wrapper or its short RSS description as a summary.
@@ -865,7 +869,16 @@ async function collect(env, {
   // headlines resolve to duplicates, blocked destinations, or pages whose body
   // cannot be extracted. Resolve enough headlines to still fill the six-item
   // scheduled baduk batch after those expected losses.
-  for (const discovery of googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
+  //
+  // Every resolution attempt here is a Worker subrequest (up to 2 each: Naver
+  // then a Kakao fallback), and this loop is 100% baduk - googleDiscoveries is
+  // fed only from the baduk-only discovery script. A Worker invocation has a
+  // hard subrequest cap, and this loop alone can spend 40+ of them before a
+  // single general candidate is ever fetched. Baduk already met its daily
+  // publish goal in every run that measured this; general has been stuck at
+  // ~2/10 for days. Skip this baduk-only spend entirely while general is
+  // still behind so the budget survives long enough to fetch general bodies.
+  for (const discovery of generalBelowDailyGoal ? [] : googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
     const discoveredTitle = cleanTitle(discovery?.title || '');
     if (!discoveredTitle || isRejectedTitle(discoveredTitle)) continue;
     let resolved = false;
@@ -1161,10 +1174,6 @@ async function collect(env, {
     if (recentOrder) return recentOrder;
     return Number(a.popularityRank || 999) - Number(b.popularityRank || 999);
   });
-  const recentGeneral = await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
-    WHERE category<>'바둑' AND summary_quality='full'
-      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
-  const generalBelowDailyGoal = Number(recentGeneral?.count || 0) < 10;
   const limitedCandidates = popularityCandidates.length
     ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
     : (backfill ? uniqueCandidates.slice(0, 8) : [
@@ -1173,6 +1182,7 @@ async function collect(env, {
       ]);
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
+  diagnostics.google_discovery_resolve_skipped = generalBelowDailyGoal;
   diagnostics.candidates = candidates.length;
   diagnostics.unique_candidates = uniqueCandidates.length;
   diagnostics.new_candidates = uniqueCandidates.filter(candidate => !knownCandidateKeys.has(candidate.urlKey)).length;
