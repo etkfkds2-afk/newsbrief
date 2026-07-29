@@ -117,6 +117,20 @@ function titleSimilarity(left, right) {
   return aa.size && bb.size ? (2 * common) / (aa.size + bb.size) : 0;
 }
 
+export function naverCanonicalArticleUrl(href) {
+  // Ranking wrapper links (main/ranking/read.naver, rankingRead.naver) already
+  // carry the press id (oid) and article id (aid) in their query string. Build
+  // Naver's stable mobile article URL straight from those instead of guessing
+  // the destination via a fuzzy title search, which only matched ~1 in 4 today.
+  try {
+    const params = new URL(href).searchParams;
+    const oid = params.get('oid');
+    const aid = params.get('aid');
+    if (oid && aid) return `https://n.news.naver.com/mnews/article/${oid}/${aid}`;
+  } catch {}
+  return '';
+}
+
 function pressFromTitle(value) {
   const text = stripHtml(value);
   return cleanPressName(text.match(/\s[-|–—]\s([^\-|–—]{1,30})$/u)?.[1] || '');
@@ -932,6 +946,10 @@ async function collect(env, {
     // before fetching and summarizing it.
     const resolvedPopular = await Promise.all(popular.map(async row => {
       if (row.source !== 'NAVER') return row;
+      if (/\/main\/ranking\/(?:read|rankingRead)\.naver/i.test(row.href)) {
+        const canonical = naverCanonicalArticleUrl(row.href);
+        if (canonical) return { ...row, href: canonical };
+      }
       try {
         let matches = await naverSearch(env, `"${row.title}"`, 1, 5);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');

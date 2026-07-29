@@ -353,6 +353,23 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
 });
 
+test('네이버 랭킹 링크는 검색 매칭 대신 oid/aid로 원문 URL을 직접 구성한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /function naverCanonicalArticleUrl\(href\)/);
+  assert.match(collector, /`https:\/\/n\.news\.naver\.com\/mnews\/article\/\$\{oid\}\/\$\{aid\}`/);
+  assert.match(collector, /const canonical = naverCanonicalArticleUrl\(row\.href\)/);
+});
+
+test('naverCanonicalArticleUrl은 oid/aid가 있는 랭킹 링크만 변환한다', async () => {
+  const { naverCanonicalArticleUrl } = await import('../functions/api/news/collect.js');
+  assert.equal(
+    naverCanonicalArticleUrl('https://news.naver.com/main/ranking/read.naver?oid=001&aid=0012345678'),
+    'https://n.news.naver.com/mnews/article/001/0012345678'
+  );
+  assert.equal(naverCanonicalArticleUrl('https://news.naver.com/main/ranking/read.naver?oid=001'), '');
+  assert.equal(naverCanonicalArticleUrl('not a url'), '');
+});
+
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
