@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { issueCandidateLimit, onRequestGet } from '../functions/api/news/articles.js';
+import { feedCandidateLimit, issueCandidateLimit, onRequestGet } from '../functions/api/news/articles.js';
 
 const summary = [
   '1) 신진서 9단은 인공지능 카타고와의 대국에서 최종 승리를 거뒀다.',
@@ -50,6 +50,13 @@ test('이슈 조회는 500행 고정 조인 대신 화면 크기에 맞는 후�
   assert.equal(issueCandidateLimit(150, true), 150);
   assert.equal(issueCandidateLimit(120, true, true), 240);
   assert.equal(issueCandidateLimit(60, false), 60);
+});
+
+test('오늘 목록 10건과 핵심뉴스 6건을 위해 검증 전 인기 후보를 넉넉히 읽는다', () => {
+  assert.equal(feedCandidateLimit(10, 'popular', false), 50);
+  assert.equal(feedCandidateLimit(10, 'home', false), 50);
+  assert.equal(feedCandidateLimit(150, 'popular', true), 150);
+  assert.equal(feedCandidateLimit(10, 'latest', false), 10);
 });
 
 test('이슈 상세는 목록과 같은 후보 수를 쓰고 인기 테이블을 LEFT JOIN하지 않는다', async () => {

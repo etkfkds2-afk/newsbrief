@@ -915,12 +915,15 @@ async function collect(env, {
     // to Workers. Resolve the ranked headline back to its current article URL
     // before fetching and summarizing it.
     const resolvedPopular = await Promise.all(popular.map(async row => {
-      if (row.source !== 'NAVER' || !/\/main\/ranking\//i.test(row.href)) return row;
+      if (row.source !== 'NAVER') return row;
       try {
         const matches = await naverSearch(env, `"${row.title}"`, 1, 3);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
         const match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '') === wanted);
-        const resolvedUrl = match?.link || match?.originallink || '';
+        // Prefer the publisher's original URL. Naver article pages frequently
+        // return an empty/blocked body to Workers even when they open normally
+        // in a browser, while the publisher page remains readable.
+        const resolvedUrl = match?.originallink || match?.link || '';
         if (resolvedUrl) return { ...row, href: resolvedUrl };
       } catch {}
       return row;
@@ -956,6 +959,11 @@ async function collect(env, {
     const outcome = reason => {
       diagnostics.candidate_outcomes ||= {};
       diagnostics.candidate_outcomes[reason] = Number(diagnostics.candidate_outcomes[reason] || 0) + 1;
+      diagnostics.candidate_outcomes_by_category ||= {};
+      const bucket = category === '바둑' ? 'baduk' : 'general';
+      diagnostics.candidate_outcomes_by_category[bucket] ||= {};
+      diagnostics.candidate_outcomes_by_category[bucket][reason]
+        = Number(diagnostics.candidate_outcomes_by_category[bucket][reason] || 0) + 1;
       return 0;
     };
     const url = candidateUrl({ item, source });

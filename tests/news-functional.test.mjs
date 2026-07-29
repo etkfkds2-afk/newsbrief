@@ -348,6 +348,7 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   assert.match(collector, /const popular = allPopular\.slice\(0, 20\)/);
   assert.match(collector, /diagnostics\.popular_resolved/);
   assert.match(collector, /await naverSearch\(env, `"\$\{row\.title\}"`, 1, 3\)/);
+  assert.match(collector, /match\?\.originallink \|\| match\?\.link/);
   assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
 });
 
@@ -498,7 +499,8 @@ test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () =
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(source, /issueCategory = issueKeyFilter\.split\('\|'\)\[0\]/);
   assert.match(source, /CATEGORIES\.has\(issueCategory\)/);
-  assert.match(source, /const queryLimit = issueCandidateLimit\(limit, issues \|\| Boolean\(issueKeyFilter\), category === '바둑'\)/);
+  assert.match(source, /const queryLimit = feedCandidateLimit\(/);
+  assert.match(source, /issues \|\| Boolean\(issueKeyFilter\), category === '바둑'/);
   assert.doesNotMatch(source, /const queryLimit = issueKeyFilter \?/);
   assert.match(page, /if\(sub==='weekly'\)p\.set\('hours','168'\)/);
   assert.doesNotMatch(page, /if\(!state\.issueKey\)\{\s*if\(sub==='weekly'\)/);
@@ -681,6 +683,7 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /Date\.parse\(b\.item\?\.pubDate/);
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);
+  assert.match(collector, /candidate_outcomes_by_category/);
   assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
   assert.match(collector, /const newOrder = Number\(knownCandidateKeys\.has/);
   assert.match(collector, /diagnostics\.new_candidates/);

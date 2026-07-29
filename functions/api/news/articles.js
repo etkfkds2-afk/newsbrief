@@ -94,6 +94,15 @@ export function issueCandidateLimit(limit, issues, isBaduk = false) {
   return isBaduk ? Math.min(240, Math.max(limit * 2, 120)) : Math.min(limit, 150);
 }
 
+export function feedCandidateLimit(limit, view, issues, isBaduk = false) {
+  const issueLimit = issueCandidateLimit(limit, issues, isBaduk);
+  // Validation and related-story grouping happen after SQL. Pull a deeper
+  // ranked pool so the daily list can still return 10 cards and the hero can
+  // take its intended first 6 instead of both collapsing to two.
+  if (view === 'home' || view === 'popular') return Math.min(150, Math.max(issueLimit, limit * 5, 50));
+  return issueLimit;
+}
+
 async function loadIssueCache(env, category) {
   const row = await env.DB.prepare('SELECT payload FROM news_issue_cache WHERE category=?').bind(category).first();
   if (!row) return null;
@@ -256,7 +265,9 @@ export async function onRequestGet({ request, env }) {
     // Issue counts and issue-click results must be derived from the exact same
     // candidate set. Otherwise a monthly issue can advertise one count and
     // reveal a different set after it is opened.
-    const queryLimit = issueCandidateLimit(limit, issues || Boolean(issueKeyFilter), category === '바둑');
+    const queryLimit = feedCandidateLimit(
+      limit, view, issues || Boolean(issueKeyFilter), category === '바둑'
+    );
     bindings.push(queryLimit);
 
     // Popularity tables are only needed by the compact home/popular feed.
