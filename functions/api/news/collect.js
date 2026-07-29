@@ -1290,7 +1290,10 @@ export async function onRequestPost({ request, env }) {
       .map(([key, value]) => `${key}: ${value}`);
     if (result.diagnostics.ai_provider_limited) warnings.push('ai_provider_limited');
     const status = warnings.length ? 'degraded' : 'ok';
-    const message = JSON.stringify({ warnings, diagnostics: result.diagnostics }).slice(0, 500);
+    // 500 chars cut the message off before candidate_outcomes_by_category, the
+    // one field that actually explains why the general feed stays thin - every
+    // production debugging pass had to guess instead of reading it.
+    const message = JSON.stringify({ warnings, diagnostics: result.diagnostics }).slice(0, 4000);
     await env.DB.prepare("UPDATE news_runs SET finished_at=?,status=?,inserted_count=?,message=? WHERE id=?")
       .bind(new Date().toISOString(), status, result.inserted, message, runId).run();
     return json({ ok: true, status, warnings, ...result });
