@@ -101,6 +101,22 @@ function cleanTitle(value) {
     .slice(0, 300);
 }
 
+function titleSimilarity(left, right) {
+  const normalize = value => cleanTitle(value).replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+  const a = normalize(left), b = normalize(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const grams = value => {
+    const out = new Set();
+    for (let index = 0; index < value.length - 1; index += 1) out.add(value.slice(index, index + 2));
+    return out;
+  };
+  const aa = grams(a), bb = grams(b);
+  let common = 0;
+  for (const gram of aa) if (bb.has(gram)) common += 1;
+  return aa.size && bb.size ? (2 * common) / (aa.size + bb.size) : 0;
+}
+
 function pressFromTitle(value) {
   const text = stripHtml(value);
   return cleanPressName(text.match(/\s[-|–—]\s([^\-|–—]{1,30})$/u)?.[1] || '');
@@ -917,9 +933,14 @@ async function collect(env, {
     const resolvedPopular = await Promise.all(popular.map(async row => {
       if (row.source !== 'NAVER') return row;
       try {
-        const matches = await naverSearch(env, `"${row.title}"`, 1, 3);
+        let matches = await naverSearch(env, `"${row.title}"`, 1, 5);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
-        const match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '') === wanted);
+        let match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '') === wanted)
+          || matches.find(item => titleSimilarity(row.title, item.title) >= 0.72);
+        if (!match) {
+          matches = await naverSearch(env, row.title, 1, 5);
+          match = matches.find(item => titleSimilarity(row.title, item.title) >= 0.72);
+        }
         // Prefer the publisher's original URL. Naver article pages frequently
         // return an empty/blocked body to Workers even when they open normally
         // in a browser, while the publisher page remains readable.
