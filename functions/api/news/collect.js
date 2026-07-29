@@ -196,9 +196,9 @@ export async function fetchArticleText(url) {
       headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
       cf: { cacheTtl: 300, cacheEverything: false }
     });
-    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '', fetchStatus: `http_${response.status}` };
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '', fetchStatus: 'non_html' };
     // Some (mostly smaller/regional) Korean outlets serve EUC-KR bytes but
     // send a wrong or missing charset in the HTTP header, which made every
     // regex extraction below silently fail on mojibake. Same detection
@@ -209,7 +209,7 @@ export async function fetchArticleText(url) {
       html = new TextDecoder('euc-kr').decode(bytes);
     }
     html = html.slice(0, 800000);
-    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '', fetchStatus: 'dead_page' };
     let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
     // baduk.or.kr's og:image is a fixed site-wide placeholder, never the real
@@ -249,12 +249,15 @@ export async function fetchArticleText(url) {
     const body = cleanBody(jsonBody || stripHtml(article
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
-    return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory };
-  } catch {
+    return {
+      body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory,
+      fetchStatus: body.length >= 180 ? 'ok' : 'selector_miss'
+    };
+  } catch (error) {
     // Every return path here must share the same shape - a caller reading
     // article.sectionCategory with no fallback (the exists/republish path)
     // sent a bare `undefined` into a D1 bind and crashed the whole run.
-    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '', fetchStatus: `error_${String(error?.name || 'unknown')}` };
   }
 }
 
@@ -1081,14 +1084,16 @@ async function collect(env, {
     // Search snippets are discovery data, not an article body. Never create a
     // three-line card when the destination page is missing or cannot be read.
     if (body.length < 180) {
-      // Which hosts actually fail extraction determines whether the fix is a
-      // selector tweak or a source we can never scrape (JS-rendered, blocked).
-      // Without this, "body_too_short: 12" gives no lead on what to try next.
+      // Which hosts fail and *why* (blocked/non-html vs. fetched fine but no
+      // selector matched) determines whether the fix is a selector tweak or a
+      // source that can never be scraped this way. Without this,
+      // "body_too_short: 12" gives no lead on what to try next.
       if (category !== '바둑') {
         diagnostics.body_too_short_hosts ||= {};
         try {
           const host = new URL(fetchUrl).hostname;
-          diagnostics.body_too_short_hosts[host] = Number(diagnostics.body_too_short_hosts[host] || 0) + 1;
+          const key = `${host}:${article.fetchStatus || 'unknown'}`;
+          diagnostics.body_too_short_hosts[key] = Number(diagnostics.body_too_short_hosts[key] || 0) + 1;
         } catch {}
       }
       return outcome('body_too_short');
