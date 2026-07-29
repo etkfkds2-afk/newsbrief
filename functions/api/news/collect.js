@@ -1187,10 +1187,18 @@ async function collect(env, {
   const generalRetries = pendingRetries.filter(row => row.category !== '바둑');
   const badukCandidates = limitedCandidates.filter(candidate => candidate.category === '바둑');
   const generalCandidates = limitedCandidates.filter(candidate => candidate.category !== '바둑');
-  for (const row of badukRetries) await retrySummary(row);
-  for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
+  // General is processed first, baduk second. Every fetchArticleText call is
+  // a Worker subrequest, and a single invocation has a hard subrequest cap;
+  // once the search/popularity-resolution phase above and a batch of baduk
+  // candidates had already spent it, every general fetch failed with
+  // "Too many subrequests by single Worker invocation" - not a bad URL or a
+  // missing selector, an exception thrown before those checks ever ran. Baduk
+  // was already hitting its daily goal even starved of leftover budget, so
+  // give general first claim on it instead.
   for (const row of generalRetries) await retrySummary(row);
   for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
+  for (const row of badukRetries) await retrySummary(row);
+  for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
   diagnostics.publish_counts_after = publicationCounts;
   if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;
   return { inserted, diagnostics };
