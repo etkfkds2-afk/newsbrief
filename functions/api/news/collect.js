@@ -48,7 +48,7 @@ const SCHEDULED_BADUK_CANDIDATES = 20;
 // new baduk/general articles with "body_too_short" that was really
 // "Too many subrequests by single Worker invocation".
 const SCHEDULED_GOOGLE_DISCOVERIES = 6;
-const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
+const DAILY_CATEGORY_PUBLISH_LIMIT = 12;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
 

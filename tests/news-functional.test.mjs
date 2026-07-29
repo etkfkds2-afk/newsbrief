@@ -508,9 +508,9 @@ test('최근 인기 랭킹 복구는 날짜별 누락 인기기사를 일일 상
   assert.match(workflow, /popularity_date=\$\{ymd\}/);
 });
 
-test('바둑과 일반 뉴스는 각각 하루 10개까지 게시한다', async () => {
+test('바둑과 일반 뉴스는 각각 하루 12개까지 게시한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 10/);
+  assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 12/);
   assert.doesNotMatch(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT/);
   assert.match(collector, /publicationCounts\[bucket\]\.daily >= DAILY_CATEGORY_PUBLISH_LIMIT/);
   assert.match(collector, /home_display_limits = \{ baduk: 30, general: 10 \}/);
