@@ -360,6 +360,21 @@ test('네이버 랭킹 링크는 검색 매칭 대신 oid/aid로 원문 URL을 �
   assert.match(collector, /const canonical = naverCanonicalArticleUrl\(row\.href\)/);
 });
 
+test('인기뉴스 링크가 실제로 본문을 반환하면 검색 매칭으로 대체하지 않는다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const resolveBlock = collector.slice(
+    collector.indexOf('const resolvedPopular = await Promise.all(popular.map(async row =>'),
+    collector.indexOf('diagnostics.popular_resolved =')
+  );
+  assert.match(resolveBlock, /const direct = await fetchArticleText\(row\.href\)/);
+  assert.match(resolveBlock, /if \(direct\.body\.length >= 300\) return row/);
+  // The direct-fetch check must run before the title-search fallback, not after.
+  assert.ok(
+    resolveBlock.indexOf('const direct = await fetchArticleText') < resolveBlock.indexOf('await naverSearch(env,'),
+    'direct link should be tried before falling back to search-based resolution'
+  );
+});
+
 test('naverCanonicalArticleUrl은 oid/aid가 있는 랭킹 링크만 변환한다', async () => {
   const { naverCanonicalArticleUrl } = await import('../functions/api/news/collect.js');
   assert.equal(

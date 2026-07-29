@@ -948,8 +948,17 @@ async function collect(env, {
       if (row.source !== 'NAVER') return row;
       if (/\/main\/ranking\/(?:read|rankingRead)\.naver/i.test(row.href)) {
         const canonical = naverCanonicalArticleUrl(row.href);
-        if (canonical) return { ...row, href: canonical };
+        if (canonical) row = { ...row, href: canonical };
       }
+      // The ranking page now links straight to n.news.naver.com/article/{oid}/{aid},
+      // a real server-rendered mobile article page (dic_area/article_body markup),
+      // not the old JS-shell ranking wrapper. Trust a link that actually extracts
+      // a real body instead of unconditionally discarding it for a fuzzy
+      // title-search guess, which only found a confident match ~1 in 4 times.
+      try {
+        const direct = await fetchArticleText(row.href);
+        if (direct.body.length >= 300) return row;
+      } catch {}
       try {
         let matches = await naverSearch(env, `"${row.title}"`, 1, 5);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
