@@ -240,17 +240,20 @@ jobs:
           NEWSBRIEF_RUN_SOURCE: ${{ steps.collection-gate.outputs.run_source }}
         run: node scripts/google-news-discovery.mjs
 
-      # For a plain run (no backfill/repair_* input), this step intentionally
-      # does nothing: runs stays 0, so the loop body below never executes.
-      # The one real collection call for that case already happened in the
-      # previous step - google-news-discovery.mjs POSTs to /api/news/collect
-      # itself. This step only does work for backfill/repair_* flows.
+      # A plain run already got one collection call from the previous step -
+      # google-news-discovery.mjs POSTs to /api/news/collect itself. Each
+      # Pages Worker invocation gets its own fresh Cloudflare subrequest
+      # budget (free plan: 50 per invocation) that resets per call, not per
+      # day, so one extra plain call here roughly doubles how many
+      # candidates can actually get their article body fetched this cycle
+      # without needing a paid plan. Idempotent url_key storage makes the
+      # repeat call safe - already-published items are skipped instantly.
       - name: Trigger NewsBrief collection
         if: steps.collection-gate.outputs.should_collect == 'true'
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
         run: |
-          runs=0
+          runs=1
           # Backfills use more small requests instead of a few large requests so
           # each Pages Worker invocation stays below its CPU time limit.
           if [ "${{ inputs.backfill }}" = "true" ]; then runs=18; fi
