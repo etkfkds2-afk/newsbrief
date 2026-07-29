@@ -341,6 +341,14 @@ test('Google 바둑 발견은 한 검색어가 전체 후보를 독점하지 않
   assert.match(discovery, /addedForQuery >= \(full \? 10 : 5\)/);
 });
 
+test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처리한다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /const SCHEDULED_GENERAL_CANDIDATES = 12/);
+  assert.match(collector, /const naverPages = pages\.slice\(0, 5\)/);
+  assert.match(collector, /const popular = allPopular\.slice\(0, 20\)/);
+  assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
+});
+
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -665,7 +673,7 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.doesNotMatch(articles, /rest\.slice\(0, misc\.length \? 11 : 12\)/);
   assert.match(articles, /reorderGeneralSummary/);
   assert.match(collector, /general_daily_goal = 10/);
-  assert.match(collector, /SCHEDULED_GENERAL_CANDIDATES = 6/);
+  assert.match(collector, /SCHEDULED_GENERAL_CANDIDATES = 12/);
   assert.match(collector, /SCHEDULED_BADUK_CANDIDATES = 20/);
   assert.match(collector, /The broad query is the freshest view users see on Naver/);
   assert.match(collector, /Date\.parse\(b\.item\?\.pubDate/);

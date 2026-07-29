@@ -35,7 +35,9 @@ const DAILY_ANTHROPIC_CALL_LIMIT = 60;
 const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT + 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
-const SCHEDULED_GENERAL_CANDIDATES = 6;
+// Popular pages frequently contain blocked/short-body articles. Process more
+// than the ten-card home target so those failures do not collapse the feed.
+const SCHEDULED_GENERAL_CANDIDATES = 12;
 const SCHEDULED_BADUK_CANDIDATES = 20;
 const SCHEDULED_GOOGLE_DISCOVERIES = 20;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 10;
@@ -456,12 +458,17 @@ async function collectPopularity(slot = 0) {
       .map(([sid, category]) => [`https://news.naver.com/main/ranking/popularDay.naver?mid=etc&sid1=${sid}`, 'NAVER', category]),
     ['https://news.daum.net/ranking/popular', 'DAUM', '기타']
   ];
-  const selected = [pages[slot % 5], pages[5]];
-  const groups = [];
-  for (const [url, source, category] of selected) {
-    groups.push((await popularPage(url, source)).slice(0, 6).map(row => ({ ...row, category })));
-  }
-  return Array.from({ length: 6 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
+  // Read every Naver ranking section on every run. The previous rotation read
+  // only one of five sections; when Daum returned no parseable rows, a run had
+  // just six candidates and commonly produced only one or two display cards.
+  // Rotate the section order for fair tie-breaking, then interleave ranks so
+  // no single section can dominate the candidate budget.
+  const naverPages = pages.slice(0, 5);
+  const rotated = [...naverPages.slice(slot % 5), ...naverPages.slice(0, slot % 5), pages[5]];
+  const groups = await Promise.all(rotated.map(async ([url, source, category]) =>
+    (await popularPage(url, source)).slice(0, 4).map(row => ({ ...row, category }))
+  ));
+  return Array.from({ length: 4 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
 }
 
 async function reserveAiCall(env, diagnostics) {
@@ -902,7 +909,7 @@ async function collect(env, {
   }
   if (!popularityCandidates.length && !backfill) try {
     const allPopular = await collectPopularity(slot);
-    const popular = allPopular.slice(0, 12);
+    const popular = allPopular.slice(0, 20);
     diagnostics.popular_found = popular.length;
     for (const row of popular) candidates.push({
       category: row.category,
