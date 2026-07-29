@@ -204,7 +204,7 @@ export async function onRequestPost({ request, env }) {
       },
       newArticles,
       existingIssues,
-      { allowStandaloneEvents: category === '바둑' }
+      { allowStandaloneEvents: category === '바둑', highAccuracy: resetIssues || regroupIssues }
     );
     if (classification.provider === 'anthropic-failed' && env?.AI) {
       cloudflare = await reserveCloudflareCall(env);

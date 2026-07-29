@@ -3,6 +3,7 @@
 // single daily baduk classification run ~$0.06 - too expensive to also run
 // general daily on the same Claude budget that article summaries share.
 const CLASSIFY_MODEL = 'claude-haiku-4-5-20251001';
+const HIGH_ACCURACY_CLASSIFY_MODEL = 'claude-sonnet-5';
 const WORKERS_AI_CLASSIFY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function buildInstructions(hasExisting, allowStandaloneEvents = false) {
@@ -195,7 +196,7 @@ function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = fals
   return groups;
 }
 
-async function classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents) {
+async function classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents, model) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -204,7 +205,7 @@ async function classifyWithAnthropic(env, articles, existingIssues, allowStandal
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: CLASSIFY_MODEL,
+      model,
       max_tokens: 8000,
       system: buildInstructions(existingIssues.length > 0, allowStandaloneEvents),
       messages: [{ role: 'user', content: buildPrompt(articles, existingIssues) }]
@@ -241,13 +242,14 @@ async function classifyWithWorkersAi(env, articles, existingIssues, allowStandal
 // existingIssues: [{key, title}] — issues already in the cache, so the
 // caller can send only genuinely new articles and have them merged in
 // instead of re-classifying everything from scratch every run.
-export async function classifyIssues(env, articles, existingIssues = [], { allowStandaloneEvents = false } = {}) {
+export async function classifyIssues(env, articles, existingIssues = [], { allowStandaloneEvents = false, highAccuracy = false } = {}) {
   if (!articles.length) return { groups: [], provider: 'none' };
   let anthropicError = '';
   if (env?.ANTHROPIC_API_KEY) {
     try {
-      const result = await classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents);
-      return { ...result, provider: 'anthropic', model: CLASSIFY_MODEL };
+      const model = highAccuracy ? HIGH_ACCURACY_CLASSIFY_MODEL : CLASSIFY_MODEL;
+      const result = await classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents, model);
+      return { ...result, provider: 'anthropic', model };
     } catch (error) {
       anthropicError = String(error?.message || error).slice(0, 300);
     }

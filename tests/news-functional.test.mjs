@@ -160,6 +160,14 @@ test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제
   assert.match(workflow, /reset_issues:/);
 });
 
+test('전체 이슈 복구는 Sonnet을 쓰고 일상 증분 분류는 Haiku를 유지한다', async () => {
+  const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(classifier, /HIGH_ACCURACY_CLASSIFY_MODEL = 'claude-sonnet-5'/);
+  assert.match(classifier, /highAccuracy \? HIGH_ACCURACY_CLASSIFY_MODEL : CLASSIFY_MODEL/);
+  assert.match(endpoint, /highAccuracy: resetIssues \|\| regroupIssues/);
+});
+
 test('이슈 재분류 전 캐시 백업과 직전 상태 복원 경로를 제공한다', async () => {
   const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
