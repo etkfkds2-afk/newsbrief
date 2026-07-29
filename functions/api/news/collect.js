@@ -117,20 +117,6 @@ function titleSimilarity(left, right) {
   return aa.size && bb.size ? (2 * common) / (aa.size + bb.size) : 0;
 }
 
-export function naverCanonicalArticleUrl(href) {
-  // Ranking wrapper links (main/ranking/read.naver, rankingRead.naver) already
-  // carry the press id (oid) and article id (aid) in their query string. Build
-  // Naver's stable mobile article URL straight from those instead of guessing
-  // the destination via a fuzzy title search, which only matched ~1 in 4 today.
-  try {
-    const params = new URL(href).searchParams;
-    const oid = params.get('oid');
-    const aid = params.get('aid');
-    if (oid && aid) return `https://n.news.naver.com/mnews/article/${oid}/${aid}`;
-  } catch {}
-  return '';
-}
-
 function pressFromTitle(value) {
   const text = stripHtml(value);
   return cleanPressName(text.match(/\s[-|–—]\s([^\-|–—]{1,30})$/u)?.[1] || '');
@@ -210,9 +196,9 @@ async function fetchArticleText(url) {
       headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
       cf: { cacheTtl: 300, cacheEverything: false }
     });
-    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '' };
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
     // Some (mostly smaller/regional) Korean outlets serve EUC-KR bytes but
     // send a wrong or missing charset in the HTTP header, which made every
     // regex extraction below silently fail on mojibake. Same detection
@@ -223,7 +209,7 @@ async function fetchArticleText(url) {
       html = new TextDecoder('euc-kr').decode(bytes);
     }
     html = html.slice(0, 800000);
-    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
     let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
     // baduk.or.kr's og:image is a fixed site-wide placeholder, never the real
@@ -262,10 +248,7 @@ async function fetchArticleText(url) {
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
     return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory };
   } catch {
-    // Every return path here must share the same shape - a caller reading
-    // article.sectionCategory with no fallback (the exists/republish path)
-    // sent a bare `undefined` into a D1 bind and crashed the whole run.
-    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
+    return { body: '', image: '', press: '', publishedAt: '' };
   }
 }
 
@@ -949,19 +932,6 @@ async function collect(env, {
     // before fetching and summarizing it.
     const resolvedPopular = await Promise.all(popular.map(async row => {
       if (row.source !== 'NAVER') return row;
-      if (/\/main\/ranking\/(?:read|rankingRead)\.naver/i.test(row.href)) {
-        const canonical = naverCanonicalArticleUrl(row.href);
-        if (canonical) row = { ...row, href: canonical };
-      }
-      // The ranking page now links straight to n.news.naver.com/article/{oid}/{aid},
-      // a real server-rendered mobile article page (dic_area/article_body markup),
-      // not the old JS-shell ranking wrapper. Trust a link that actually extracts
-      // a real body instead of unconditionally discarding it for a fuzzy
-      // title-search guess, which only found a confident match ~1 in 4 times.
-      try {
-        const direct = await fetchArticleText(row.href);
-        if (direct.body.length >= 300) return row;
-      } catch {}
       try {
         let matches = await naverSearch(env, `"${row.title}"`, 1, 5);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
@@ -1139,15 +1109,8 @@ async function collect(env, {
   }
   const knownCandidateKeys = new Set();
   if (uniqueCandidates.length) {
-    // "Known" must mean already published, not merely already attempted.
-    // A candidate that previously failed (body_too_short, etc.) still has a
-    // row here with summary_quality<>'full'; counting that as known buried it
-    // behind every fresh candidate forever; since each run's search/popularity
-    // pass turns up a fresh batch of noisy, mostly-failing candidates, a
-    // once-failed item never resurfaced to get retried with a better URL.
     const placeholders = uniqueCandidates.map(() => '?').join(',');
-    const knownRows = await env.DB.prepare(
-      `SELECT url_key FROM news_articles WHERE summary_quality='full' AND url_key IN (${placeholders})`)
+    const knownRows = await env.DB.prepare(`SELECT url_key FROM news_articles WHERE url_key IN (${placeholders})`)
       .bind(...uniqueCandidates.map(candidate => candidate.urlKey)).all();
     for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
   }
@@ -1300,10 +1263,7 @@ export async function onRequestPost({ request, env }) {
       .map(([key, value]) => `${key}: ${value}`);
     if (result.diagnostics.ai_provider_limited) warnings.push('ai_provider_limited');
     const status = warnings.length ? 'degraded' : 'ok';
-    // 500 chars cut the message off before candidate_outcomes_by_category, the
-    // one field that actually explains why the general feed stays thin - every
-    // production debugging pass had to guess instead of reading it.
-    const message = JSON.stringify({ warnings, diagnostics: result.diagnostics }).slice(0, 4000);
+    const message = JSON.stringify({ warnings, diagnostics: result.diagnostics }).slice(0, 500);
     await env.DB.prepare("UPDATE news_runs SET finished_at=?,status=?,inserted_count=?,message=? WHERE id=?")
       .bind(new Date().toISOString(), status, result.inserted, message, runId).run();
     return json({ ok: true, status, warnings, ...result });

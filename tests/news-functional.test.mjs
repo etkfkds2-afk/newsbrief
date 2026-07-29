@@ -353,38 +353,6 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
 });
 
-test('네이버 랭킹 링크는 검색 매칭 대신 oid/aid로 원문 URL을 직접 구성한다', async () => {
-  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /function naverCanonicalArticleUrl\(href\)/);
-  assert.match(collector, /`https:\/\/n\.news\.naver\.com\/mnews\/article\/\$\{oid\}\/\$\{aid\}`/);
-  assert.match(collector, /const canonical = naverCanonicalArticleUrl\(row\.href\)/);
-});
-
-test('인기뉴스 링크가 실제로 본문을 반환하면 검색 매칭으로 대체하지 않는다', async () => {
-  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  const resolveBlock = collector.slice(
-    collector.indexOf('const resolvedPopular = await Promise.all(popular.map(async row =>'),
-    collector.indexOf('diagnostics.popular_resolved =')
-  );
-  assert.match(resolveBlock, /const direct = await fetchArticleText\(row\.href\)/);
-  assert.match(resolveBlock, /if \(direct\.body\.length >= 300\) return row/);
-  // The direct-fetch check must run before the title-search fallback, not after.
-  assert.ok(
-    resolveBlock.indexOf('const direct = await fetchArticleText') < resolveBlock.indexOf('await naverSearch(env,'),
-    'direct link should be tried before falling back to search-based resolution'
-  );
-});
-
-test('naverCanonicalArticleUrl은 oid/aid가 있는 랭킹 링크만 변환한다', async () => {
-  const { naverCanonicalArticleUrl } = await import('../functions/api/news/collect.js');
-  assert.equal(
-    naverCanonicalArticleUrl('https://news.naver.com/main/ranking/read.naver?oid=001&aid=0012345678'),
-    'https://n.news.naver.com/mnews/article/001/0012345678'
-  );
-  assert.equal(naverCanonicalArticleUrl('https://news.naver.com/main/ranking/read.naver?oid=001'), '');
-  assert.equal(naverCanonicalArticleUrl('not a url'), '');
-});
-
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -717,32 +685,9 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);
   assert.match(collector, /candidate_outcomes_by_category/);
-  assert.match(collector, /SELECT url_key FROM news_articles WHERE summary_quality='full' AND url_key IN/);
+  assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
   assert.match(collector, /const newOrder = Number\(knownCandidateKeys\.has/);
   assert.match(collector, /diagnostics\.new_candidates/);
-});
-
-test('fetchArticleText의 모든 조기 반환은 sectionCategory를 포함한다', async () => {
-  // A branch missing sectionCategory sent a bare `undefined` into a D1 bind
-  // (the republish path reads article.sectionCategory with no `|| ''`
-  // fallback) and crashed the entire collection run with D1_TYPE_ERROR.
-  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  const start = collector.indexOf('async function fetchArticleText(url) {');
-  const end = collector.indexOf('\nasync function repairGeneralCategories');
-  const body = collector.slice(start, end);
-  const earlyReturns = [...body.matchAll(/return \{ body:[^}]*\}/g)].map(m => m[0]);
-  assert.ok(earlyReturns.length >= 4, `expected at least 4 early returns, found ${earlyReturns.length}`);
-  for (const line of earlyReturns) assert.match(line, /sectionCategory: ''/);
-});
-
-test('아직 발행되지 않은 기존 후보는 새 후보와 동등하게 재시도 기회를 얻는다', async () => {
-  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  // A row that exists but never reached summary_quality='full' (body_too_short,
-  // failed AI validation, etc.) must not count as "known" - otherwise it is
-  // permanently outranked by whatever noisy new candidates each run turns up,
-  // and never gets a retry even after a fix improves its odds.
-  assert.match(collector, /summary_quality='full' AND url_key IN/);
-  assert.doesNotMatch(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
 });
 
 test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 저장 기사만 표시한다', async () => {
