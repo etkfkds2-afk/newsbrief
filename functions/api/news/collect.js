@@ -163,15 +163,26 @@ export function naverSectionCategory(html = '') {
 
 export function articleSectionCategory(html = '') {
   const text = String(html || '');
-  const raw = text.match(/["']articleSection["']\s*:\s*["']([^"']+)/i)?.[1]
-    || text.match(/<meta[^>]+(?:property|name)=["'](?:article:section|section)["'][^>]+content=["']([^"']+)/i)?.[1]
-    || text.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:section|section)["']/i)?.[1]
-    || '';
-  if (/(?:정치|국회|대통령)/u.test(raw)) return '정치';
-  if (/(?:경제|금융|증권|부동산|산업|기업)/u.test(raw)) return '경제';
-  if (/(?:사회|지역|교육|사건|법원)/u.test(raw)) return '사회';
-  if (/(?:생활|문화|연예|스포츠|건강|여행)/u.test(raw)) return '생활/문화';
-  if (/(?:세계|국제|글로벌|해외)/u.test(raw)) return '세계';
+  // Some outlets (e.g. 중앙일보) put their own brand name in article:section
+  // ("중앙일보") and the real category in article:section2/3 instead - reading
+  // only article:section there always returns the publisher name, which
+  // matches no category and silently falls through to whatever category the
+  // article was originally searched under. Check every section-like tag and
+  // use the first one that actually matches a known category.
+  const candidates = [
+    text.match(/["']articleSection["']\s*:\s*["']([^"']+)/i)?.[1],
+    text.match(/<meta[^>]+(?:property|name)=["']article:section2["'][^>]+content=["']([^"']+)/i)?.[1],
+    text.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']article:section2["']/i)?.[1],
+    text.match(/<meta[^>]+(?:property|name)=["'](?:article:section|section)["'][^>]+content=["']([^"']+)/i)?.[1],
+    text.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:section|section)["']/i)?.[1]
+  ].filter(Boolean);
+  for (const raw of candidates) {
+    if (/(?:정치|국회|대통령)/u.test(raw)) return '정치';
+    if (/(?:경제|금융|증권|부동산|산업|기업)/u.test(raw)) return '경제';
+    if (/(?:사회|지역|교육|사건|법원)/u.test(raw)) return '사회';
+    if (/(?:생활|문화|연예|스포츠|건강|여행)/u.test(raw)) return '생활/문화';
+    if (/(?:세계|국제|글로벌|해외)/u.test(raw)) return '세계';
+  }
   return '';
 }
 

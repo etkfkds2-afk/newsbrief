@@ -238,6 +238,13 @@ test('네이버 외 언론사의 JSON-LD·메타 섹션도 카테고리로 사�
   assert.equal(articleSectionCategory('<meta name="section" content="IT과학">'), '');
 });
 
+test('article:section이 언론사 이름뿐이면 article:section2의 실제 카테고리를 쓴다', () => {
+  const joongangStyle = '<meta property="article:section" content="중앙일보" />'
+    + '<meta property="article:section2" content="사회" />'
+    + '<meta property="article:section3" content="사건사고" />';
+  assert.equal(articleSectionCategory(joongangStyle), '사회');
+});
+
 test('IT 과학 카테고리는 수집·분류·화면·일반 피드에서 제외한다', async () => {
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
