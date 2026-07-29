@@ -356,9 +356,26 @@ jobs:
 
   health-check:
     needs: [collect-news, classify-issues]
-    if: always() && github.event_name == 'schedule'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
+      - name: TEMP - verify home 핵심뉴스 card count matches the client query
+        env:
+          NEWSBRIEF_SITE_USER: ${{ secrets.NEWSBRIEF_SITE_USER }}
+          NEWSBRIEF_SITE_PASSWORD: ${{ secrets.NEWSBRIEF_SITE_PASSWORD }}
+        run: |
+          curl -sS --max-time 30 -c /tmp/verify-cookie -o /dev/null \
+            -H 'content-type: application/json' \
+            --data "$(jq -cn --arg username "$NEWSBRIEF_SITE_USER" --arg password "$NEWSBRIEF_SITE_PASSWORD" '{username:$username,password:$password}')" \
+            "https://newsbrief-etkfkds2.pages.dev/api/auth/login"
+          echo "=== general home (view=popular&exclude_baduk=1&limit=10&hours=24) ==="
+          curl -sS --max-time 30 -b /tmp/verify-cookie \
+            "https://newsbrief-etkfkds2.pages.dev/api/news/articles?view=popular&exclude_baduk=1&limit=10&hours=24" | tee /tmp/verify-general.json | jq '{ok, count: (.items|length)}'
+          echo "=== baduk home (category=바둑&view=latest&limit=30&hours=24) ==="
+          curl -sS --max-time 30 -b /tmp/verify-cookie \
+            --get --data-urlencode "category=바둑" --data-urlencode "view=latest" --data-urlencode "limit=30" --data-urlencode "hours=24" \
+            "https://newsbrief-etkfkds2.pages.dev/api/news/articles" | tee /tmp/verify-baduk.json | jq '{ok, count: (.items|length)}'
+
       - name: Check NewsBrief production health
         id: health
         env:
