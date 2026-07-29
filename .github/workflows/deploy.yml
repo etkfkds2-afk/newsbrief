@@ -61,6 +61,11 @@ on:
         required: false
         default: false
         type: boolean
+      reset_categories:
+        description: '카테고리 복구 시 이전에 확인한 기사도 전부 다시 검사'
+        required: false
+        default: false
+        type: boolean
       repair_general_quality:
         description: '낮은 품질의 일반 요약 격리 후 AI 재요약'
         required: false
@@ -298,10 +303,12 @@ jobs:
           fi
           if [ "${{ inputs.repair_categories }}" = "true" ]; then
             for i in $(seq 1 30); do
+              endpoint="https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_categories=1"
+              if [ "$i" = "1" ] && [ "${{ inputs.reset_categories }}" = "true" ]; then endpoint="${endpoint}&reset_categories=1"; fi
               response=$(curl --fail-with-body --retry 3 --max-time 120 \
                 -X POST \
                 -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
-                "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_categories=1")
+                "$endpoint")
               echo "$response"
               if echo "$response" | jq -e '.category_repair.done == true' >/dev/null; then break; fi
             done

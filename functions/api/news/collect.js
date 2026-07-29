@@ -283,7 +283,14 @@ export async function fetchArticleText(url) {
   }
 }
 
-async function repairGeneralCategories(env, limit = 10) {
+async function repairGeneralCategories(env, limit = 10, reset = false) {
+  // news_category_checks marks a url_key done forever, even if a later fix
+  // to the detection logic (e.g. reading article:section2 for outlets that
+  // put their own brand name in article:section) would now classify it
+  // differently. Without a way to clear it, articles checked under old,
+  // buggier logic can never be reprocessed. Callers pass reset=1 once (see
+  // deploy.yml's reset_categories input) to let everything be re-checked.
+  if (reset) await env.DB.prepare('DELETE FROM news_category_checks').run();
   // Check the newest unchecked articles first. The former numeric cursor
   // walked from the oldest row in batches of ten, so newly reported mistakes
   // could remain visible for many maintenance runs.
@@ -1281,6 +1288,7 @@ export async function onRequestPost({ request, env }) {
     const generalBoost = requestUrl.searchParams.get('general_boost') === '1';
     const repairTimes = requestUrl.searchParams.get('repair_times') === '1';
     const repairCategories = requestUrl.searchParams.get('repair_categories') === '1';
+    const resetCategories = requestUrl.searchParams.get('reset_categories') === '1';
     const repairGeneralQuality = requestUrl.searchParams.get('repair_general_quality') === '1';
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
     const popularityOffset = Math.max(0, Math.min(Number(requestUrl.searchParams.get('popularity_offset')) || 0, 48));
@@ -1291,7 +1299,7 @@ export async function onRequestPost({ request, env }) {
       return json({ ok: true, time_repair: timeRepair });
     }
     if (repairCategories) {
-      const categoryRepair = await repairGeneralCategories(env);
+      const categoryRepair = await repairGeneralCategories(env, 10, resetCategories);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
         .bind(new Date().toISOString(), JSON.stringify({ category_repair: categoryRepair }), runId).run();
       return json({ ok: true, category_repair: categoryRepair });
