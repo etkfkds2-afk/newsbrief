@@ -845,7 +845,17 @@ async function collect(env, {
       const pageBand = backfill ? Math.floor(slot / Math.ceil(BADUK_SEARCHES.length / 4)) % 5 : 0;
       const start = category === '바둑' ? pageBand * 20 + 1 : (backfill ? backfillStart : 1);
       const display = category === '바둑' ? 20 : (backfill ? 10 : 4);
-      const items = await naverSearch(env, effectiveQuery, start, display);
+      // Every other naverSearch/kakaoSearch call site guards against a
+      // transient upstream failure. This one didn't - a single 429/5xx from
+      // Naver here threw past collect()'s only try/catch (in onRequestPost)
+      // and aborted the entire run before baduk, general, or popularity ever
+      // got a single candidate, not just this one query's results.
+      let items = [];
+      try {
+        items = await naverSearch(env, effectiveQuery, start, display);
+      } catch (error) {
+        diagnostics.naver_error = String(error?.message || error).slice(0, 120);
+      }
       const naverTake = category === '바둑' ? (backfill ? 6 : 10) : (backfill ? 2 : 2);
       for (const item of items.slice(0, naverTake)) candidates.push({ category, item, source: 'NAVER' });
       try {

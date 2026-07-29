@@ -398,6 +398,24 @@ test('fetchArticleText의 모든 조기 반환은 sectionCategory를 포함한�
   }
 });
 
+test('검색 루프의 naverSearch 호출은 kakaoSearch처럼 try/catch로 보호된다', async () => {
+  // naverSearch throws on any non-ok response. Every other call site already
+  // guards against that, but the main SEARCHES loop didn't - a single
+  // transient Naver API failure there propagated past collect()'s only
+  // try/catch (in onRequestPost) and aborted the whole run before baduk,
+  // general, or popularity resolution ever got a single candidate.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const loopStart = collector.indexOf('for (const effectiveQuery of effectiveQueries) {');
+  const loopEnd = collector.indexOf('\n  }\n', loopStart);
+  const loopBody = collector.slice(loopStart, loopEnd);
+  const naverCallIndex = loopBody.indexOf('await naverSearch(env, effectiveQuery, start, display)');
+  assert.ok(naverCallIndex > 0, 'expected the SEARCHES loop naverSearch call to still exist');
+  const precedingTry = loopBody.lastIndexOf('try {', naverCallIndex);
+  const precedingCatch = loopBody.indexOf('catch', naverCallIndex);
+  assert.ok(precedingTry >= 0 && precedingTry < naverCallIndex && precedingCatch > naverCallIndex,
+    'expected the naverSearch call to be wrapped in its own try/catch');
+});
+
 test('Google RSS 5xx는 제한된 횟수만 재시도한다', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
