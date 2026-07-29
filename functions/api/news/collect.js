@@ -1080,7 +1080,19 @@ async function collect(env, {
     if (category !== '바둑' && !isPopular && LOCAL_GENERAL_PRESS.test(resolvedPress)) return outcome('local_general_filtered');
     // Search snippets are discovery data, not an article body. Never create a
     // three-line card when the destination page is missing or cannot be read.
-    if (body.length < 180) return outcome('body_too_short');
+    if (body.length < 180) {
+      // Which hosts actually fail extraction determines whether the fix is a
+      // selector tweak or a source we can never scrape (JS-rendered, blocked).
+      // Without this, "body_too_short: 12" gives no lead on what to try next.
+      if (category !== '바둑') {
+        diagnostics.body_too_short_hosts ||= {};
+        try {
+          const host = new URL(fetchUrl).hostname;
+          diagnostics.body_too_short_hosts[host] = Number(diagnostics.body_too_short_hosts[host] || 0) + 1;
+        } catch {}
+      }
+      return outcome('body_too_short');
+    }
     const finalCategory = category === '바둑'
       ? classify(category, title, body || rawSummary)
       : (article.sectionCategory || classify(category, title, body || rawSummary));
