@@ -722,6 +722,19 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /diagnostics\.new_candidates/);
 });
 
+test('fetchArticleText의 모든 조기 반환은 sectionCategory를 포함한다', async () => {
+  // A branch missing sectionCategory sent a bare `undefined` into a D1 bind
+  // (the republish path reads article.sectionCategory with no `|| ''`
+  // fallback) and crashed the entire collection run with D1_TYPE_ERROR.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const start = collector.indexOf('async function fetchArticleText(url) {');
+  const end = collector.indexOf('\nasync function repairGeneralCategories');
+  const body = collector.slice(start, end);
+  const earlyReturns = [...body.matchAll(/return \{ body:[^}]*\}/g)].map(m => m[0]);
+  assert.ok(earlyReturns.length >= 4, `expected at least 4 early returns, found ${earlyReturns.length}`);
+  for (const line of earlyReturns) assert.match(line, /sectionCategory: ''/);
+});
+
 test('아직 발행되지 않은 기존 후보는 새 후보와 동등하게 재시도 기회를 얻는다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   // A row that exists but never reached summary_quality='full' (body_too_short,

@@ -210,9 +210,9 @@ async function fetchArticleText(url) {
       headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
       cf: { cacheTtl: 300, cacheEverything: false }
     });
-    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '' };
+    if (!response.ok) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '' };
+    if (!type.includes('text/html')) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     // Some (mostly smaller/regional) Korean outlets serve EUC-KR bytes but
     // send a wrong or missing charset in the HTTP header, which made every
     // regex extraction below silently fail on mojibake. Same detection
@@ -223,7 +223,7 @@ async function fetchArticleText(url) {
       html = new TextDecoder('euc-kr').decode(bytes);
     }
     html = html.slice(0, 800000);
-    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '' };
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
     let image = normalizeText(html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i)?.[1] || '');
     // baduk.or.kr's og:image is a fixed site-wide placeholder, never the real
@@ -262,7 +262,10 @@ async function fetchArticleText(url) {
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')));
     return { body, image: /^https?:\/\//.test(image) ? image : '', press: siteName, publishedAt, sectionCategory };
   } catch {
-    return { body: '', image: '', press: '', publishedAt: '' };
+    // Every return path here must share the same shape - a caller reading
+    // article.sectionCategory with no fallback (the exists/republish path)
+    // sent a bare `undefined` into a D1 bind and crashed the whole run.
+    return { body: '', image: '', press: '', publishedAt: '', sectionCategory: '' };
   }
 }
 
