@@ -23,6 +23,13 @@ const cats=['정치','경제','사회','생활/문화','세계'];
 const state={section:'baduk',genView:'daily',badukView:'daily',category:'',q:'',issueKey:'',focusKey:'',items:[],heroItems:[],issueItems:[],requestSeq:0};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 일간 헤드라인 타일용: 코너명 대괄호("[특파원]")나 말줄임표처럼 짧은
+// "키워드"로 보이는 걸 방해하는 꼬리표만 정리한다. AI 없이 정규식으로만.
+const cleanHeadline=v=>String(v||'')
+  .replace(/^\s*(?:\[[^[\]]{1,20}\]|<[^<>]{1,20}>)\s*/,'')
+  .replace(/\s*(?:\[[^[\]]{1,20}\]|\([^()]{1,20}\))\s*$/,'')
+  .replace(/[…]+\s*$/,'')
+  .trim();
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
 const VIEW_CACHE_TTL=300000,viewCache=new Map(),viewRequests=new Map();let viewCacheGeneration=0;
 let activeLoadController=null,lastSuccessfulLoad=0;
@@ -162,19 +169,20 @@ function renderIssues(){
   const show=Boolean(state.issueItems.length)&&!state.q&&!state.category&&sub!=='saved'&&sub!=='home';
   $('issuesPanel').style.display=show?'block':'none';
   if(!show)return;
-  $('issuesTitle').textContent=sub==='daily'?'일간 최신 키워드':sub==='weekly'?'주간 이슈 키워드':'월간 이슈 키워드';
+  const jumpMode=sub==='daily';
+  $('issuesTitle').textContent=jumpMode?'일간 최신 헤드라인':sub==='weekly'?'주간 이슈 키워드':'월간 이슈 키워드';
   $('issuesDesc').textContent='';
-  $('issues').innerHTML=state.issueItems.map(issue=>{
-    const jumpMode=Boolean(issue.jump);
-    const selected=!jumpMode&&state.issueKey===issue.key;
-    const isNew=issue.latest&&Date.now()-+parseTime(issue.latest)<(jumpMode?10800000:86400000);
-    const keyAttr=jumpMode?`data-scroll-key="${esc(issue.key)}"`:`data-issue-key="${esc(issue.key)}"`;
-    const metaRight=jumpMode
-      ?`<span class="issueView"><span aria-hidden="true">↓</span></span>`
-      :`<span class="issueView"><span class="issueViewDesktop">· 전체 카드 보기 </span><span class="issueViewMobile">전체보기 </span><span class="issueArrow" aria-hidden="true">↓</span></span>`;
-    const metaLeft=jumpMode?(issue.count>1?`관련 기사 ${issue.count}건`:'기사 보기'):`${selected?'선택됨 · ':''}관련 기사 ${issue.count}건`;
-    return `<button type="button" class="issueCard ${selected?'on':''}" ${keyAttr} aria-pressed="${selected?'true':'false'}"><div class="issueName">${isNew?'<span class="issueNew">NEW</span>':''}<span>${esc(issue.title)}</span></div><div class="issueMeta"><span>${metaLeft}</span>${metaRight}</div></button>`;
-  }).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
+  $('issues').className=jumpMode?'hotpage':'issueGrid';
+  $('issues').innerHTML=jumpMode
+    ? state.issueItems.map((issue,i)=>{
+        const isNew=issue.latest&&Date.now()-+parseTime(issue.latest)<10800000;
+        return `<a class="hotchip" href="#article-${esc(issue.key)}" data-scroll-key="${esc(issue.key)}"><span class="hotrank">${String(i+1).padStart(2,'0')}</span>${isNew?'<span class="issueNew">NEW</span>':''}<span class="hottext">${esc(issue.title)}</span>${issue.count>1?`<span class="hotrelated">관련 ${issue.count}건</span>`:''}<span aria-hidden="true">↓</span></a>`;
+      }).join('')||'<div class="empty">아직 기사가 없습니다.</div>'
+    : state.issueItems.map(issue=>{
+        const selected=state.issueKey===issue.key;
+        const isNew=issue.latest&&Date.now()-+parseTime(issue.latest)<86400000;
+        return `<button type="button" class="issueCard ${selected?'on':''}" data-issue-key="${esc(issue.key)}" aria-pressed="${selected?'true':'false'}"><div class="issueName">${isNew?'<span class="issueNew">NEW</span>':''}<span>${esc(issue.title)}</span></div><div class="issueMeta"><span>${selected?'선택됨 · ':''}관련 기사 ${issue.count}건</span><span class="issueView"><span class="issueViewDesktop">· 전체 카드 보기 </span><span class="issueViewMobile">전체보기 </span><span class="issueArrow" aria-hidden="true">↓</span></span></div></button>`;
+      }).join('')||'<div class="issueEmpty">아직 식별된 이슈가 없습니다.</div>';
 }
 function relatedHtml(item){
   if(!item.related_count)return'';
@@ -250,7 +258,7 @@ async function load({silent=false}={}){
       if(requestId!==state.requestSeq)return;
       state.heroItems=[];state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);
       if(sub==='daily'){
-        state.issueItems=state.items.slice(0,24).map(x=>({key:x.url_key,title:x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
+        state.issueItems=state.items.slice(0,24).map(x=>({key:x.url_key,title:cleanHeadline(x.title)||x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
       }else if(indexData)state.issueItems=indexData.issues||[];else if(!state.issueKey)state.issueItems=d.issues||[];
     }
     lastSuccessfulLoad=Date.now();
@@ -279,7 +287,7 @@ document.addEventListener('click',e=>{
   const jump=e.target.closest('[data-jump-key]');
   if(jump){e.preventDefault();state.focusKey=jump.dataset.jumpKey;render();const card=document.getElementById(`article-${state.focusKey}`);if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}return}
   const scroll=e.target.closest('[data-scroll-key]');
-  if(scroll){const card=document.getElementById(`article-${scroll.dataset.scrollKey}`);if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}return}
+  if(scroll){e.preventDefault();const card=document.getElementById(`article-${scroll.dataset.scrollKey}`);if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}return}
   if(e.target.closest('#issueBack')){closeIssue();return}
   if(e.target.closest('.brand')){setSubview('daily');state.category='';state.q='';state.issueKey='';$('query').value='';resetIssueUrl();load();return}
   if(e.target.closest('#retryLoad')){load();return}
