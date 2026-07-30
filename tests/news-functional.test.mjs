@@ -704,7 +704,7 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
   assert.match(html, /\.issueName\{[^}]*word-break:keep-all;overflow-wrap:anywhere/);
   assert.doesNotMatch(html, /\.issueCard\{[^}]*min-height:/);
   assert.match(html, /\.issueCard\{justify-content:center;padding:9px;text-align:center\}/);
-  assert.match(html, /\.issueName\{display:flex;align-items:center;justify-content:center/);
+  assert.match(html, /\.issueName\{display:flex;flex-direction:column;align-items:center;justify-content:center/);
   assert.doesNotMatch(html, /\.issueName\{[^}]*min-height:/);
   assert.match(html, /\.issueName>span:not\(\.issueNew\)\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
   assert.match(html, /\.issuePanel\{padding:10px 14px 14px\}/);
