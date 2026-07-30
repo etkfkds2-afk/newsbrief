@@ -657,7 +657,7 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
   assert.match(html, /\.issueCard\{justify-content:center;padding:9px;text-align:center\}/);
   assert.match(html, /\.issueName\{display:flex;align-items:center;justify-content:center/);
   assert.doesNotMatch(html, /\.issueName\{[^}]*min-height:/);
-  assert.match(html, /\.issueName>span\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
+  assert.match(html, /\.issueName>span:not\(\.issueNew\)\{display:-webkit-box;[^}]*-webkit-line-clamp:3/);
   assert.match(html, /\.issuePanel\{padding:10px 14px 14px\}/);
   assert.match(html, /\.issueMeta\{flex-direction:column;align-items:center;gap:1px;margin-top:5px;padding-top:0/);
   assert.doesNotMatch(html, /\.issueMeta\{[^}]*margin-top:auto/);
@@ -670,7 +670,7 @@ test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
   assert.match(html, /if\(sub!=='saved'&&!state\.category\)p\.set\('issues','1'\)/);
-  assert.match(html, /sub==='weekly'\?'주간':sub==='monthly'\?'월간'/);
+  assert.match(html, /sub==='daily'\?'일간':sub==='weekly'\?'주간':sub==='monthly'\?'월간'/);
   assert.match(html, /\$\{categoryPeriod\} \$\{state\.category\} 3줄 요약/);
 });
 

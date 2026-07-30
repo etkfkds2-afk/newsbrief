@@ -157,7 +157,14 @@ export function normalizeCachedIssues(items, cached) {
 
 export function buildIssuesFromCache(items, cached) {
   const normalized = normalizeCachedIssues(items, cached);
-  const mapped = normalized.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }));
+  const itemByKey = new Map(items.map(item => [item.url_key, item]));
+  const mapped = normalized.map(group => {
+    const latest = group.url_keys.reduce((max, key) => {
+      const time = String(itemByKey.get(key)?.published_at || itemByKey.get(key)?.fetched_at || '');
+      return time > max ? time : max;
+    }, '');
+    return { key: group.key, title: group.title, count: group.url_keys.length, latest };
+  });
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
   // count, so it is kept out of the count sort and appended last instead.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
