@@ -250,11 +250,7 @@ export async function onRequestGet({ request, env }) {
     const directIssue = issueKeyFilter && !issueKeyFilter.endsWith('|ai:misc')
       ? cachedIssues?.find(group => group.key === issueKeyFilter)
       : null;
-    const directKeys = [...new Set(directIssue?.url_keys || [])].slice(0, 300);
-    if (directKeys.length) {
-      where.push(`a.url_key IN (${directKeys.map(() => '?').join(',')})`);
-      bindings.push(...directKeys);
-    }
+    const directKeys = [...new Set(directIssue?.url_keys || [])];
     if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
@@ -268,7 +264,6 @@ export async function onRequestGet({ request, env }) {
     const queryLimit = feedCandidateLimit(
       limit, view, issues || Boolean(issueKeyFilter), category === '바둑'
     );
-    bindings.push(queryLimit);
 
     // Popularity tables are only needed by the compact home/popular feed.
     // Joining them on every latest/saved/issue request was the expensive path
@@ -286,19 +281,42 @@ export async function onRequestGet({ request, env }) {
         ? `CASE WHEN ${popularityScore}>0 THEN 1 ELSE 0 END DESC, ${popularityScore} DESC, datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) DESC`
       : "datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC";
 
-    const result = await env.DB.prepare(`
+    const selectSql = (extraWhere) => `
       SELECT a.id, a.url, a.url_key, a.title, a.source, a.press, a.category,
              a.published_at, a.fetched_at, a.summary, a.summary_quality, a.image_url,
              CASE WHEN s.url_key IS NULL THEN 0 ELSE 1 END AS saved
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
-      WHERE ${where.join(' AND ')}
+      WHERE ${[...where, ...(extraWhere ? [extraWhere] : [])].join(' AND ')}
       ORDER BY ${order}
       LIMIT ?
-    `).bind(...bindings).all();
+    `;
+    // D1 rejects statements with more than 100 bound parameters. A long-running
+    // story's cached issue can accumulate far more url_keys than that (a story
+    // covered for weeks can pass 90+ articles), so the direct-key IN clause is
+    // sent in batches instead of one query - otherwise the whole request fails
+    // with SQLITE_ERROR and the issue card looks dead on click.
+    const DIRECT_KEY_BATCH = 90;
+    let resultRows;
+    if (directKeys.length) {
+      resultRows = [];
+      for (let i = 0; i < directKeys.length; i += DIRECT_KEY_BATCH) {
+        const chunk = directKeys.slice(i, i + DIRECT_KEY_BATCH);
+        const chunkResult = await env.DB.prepare(selectSql(`a.url_key IN (${chunk.map(() => '?').join(',')})`))
+          .bind(...bindings, ...chunk, queryLimit).all();
+        resultRows.push(...(chunkResult.results || []));
+      }
+      // Each batch is individually ordered; restore a single date-DESC order
+      // across the merged set so dedup/representative selection below behaves
+      // the same as the unbatched query.
+      resultRows.sort((a, b) => String(b.published_at || b.fetched_at || '').localeCompare(String(a.published_at || a.fetched_at || '')));
+    } else {
+      const result = await env.DB.prepare(selectSql(null)).bind(...bindings, queryLimit).all();
+      resultRows = result.results || [];
+    }
     const accepted = [];
-    for (const item of result.results || []) {
+    for (const item of resultRows) {
       item.summary = normalizeText(String(item.summary || '').replace(/([1-3][.)])\s*&#10;/gi, '$1 '));
       if (item.category !== '바둑') item.summary = reorderGeneralSummary(item.summary, item.title);
       item.image_url = normalizeText(item.image_url);

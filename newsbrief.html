@@ -235,8 +235,23 @@ async function load({silent=false}={}){
       state.heroItems=[];state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);
       if(indexData)state.issueItems=indexData.issues||[];else if(!state.issueKey)state.issueItems=d.issues||[];
     }
-    lastSuccessfulLoad=Date.now();render();
-    if(state.issueKey){requestAnimationFrame(()=>{const card=$('cards').querySelector('.card');if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}})}
+    lastSuccessfulLoad=Date.now();
+    // A cached issue tile can outlive the articles behind it (the AI issue
+    // cache and the stricter per-card display validation run separately and
+    // can fall out of sync), leaving a keyword tile whose click silently
+    // returns zero cards. Surface that instead of doing nothing, and drop the
+    // dead tile so it stops being clickable.
+    if(state.issueKey&&!state.items.length){
+      const deadKey=state.issueKey;
+      state.issueItems=state.issueItems.filter(i=>i.key!==deadKey);
+      state.issueKey='';
+      resetIssueUrl();
+      render();
+      toast('해당 이슈의 기사를 더 이상 표시할 수 없어 목록에서 제거했습니다.');
+    }else{
+      render();
+      if(state.issueKey){requestAnimationFrame(()=>{const card=$('cards').querySelector('.card');if(card){card.classList.add('issue-focus');card.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>card.classList.remove('issue-focus'),1800)}})}
+    }
   }
   catch(e){if(e?.name!=='AbortError'&&e?.name!=='AuthRequiredError'&&requestId===state.requestSeq&&!silent){if(hasVisibleData){render();toast('새 소식을 가져오지 못해 이전 내용을 표시합니다.')}else $('cards').innerHTML=`<div class="empty">${esc(e.message||'불러오기 실패')}<br><button class="pill" id="retryLoad" type="button">다시 시도</button></div>`}}
   finally{if(activeLoadController===loadController)activeLoadController=null}
