@@ -19,15 +19,21 @@ import { onRequestGet as listUsers, onRequestPost as updateUser } from '../funct
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
 
 test('바둑은 공식 대회·리그 행사만 한 건 독립 이슈 후보로 보존한다', () => {
-  assert.equal(isStandaloneEventArticle({ title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
-  assert.equal(isStandaloneEventArticle({ title: '한중 청소년 바둑 스포츠교류 개최' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '신진서 세계기전 우승' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '김동한 프로기사 근황', summary: '국제 바둑대회에 출전한 경력이 있다.' }), false);
-  assert.equal(isStandaloneEventArticle({ title: '신진서 9단 최근 근황 공개' }), false);
+  assert.equal(isStandaloneEventArticle({ category: '바둑', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
+  assert.equal(isStandaloneEventArticle({ category: '바둑', title: '한중 청소년 바둑 스포츠교류 개최' }), false);
+  assert.equal(isStandaloneEventArticle({ category: '바둑', title: '신진서 세계기전 우승' }), false);
+  assert.equal(isStandaloneEventArticle({ category: '바둑', title: '김동한 프로기사 근황', summary: '국제 바둑대회에 출전한 경력이 있다.' }), false);
+  assert.equal(isStandaloneEventArticle({ category: '바둑', title: '신진서 9단 최근 근황 공개' }), false);
+});
+
+test('일반 기사는 대회 제목 정규식과 무관하게 포털 인기 신호로만 단독 이슈를 판단한다', () => {
+  assert.equal(isStandaloneEventArticle({ category: '사회', title: '박다윤 선수, 2022년 4월 전국종별 육상경기선수권대회 우승' }), false);
+  assert.equal(isStandaloneEventArticle({ category: '사회', title: '박다윤 선수, 2022년 4월 전국종별 육상경기선수권대회 우승', is_popular: 1 }), true);
 });
 
 test('요약의 공식 대회명과 바둑 기록 기사도 단건 이슈로 보존한다', () => {
   const gwangju = {
+    category: '바둑',
     title: '광주 바둑 꿈나무들, 문성고 체육관서 열띤 경쟁',
     summary: '1) 광주광역시체육회가 주최한 제2회 광주광역시체육회장배 학생바둑대회가 열렸다.'
   };
@@ -46,10 +52,10 @@ test('요약의 공식 대회명과 바둑 기록 기사도 단건 이슈로 보
 
 test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 기타로 강제한다', () => {
   const articles = [
-    { url_key: 'tournament', title: '무안 청소년 온라인 바둑대회 개최', summary: '' },
-    { url_key: 'profile', title: '김동한 프로기사 근황', summary: '' },
-    { url_key: 'pair-a', title: '신진서 카타고 격파', summary: '' },
-    { url_key: 'pair-b', title: 'AI 넘어선 신진서', summary: '' }
+    { url_key: 'tournament', category: '바둑', title: '무안 청소년 온라인 바둑대회 개최', summary: '' },
+    { url_key: 'profile', category: '바둑', title: '김동한 프로기사 근황', summary: '' },
+    { url_key: 'pair-a', category: '바둑', title: '신진서 카타고 격파', summary: '' },
+    { url_key: 'pair-b', category: '바둑', title: 'AI 넘어선 신진서', summary: '' }
   ];
   const groups = enforceIssueRules([
     { key: '바둑|ai:1', title: '김동한 근황', url_keys: ['profile'] },
@@ -64,7 +70,7 @@ test('이슈 저장 전 바둑 대회 단독은 살리고 나머지 단독은 �
 });
 
 test('일반 뉴스는 대회 기사도 한 건이면 기타로 보낸다', () => {
-  const articles = [{ url_key: 'general-event', title: '전국 창업대회 개최', summary: '' }];
+  const articles = [{ url_key: 'general-event', category: '일반', title: '전국 창업대회 개최', summary: '' }];
   const groups = enforceIssueRules([
     { key: '일반|ai:0', title: '전국 창업대회', url_keys: ['general-event'] }
   ], articles, '일반');
@@ -150,7 +156,7 @@ test('일반 뉴스도 포털 인기 신호가 있으면 단독 이슈 캐시를
 });
 
 test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고, 일반은 포털 인기 신호가 있어야 단독 이슈로 유지한다', async () => {
-  const badukArticles = [{ url_key: 'mu-an', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
+  const badukArticles = [{ url_key: 'mu-an', category: '바둑', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
   const badukEnv = { AI: { run: async () => ({ response: '[{"title":"무안 상숙 청소년 바둑대회","indices":[0]}]' }) } };
   const baduk = await classifyIssues(badukEnv, badukArticles, [], { allowStandaloneEvents: true });
   assert.equal(baduk.groups[0].title, '무안 상숙 청소년 바둑대회');
@@ -820,10 +826,10 @@ test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 �
   assert.match(source, /similarTokens\(titleTokens, old\.titleTokens/);
 });
 
-test('NewsBrief 로고를 누르면 현재 섹션의 홈으로 복귀한다', async () => {
+test('NewsBrief 로고를 누르면 현재 섹션의 일간 탭으로 복귀한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /e\.target\.closest\('\.brand'\)/);
-  assert.match(html, /setSubview\('home'\);state\.category='';state\.q='';state\.issueKey=''/);
+  assert.match(html, /setSubview\('daily'\);state\.category='';state\.q='';state\.issueKey=''/);
 });
 
 test('조회 결과는 5분간 재사용하되 주간·월간 데이터는 사용자가 열 때만 요청한다', async () => {

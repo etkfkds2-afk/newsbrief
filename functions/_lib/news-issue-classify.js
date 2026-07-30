@@ -29,17 +29,18 @@ ${allowStandaloneEvents ? '- 예외: 기사 제목에 "대회"라는 단어가 �
 // so it's gated on an external signal instead - the article already ranking
 // in the portal's own popularity data (see is_popular on the article row) -
 // rather than trusting the classifier's guess alone on a single report.
-// Both checks are unconditional (not category-gated) so this stays correct
-// whether or not a caller happens to have set `category` on the article -
-// a general article's title essentially never matches the baduk pattern,
-// and a baduk article's is_popular is simply unset/false either way.
+// Category-gated on purpose: standaloneBadukIssueTitle's "선수권대회" branch
+// matches any "___ championship" title, baduk or not (e.g. a track & field
+// 전국종별육상경기선수권대회 article), so it must never run for non-baduk
+// articles - real DB rows always carry `category`, so this is reliable in
+// production; only ad-hoc test fixtures need to set it explicitly.
 export function isStandaloneEventArticle(article) {
-  return Boolean(standaloneBadukIssueTitle(article)) || Boolean(article?.is_popular);
+  if (article?.category === '바둑') return Boolean(standaloneBadukIssueTitle(article));
+  return Boolean(article?.is_popular);
 }
 
 export function standaloneIssueTitle(article) {
-  const badukTitle = standaloneBadukIssueTitle(article);
-  if (badukTitle) return badukTitle;
+  if (article?.category === '바둑') return standaloneBadukIssueTitle(article);
   if (!article?.is_popular) return '';
   return String(article?.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
 }
