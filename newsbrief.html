@@ -20,7 +20,7 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 const cats=['정치','경제','사회','생활/문화','세계'];
-const state={section:'baduk',genView:'daily',badukView:'home',category:'',q:'',issueKey:'',focusKey:'',items:[],heroItems:[],issueItems:[],requestSeq:0};
+const state={section:'baduk',genView:'daily',badukView:'daily',category:'',q:'',issueKey:'',focusKey:'',items:[],heroItems:[],issueItems:[],requestSeq:0};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const RESPONSE_CACHE_PREFIX='newsbrief_response_v2:';
@@ -101,7 +101,7 @@ async function fetchViewJson(url,options){
 function clearResponseCache(){viewCacheGeneration+=1;viewCache.clear();viewRequests.clear();for(let i=sessionStorage.length-1;i>=0;i-=1){const key=sessionStorage.key(i);if(key?.startsWith(RESPONSE_CACHE_PREFIX))sessionStorage.removeItem(key)}}
 const SUBVIEWS={
   general:[['daily','일간'],['weekly','주간'],['monthly','월간'],['saved','저장']],
-  baduk:[['home','홈'],['weekly','주간'],['monthly','월간'],['saved','저장']]
+  baduk:[['daily','일간'],['weekly','주간'],['monthly','월간'],['saved','저장']]
 };
 function currentSubview(){return state.section==='baduk'?state.badukView:state.genView}
 function setSubview(value){if(state.section==='baduk')state.badukView=value;else state.genView=value}
@@ -171,13 +171,14 @@ function relatedHtml(item){
   return `<details class="related"><summary>관련 보도 ${item.related_count}건</summary><div class="related-list">${item.related.map(x=>`<a class="related-link" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.outlet)} · ${esc(x.title)}</a>`).join('')}</div></details>`;
 }
 function cardHtml(x){
+  const isNew=Date.now()-+parseTime(x.published_at||x.fetched_at||'')<86400000;
   const actions=`<button class="act ${x.saved?'on':''}" data-action="${x.saved?'unsave':'save'}">${x.saved?'저장됨':'저장'}</button><button class="act del" data-action="hide">삭제</button>`;
-  return `<article class="card ${x.category==='바둑'?'cat-baduk':''}" id="article-${esc(x.url_key)}" data-key="${esc(x.url_key)}"><div class="meta"><div class="meta-left"><span class="tag">${esc(x.outlet||x.press||x.source)}</span><span class="tag">${esc(x.category)}</span></div><span class="time">${esc(fmt(x.published_at))}</span></div><div class="row"><a class="thumb" href="${esc(x.url)}" target="_blank" rel="noopener"><img src="/api/news/image?key=${encodeURIComponent(x.url_key)}" alt="" loading="lazy" onerror="this.remove()"></a><div class="content"><a class="title" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a><div class="sum">${String(x.summary||'').split('\n').map(s=>`<div class="sline">${esc(s)}</div>`).join('')}</div>${relatedHtml(x)}</div></div><div class="actions">${actions}</div></article>`;
+  return `<article class="card ${x.category==='바둑'?'cat-baduk':''}" id="article-${esc(x.url_key)}" data-key="${esc(x.url_key)}"><div class="meta"><div class="meta-left">${isNew?'<span class="issueNew">NEW</span>':''}<span class="tag">${esc(x.outlet||x.press||x.source)}</span><span class="tag">${esc(x.category)}</span></div><span class="time">${esc(fmt(x.published_at))}</span></div><div class="row"><a class="thumb" href="${esc(x.url)}" target="_blank" rel="noopener"><img src="/api/news/image?key=${encodeURIComponent(x.url_key)}" alt="" loading="lazy" onerror="this.remove()"></a><div class="content"><a class="title" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a><div class="sum">${String(x.summary||'').split('\n').map(s=>`<div class="sline">${esc(s)}</div>`).join('')}</div>${relatedHtml(x)}</div></div><div class="actions">${actions}</div></article>`;
 }
 function render(){
   nav();renderHero();renderIssues();
   const sub=currentSubview();
-  const periodLabels={home:['일간 뉴스 요약',''],weekly:['주간 뉴스 요약',''],monthly:['월간 뉴스 요약','']};
+  const periodLabels={home:['일간 뉴스 요약',''],daily:['일간 뉴스 요약',''],weekly:['주간 뉴스 요약',''],monthly:['월간 뉴스 요약','']};
   const savedLabel=state.section==='baduk'?['저장한 바둑 뉴스','']:['저장한 뉴스',''];
   const base=sub==='saved'?savedLabel:(periodLabels[sub]||['뉴스','']);
   const selectedIssue=state.issueKey?state.issueItems.find(i=>i.key===state.issueKey):null;

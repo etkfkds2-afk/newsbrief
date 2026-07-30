@@ -1,6 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
+import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneIssueTitle } from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
@@ -67,25 +67,27 @@ export function enforceIssueRules(groups, articles, category) {
 
   const kept = [];
   for (const group of mergedByTitle.values()) {
-    const standaloneTournament = category === '바둑' && group.url_keys.length === 1
+    const standaloneEvent = group.url_keys.length === 1
       && isStandaloneEventArticle(articleByKey.get(group.url_keys[0]));
-    if (group.url_keys.length >= 2 || standaloneTournament) kept.push(group);
+    if (group.url_keys.length >= 2 || standaloneEvent) kept.push(group);
     else miscKeys.push(...group.url_keys);
   }
   let uniqueMisc = [...new Set(miscKeys)].filter(key => !kept.some(group => group.url_keys.includes(key)));
-  if (category === '바둑') {
-    const missedTournaments = uniqueMisc.filter(key => isStandaloneEventArticle(articleByKey.get(key)));
-    for (const key of missedTournaments) {
-      const article = articleByKey.get(key);
-      kept.push({
-        key: `${category}|ai:event:${key.slice(0, 16)}`,
-        title: standaloneBadukIssueTitle(article) || '바둑 이슈',
-        url_keys: [key]
-      });
-    }
-    const tournamentKeys = new Set(missedTournaments);
-    uniqueMisc = uniqueMisc.filter(key => !tournamentKeys.has(key));
+  // Baduk: title names an official event. General: already ranks in portal
+  // popularity data (see is_popular on the article row below). Either way,
+  // isStandaloneEventArticle is the single source of truth for "worth its
+  // own tile even alone" - see news-issue-classify.js.
+  const missedStandalone = uniqueMisc.filter(key => isStandaloneEventArticle(articleByKey.get(key)));
+  for (const key of missedStandalone) {
+    const article = articleByKey.get(key);
+    kept.push({
+      key: `${category}|ai:event:${key.slice(0, 16)}`,
+      title: standaloneIssueTitle(article) || (category === '바둑' ? '바둑 이슈' : '이슈'),
+      url_keys: [key]
+    });
   }
+  const standaloneKeys = new Set(missedStandalone);
+  uniqueMisc = uniqueMisc.filter(key => !standaloneKeys.has(key));
   if (uniqueMisc.length) kept.push({ key: `${category}|ai:misc`, title: '기타', url_keys: uniqueMisc, misc: true });
   return kept;
 }
@@ -132,7 +134,10 @@ export async function onRequestPost({ request, env }) {
 
     const [result, cacheRow] = await Promise.all([
       env.DB.prepare(`
-        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at
+        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at,
+               CASE WHEN EXISTS(SELECT 1 FROM news_popularity np WHERE np.url_key=a.url_key)
+                 OR EXISTS(SELECT 1 FROM news_popular_items npi WHERE npi.title=a.title)
+               THEN 1 ELSE 0 END AS is_popular
         FROM news_articles a
         WHERE ${where.join(' AND ')}
         ORDER BY datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC
@@ -152,7 +157,7 @@ export async function onRequestPost({ request, env }) {
         ...group,
         url_keys: (group.url_keys || []).filter(key => inWindowKeys.has(key)
           && !((group.misc || String(group.key || '').endsWith('|ai:misc'))
-            && category === '바둑' && standaloneEventKeys.has(key)))
+            && standaloneEventKeys.has(key)))
       }))
       .filter(group => group.url_keys.length > 0);
 

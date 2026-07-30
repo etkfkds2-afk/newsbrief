@@ -127,15 +127,50 @@ test('월간 이슈가 12개를 넘어도 주간에 보인 바둑 대회를 잘�
   assert.equal(issues.some(issue => issue.key === '바둑|ai:12'), true);
 });
 
-test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고 일반 단독 행사는 제외한다', async () => {
-  const articles = [{ url_key: 'mu-an', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
-  const env = { AI: { run: async () => ({ response: '[{"title":"무안 상숙 청소년 바둑대회","indices":[0]}]' }) } };
-  const baduk = await classifyIssues(env, articles, [], { allowStandaloneEvents: true });
-  const general = await classifyIssues(env, articles, [], { allowStandaloneEvents: false });
+test('이슈 키워드는 기사 수가 아니라 가장 최근 활동 순서로 정렬한다', () => {
+  const items = [
+    { url_key: 'a1', category: '바둑', title: '오래된 대형 이슈 기사 1', published_at: '2026-07-01T00:00:00.000Z' },
+    { url_key: 'a2', category: '바둑', title: '오래된 대형 이슈 기사 2', published_at: '2026-07-02T00:00:00.000Z' },
+    { url_key: 'a3', category: '바둑', title: '오래된 대형 이슈 기사 3', published_at: '2026-07-03T00:00:00.000Z' },
+    { url_key: 'b1', category: '바둑', title: '번개 바둑대회 개최', published_at: '2026-07-29T00:00:00.000Z' }
+  ];
+  const cached = [
+    { key: '바둑|ai:big', title: '오래된 대형 이슈', url_keys: ['a1', 'a2', 'a3'] },
+    { key: '바둑|ai:fresh', title: '번개 바둑대회', url_keys: ['b1'] }
+  ];
+  const issues = buildIssuesFromCache(items, cached);
+  assert.deepEqual(issues.map(issue => issue.key), ['바둑|ai:fresh', '바둑|ai:big']);
+});
+
+test('일반 뉴스도 포털 인기 신호가 있으면 단독 이슈 캐시를 화면에 그대로 보존한다', () => {
+  const items = [{ url_key: 'solo', category: '경제', title: '전기요금 동결 발표' }];
+  const cached = [{ key: '일반|ai:event:solo', title: '전기요금 동결', url_keys: ['solo'] }];
+  const issues = buildIssuesFromCache(items, cached);
+  assert.deepEqual(issues.map(issue => issue.key), ['일반|ai:event:solo']);
+});
+
+test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고, 일반은 포털 인기 신호가 있어야 단독 이슈로 유지한다', async () => {
+  const badukArticles = [{ url_key: 'mu-an', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최', summary: '청소년들이 온라인 바둑대회로 국제 우호를 다졌다.' }];
+  const badukEnv = { AI: { run: async () => ({ response: '[{"title":"무안 상숙 청소년 바둑대회","indices":[0]}]' }) } };
+  const baduk = await classifyIssues(badukEnv, badukArticles, [], { allowStandaloneEvents: true });
   assert.equal(baduk.groups[0].title, '무안 상숙 청소년 바둑대회');
   assert.equal(baduk.groups[0].url_keys[0], 'mu-an');
-  assert.equal(general.groups[0].title, '기타');
-  const omitted = await classifyIssues({ AI: { run: async () => ({ response: '[]' }) } }, articles, [], { allowStandaloneEvents: true });
+
+  // General news has no title pattern like baduk's "대회" wording, so a lone
+  // article only keeps its own tile when it already ranks in portal
+  // popularity data (is_popular) - never on the classifier's say-so alone.
+  const popularArticles = [{ url_key: 'pop-1', title: '정부, 전기요금 동결 발표', summary: '전기요금이 동결됐다.', is_popular: 1 }];
+  const popularEnv = { AI: { run: async () => ({ response: '[{"title":"전기요금 동결","indices":[0]}]' }) } };
+  const popular = await classifyIssues(popularEnv, popularArticles, [], { allowStandaloneEvents: false });
+  assert.equal(popular.groups[0].title, '전기요금 동결');
+  assert.equal(popular.groups[0].url_keys[0], 'pop-1');
+
+  const quietArticles = [{ url_key: 'quiet-1', title: '정부, 전기요금 동결 발표', summary: '전기요금이 동결됐다.' }];
+  const quietEnv = { AI: { run: async () => ({ response: '[{"title":"전기요금 동결","indices":[0]}]' }) } };
+  const quiet = await classifyIssues(quietEnv, quietArticles, [], { allowStandaloneEvents: false });
+  assert.equal(quiet.groups[0].title, '기타');
+
+  const omitted = await classifyIssues({ AI: { run: async () => ({ response: '[]' }) } }, badukArticles, [], { allowStandaloneEvents: true });
   assert.notEqual(omitted.groups[0].title, '기타');
   assert.equal(omitted.groups[0].url_keys[0], 'mu-an');
 });
@@ -192,6 +227,14 @@ test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', (
   assert.deepEqual(plan.candidateArticles.map(article => article.url_key), ['misc-old', 'new-one']);
   const reset = buildClassificationPlan(articles, existing, true);
   assert.deepEqual(reset.candidateArticles.map(article => article.url_key), ['established', 'misc-old', 'new-one']);
+});
+
+test('이슈 후보 조회는 일반 기사에도 포털 인기 신호를 함께 읽는다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(endpoint, /EXISTS\(SELECT 1 FROM news_popularity np WHERE np\.url_key=a\.url_key\)/);
+  assert.match(endpoint, /EXISTS\(SELECT 1 FROM news_popular_items npi WHERE npi\.title=a\.title\)/);
+  assert.match(endpoint, /AS is_popular/);
+  assert.doesNotMatch(endpoint, /category === '바둑'\s*&&\s*isStandaloneEventArticle/);
 });
 
 test('Claude 이슈 분류가 가능하면 Cloudflare 호출을 미리 예약하지 않는다', async () => {

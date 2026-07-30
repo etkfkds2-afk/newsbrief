@@ -3,7 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
-import { hasLegalCaseConflict, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
+import { hasLegalCaseConflict, isStandaloneEventArticle, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 export const CONTENT_QUALITY_FILTERS = [
@@ -86,7 +86,7 @@ function buildIssues(items, category = '') {
     groups.set(key, group);
   }
   return [...groups.values()]
-    .sort((a, b) => b.count - a.count || String(b.latest).localeCompare(String(a.latest)));
+    .sort((a, b) => String(b.latest).localeCompare(String(a.latest)) || b.count - a.count);
 }
 
 export function issueCandidateLimit(limit, issues, isBaduk = false) {
@@ -116,7 +116,14 @@ async function loadIssueCache(env, category) {
 
 export function normalizeCachedIssues(items, cached) {
   const itemByKey = new Map(items.map(item => [item.url_key, item]));
-  const standaloneTitle = item => item?.category === '바둑' ? standaloneBadukIssueTitle(item) : '';
+  // A single-key group already earned its own tile at classify time (baduk's
+  // title-names-an-event match, or general's portal-popularity gate - see
+  // isStandaloneEventArticle). Baduk's check is a cheap title regex, safe to
+  // re-run here; general's needs is_popular, which this read path doesn't
+  // load on every request (that join across every card was the earlier cause
+  // of intermittent Worker resource-limit 503s), so an already-cached
+  // single-key general group is trusted instead of re-verified.
+  const trustedStandalone = item => item?.category === '바둑' ? isStandaloneEventArticle(item) : Boolean(item);
   const forcedMisc = [];
   const mapped = cached.map(group => {
     const keys = group.url_keys.filter(key => {
@@ -134,20 +141,20 @@ export function normalizeCachedIssues(items, cached) {
     if (group.key.endsWith('|ai:misc')) return true;
     if (group.url_keys.length >= 2) return true;
     const item = itemByKey.get(group.url_keys[0]);
-    if (standaloneTitle(item)) return true;
+    if (trustedStandalone(item)) return true;
     forcedMisc.push(...group.url_keys);
     return false;
   });
   const misc = valid.find(group => group.key.endsWith('|ai:misc'));
   const miscKeys = [...new Set([...(misc?.url_keys || []), ...forcedMisc])];
-  const missedTournaments = miscKeys.filter(key => {
-    const item = itemByKey.get(key);
-    return Boolean(standaloneTitle(item));
-  });
+  // Only baduk's regex signal is cheap enough to re-run on the misc bucket
+  // here; general's popularity-based rescue happens at classify time instead
+  // (see enforceIssueRules in classify-issues.js).
+  const missedTournaments = miscKeys.filter(key => isStandaloneEventArticle(itemByKey.get(key)));
   const missedSet = new Set(missedTournaments);
   for (const key of missedTournaments) {
     const item = itemByKey.get(key);
-    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: standaloneTitle(item), url_keys: [key] });
+    valid.push({ key: `바둑|ai:event:${key.slice(0, 16)}`, title: standaloneBadukIssueTitle(item) || '바둑 이슈', url_keys: [key] });
   }
   const normalizedMisc = miscKeys.filter(key => !missedSet.has(key));
   const withoutMisc = valid.filter(group => !group.key.endsWith('|ai:misc'));
@@ -166,9 +173,11 @@ export function buildIssuesFromCache(items, cached) {
     return { key: group.key, title: group.title, count: group.url_keys.length, latest };
   });
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
-  // count, so it is kept out of the count sort and appended last instead.
+  // count, so it is kept out of the sort and appended last instead. Ordering
+  // by most recent activity (not article count) keeps breaking stories at
+  // the front instead of long-running ones burying same-day news.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
-  const rest = mapped.filter(group => !group.key.endsWith('|ai:misc')).sort((a, b) => b.count - a.count);
+  const rest = mapped.filter(group => !group.key.endsWith('|ai:misc')).sort((a, b) => b.latest.localeCompare(a.latest));
   return [...rest, ...misc];
 }
 

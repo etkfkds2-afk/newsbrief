@@ -24,8 +24,24 @@ ${allowStandaloneEvents ? '- 예외: 기사 제목에 "대회"라는 단어가 �
 출력 형식: [{"title":"이슈 제목(기존과 같은 사건이면 그 제목 그대로)","indices":[0,3,7]}]`;
 }
 
+// Baduk: a lone article can stand as its own issue when its title names a
+// specific official event. General news has no such reliable text pattern,
+// so it's gated on an external signal instead - the article already ranking
+// in the portal's own popularity data (see is_popular on the article row) -
+// rather than trusting the classifier's guess alone on a single report.
+// Both checks are unconditional (not category-gated) so this stays correct
+// whether or not a caller happens to have set `category` on the article -
+// a general article's title essentially never matches the baduk pattern,
+// and a baduk article's is_popular is simply unset/false either way.
 export function isStandaloneEventArticle(article) {
-  return Boolean(standaloneBadukIssueTitle(article));
+  return Boolean(standaloneBadukIssueTitle(article)) || Boolean(article?.is_popular);
+}
+
+export function standaloneIssueTitle(article) {
+  const badukTitle = standaloneBadukIssueTitle(article);
+  if (badukTitle) return badukTitle;
+  if (!article?.is_popular) return '';
+  return String(article?.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
 }
 
 function cleanEventName(value) {
@@ -160,7 +176,7 @@ function extractJsonArray(text) {
   }
 }
 
-function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = false) {
+function toGroups(parsed, articles, existingTitles) {
   if (!Array.isArray(parsed)) return [];
   const used = new Set();
   const groups = [];
@@ -172,21 +188,21 @@ function toGroups(parsed, articles, existingTitles, allowStandaloneEvents = fals
     if (!title || !indices.length) continue;
     // A match against an existing issue title is kept at any size (it's
     // extending an already-established story); a brand-new title still
-    // needs 2+ articles to justify its own tile.
-    const standaloneEvent = allowStandaloneEvents && indices.length === 1 && isStandaloneEventArticle(articles[indices[0]]);
+    // needs 2+ articles to justify its own tile, unless the article itself
+    // already qualifies as a standalone event (see isStandaloneEventArticle).
+    const standaloneEvent = indices.length === 1 && isStandaloneEventArticle(articles[indices[0]]);
     if (!existingTitles.has(title) && indices.length < 2 && !standaloneEvent) continue;
     indices.forEach(i => used.add(i));
     const genericMisc = /^(?:기타|그 밖의)(?:\s*(?:바둑\s*)?(?:소식|뉴스|이슈))?$/u.test(title);
     groups.push({ title: genericMisc ? '기타' : title, url_keys: indices.map(i => articles[i].url_key), misc: genericMisc });
   }
   const leftover = articles.map((_, i) => i).filter(i => !used.has(i));
-  const standaloneLeftover = allowStandaloneEvents
-    ? leftover.filter(i => isStandaloneEventArticle(articles[i]))
-    : [];
+  const standaloneLeftover = leftover.filter(i => isStandaloneEventArticle(articles[i]));
   for (const index of standaloneLeftover) {
+    const article = articles[index];
     groups.push({
-      title: standaloneBadukIssueTitle(articles[index]) || '바둑 이슈',
-      url_keys: [articles[index].url_key]
+      title: standaloneIssueTitle(article) || (article?.category === '바둑' ? '바둑 이슈' : '이슈'),
+      url_keys: [article.url_key]
     });
   }
   const miscLeftover = leftover.filter(i => !standaloneLeftover.includes(i));
@@ -219,7 +235,7 @@ async function classifyWithAnthropic(env, articles, existingIssues, allowStandal
   const parsed = extractJsonArray(text);
   if (!parsed) throw new Error('Anthropic 응답을 JSON으로 해석하지 못했습니다.');
   return {
-    groups: toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)), allowStandaloneEvents),
+    groups: toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title))),
     usage: payload?.usage || {}
   };
 }
@@ -236,7 +252,7 @@ async function classifyWithWorkersAi(env, articles, existingIssues, allowStandal
   const text = result?.response || result?.result?.response || '';
   const parsed = extractJsonArray(text);
   if (!parsed) throw new Error(`Cloudflare AI 응답을 JSON으로 해석하지 못했습니다: ${text.slice(0, 300)}`);
-  return toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)), allowStandaloneEvents);
+  return toGroups(parsed, articles, new Set(existingIssues.map(issue => issue.title)));
 }
 
 // existingIssues: [{key, title}] — issues already in the cache, so the
