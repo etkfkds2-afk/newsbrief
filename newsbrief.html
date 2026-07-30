@@ -177,7 +177,7 @@ function relatedHtml(item){
   return `<details class="related"><summary>관련 보도 ${item.related_count}건</summary><div class="related-list">${item.related.map(x=>`<a class="related-link" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.outlet)} · ${esc(x.title)}</a>`).join('')}</div></details>`;
 }
 function cardHtml(x){
-  const isNew=Date.now()-+parseTime(x.published_at||x.fetched_at||'')<86400000;
+  const isNew=Date.now()-+parseTime(x.published_at||x.fetched_at||'')<(currentSubview()==='daily'?10800000:86400000);
   const actions=`<button class="act ${x.saved?'on':''}" data-action="${x.saved?'unsave':'save'}">${x.saved?'저장됨':'저장'}</button><button class="act del" data-action="hide">삭제</button>`;
   return `<article class="card ${x.category==='바둑'?'cat-baduk':''}" id="article-${esc(x.url_key)}" data-key="${esc(x.url_key)}"><div class="meta"><div class="meta-left">${isNew?'<span class="tagNew">NEW</span>':''}<span class="tag" title="${esc(x.outlet||x.press||x.source)}">${esc(x.outlet||x.press||x.source)}</span><span class="tag">${esc(x.category)}</span></div><span class="time">${esc(fmt(x.published_at))}</span></div><div class="row"><a class="thumb" href="${esc(x.url)}" target="_blank" rel="noopener"><img src="/api/news/image?key=${encodeURIComponent(x.url_key)}" alt="" loading="lazy" onerror="this.remove()"></a><div class="content"><a class="title" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a><div class="sum">${String(x.summary||'').split('\n').map(s=>`<div class="sline">${esc(s)}</div>`).join('')}</div>${relatedHtml(x)}</div></div><div class="actions">${actions}</div></article>`;
 }
