@@ -666,7 +666,6 @@ test('화면은 이슈 목차와 기존 관련 보도 묶음을 함께 사용하
   assert.match(html, /data-issue-key/);
   assert.match(html, /issue_key/);
   assert.doesNotMatch(html, /clearIssue/);
-  assert.match(html, /sub==='home'&&!state\.q&&!state\.issueKey/);
   assert.match(html, /relatedHtml\(x\)/);
   assert.doesNotMatch(html, /같은 이슈에 속한 기사 전체입니다/);
   assert.doesNotMatch(html, /issueRelated/);
@@ -715,9 +714,9 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
   assert.match(html, /class="issueViewMobile">전체보기 <\/span><span class="issueArrow" aria-hidden="true">↓/);
 });
 
-test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
+test('주간·월간 카테고리 필터에서는 AI 이슈 키워드를 요청하거나 표시하지 않지만, 일간 헤드라인은 카테고리와 무관하게 보인다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
+  assert.match(html, /\(sub==='daily'\|\|!state\.category\)&&sub!=='saved'/);
   assert.match(html, /if\(sub!=='saved'&&sub!=='daily'&&!state\.category\)p\.set\('issues','1'\)/);
   assert.match(html, /sub==='daily'\?'일간':sub==='weekly'\?'주간':sub==='monthly'\?'월간'/);
   assert.match(html, /\$\{categoryPeriod\} \$\{state\.category\} 3줄 요약/);
@@ -734,7 +733,6 @@ test('화면 API는 타임아웃과 GET 재시도 및 수동 재시도를 제공
   assert.match(html, /Date\.now\(\)-lastSuccessfulLoad>300000/);
   assert.match(html, /id="retryLoad"/);
   assert.match(html, /closest\('#retryLoad'\)/);
-  assert.match(html, /if\(sub==='home'\)\$\('hot'\)\.innerHTML='<div class="empty">핵심 뉴스를 불러오는 중입니다/);
 });
 
 test('화면은 대용량 기간 선조회를 제거하고 로그인 만료를 서버 장애와 구분한다', async () => {
@@ -809,13 +807,9 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /diagnostics\.new_candidates/);
 });
 
-test('일반 홈·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 저장 기사만 표시한다', async () => {
+test('일반 일간·주간·월간은 인기 랭킹 기사만 표시하고 저장 탭은 저장 기사만 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /const view=isBaduk\?'latest':'popular'/);
   assert.match(html, /sub==='saved'\?'saved':\(isBaduk\?'latest':'popular'\)/);
-  assert.match(html, /view=\$\{view\}/);
-  assert.match(html, /const homeHours=24/);
-  assert.match(html, /const homeLimit=isBaduk\?30:10/);
 });
 
 test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 사용한다', async () => {
@@ -850,22 +844,6 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
   assert.match(page, /limit:isBaduk\?'120':'150'/);
 });
 
-test('핵심 뉴스는 원문 대신 아래에 선택한 요약 카드 한 장만 표시한다', async () => {
-  const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
-  assert.match(html, /id="hotTitleReset" type="button" disabled>오늘의 핵심 뉴스/);
-  assert.doesNotMatch(html, />전체 보기</);
-  assert.match(html, /href="#article-\$\{esc\(x\.url_key\)\}" data-jump-key/);
-  assert.match(html, /\$\('hotTitleReset'\)\.disabled=!state\.focusKey/);
-  assert.match(html, /class="hotchip \$\{selected\?'on':''\}"/);
-  assert.match(html, /closest\('\[data-jump-key\]'\)/);
-  assert.match(html, /state\.focusKey\?state\.items\.filter\(item=>item\.url_key===state\.focusKey\):state\.items/);
-  assert.match(html, /state\.focusKey=jump\.dataset\.jumpKey;render\(\)/);
-  assert.match(html, /closest\('#hotTitleReset'\)\)\{state\.focusKey='';render\(\);return\}/);
-  assert.match(html, /state\.focusKey='';/);
-  assert.match(html, /scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
-  assert.match(html, /card\.classList\.add\('issue-focus'\)/);
-  assert.doesNotMatch(html, /class="hotchip" href="\$\{esc\(x\.url\)\}"/);
-});
 
 test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
@@ -1193,9 +1171,7 @@ test('D1 UTC 시각 문자열을 UTC로 해석한다', async () => {
 test('일반 뉴스 카드는 인기 기사 선별 후 발행시간 최신순으로 표시한다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /const sortByArticleTime=items=>\[\.\.\.\(items\|\|\[\]\)\]\.sort/);
-  assert.match(html, /state\.items=isBaduk\?\(home\.items\|\|\[\]\):sortByArticleTime\(home\.items\)/);
   assert.match(html, /state\.items=isBaduk\?\(d\.items\|\|\[\]\):sortByArticleTime\(d\.items\)/);
-  assert.match(html, /state\.heroItems=state\.items\.slice\(0,6\)/);
   assert.doesNotMatch(html, /fmt\(x\.published_at\|\|x\.fetched_at\)/);
 });
 
