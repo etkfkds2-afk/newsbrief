@@ -231,7 +231,7 @@ async function load({silent=false}={}){
     if(requestId!==state.requestSeq)return;
     state.items=isBaduk?(d.items||[]):sortByArticleTime(d.items);
     if(sub==='daily'){
-      state.issueItems=state.items.slice(0,24).map(x=>({key:x.url_key,title:cleanHeadline(x.title)||x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
+      state.issueItems=state.items.slice(0,12).map(x=>({key:x.url_key,title:cleanHeadline(x.title)||x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
     }else if(indexData)state.issueItems=indexData.issues||[];else if(!state.issueKey)state.issueItems=d.issues||[];
     lastSuccessfulLoad=Date.now();
     // A cached issue tile can outlive the articles behind it (the AI issue
