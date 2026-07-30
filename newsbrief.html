@@ -168,7 +168,7 @@ function renderIssues(){
         const isNew=issue.latest&&Date.now()-+parseTime(issue.latest)<10800000;
         return `<a class="hotchip" href="#article-${esc(issue.key)}" data-scroll-key="${esc(issue.key)}"><span class="hotrank">${String(i+1).padStart(2,'0')}</span><span class="hottext">${isNew?'<span class="issueNew">NEW</span> ':''}${esc(issue.title)}</span>${issue.count>1?`<span class="hotrelated">관련 ${issue.count}건</span>`:''}<span aria-hidden="true">↓</span></a>`;
       }).join('')||'<div class="empty">아직 기사가 없습니다.</div>')
-      + (state.issueItems.length>headlineCollapseAt?`<button type="button" class="hotMore" data-toggle-headlines>${state.headlinesExpanded?'접기 ↑':`더보기 (${state.issueItems.length-headlineCollapseAt}개 더) ↓`}</button>`:'')
+      + (state.issueItems.length>headlineCollapseAt?`<button type="button" class="hotMore" data-toggle-headlines>${state.headlinesExpanded?'접기 ↑':'더보기 ↓'}</button>`:'')
     : state.issueItems.map(issue=>{
         const selected=state.issueKey===issue.key;
         const isNew=issue.latest&&Date.now()-+parseTime(issue.latest)<86400000;
