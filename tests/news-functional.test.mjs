@@ -718,7 +718,7 @@ test('모바일 이슈 목록은 390px에서도 한 줄에 두 개씩 표시한�
 test('일반 카테고리 필터에서는 이슈키워드를 요청하거나 표시하지 않는다', async () => {
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(html, /!state\.category&&sub!=='saved'&&sub!=='home'/);
-  assert.match(html, /if\(sub!=='saved'&&!state\.category\)p\.set\('issues','1'\)/);
+  assert.match(html, /if\(sub!=='saved'&&sub!=='daily'&&!state\.category\)p\.set\('issues','1'\)/);
   assert.match(html, /sub==='daily'\?'일간':sub==='weekly'\?'주간':sub==='monthly'\?'월간'/);
   assert.match(html, /\$\{categoryPeriod\} \$\{state\.category\} 3줄 요약/);
 });
