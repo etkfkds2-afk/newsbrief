@@ -253,7 +253,7 @@ export async function onRequestGet({ request, env }) {
       view === 'hidden' ? "h.url_key IS NOT NULL" : "h.url_key IS NULL",
       ...CONTENT_QUALITY_FILTERS
     ];
-    const bindings = [uid, uid];
+    const bindings = [uid, uid, uid];
 
     if (category && CATEGORIES.has(category)) {
       where.push('a.category = ?');
@@ -316,11 +316,14 @@ export async function onRequestGet({ request, env }) {
     const selectSql = (extraWhere) => `
       SELECT a.id, a.url, a.url_key, a.title, a.source, a.press, a.category,
              a.published_at, a.fetched_at, a.summary, a.summary_quality, a.image_url,
-             CASE WHEN s.url_key IS NULL THEN 0 ELSE 1 END AS saved
+             CASE WHEN s.url_key IS NULL THEN 0 ELSE 1 END AS saved,
+             CASE WHEN l.url_key IS NULL THEN 0 ELSE 1 END AS liked,
+             (SELECT COUNT(*) FROM news_likes nl WHERE nl.url_key=a.url_key) AS like_count
              ${includePopularityScore ? `, ${popularityScore} AS popularity_score` : ''}
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
+      LEFT JOIN news_likes l ON l.url_key=a.url_key AND l.user_id=?
       WHERE ${[...where, ...(extraWhere ? [extraWhere] : [])].join(' AND ')}
       ORDER BY ${order}
       LIMIT ?

@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS news_hidden (
   hidden_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(user_id, url_key)
 );
+CREATE TABLE IF NOT EXISTS news_likes (
+  user_id TEXT NOT NULL,
+  url_key TEXT NOT NULL,
+  liked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, url_key)
+);
+CREATE INDEX IF NOT EXISTS idx_news_likes_url_key ON news_likes(url_key);
 CREATE TABLE IF NOT EXISTS news_users (
   username TEXT PRIMARY KEY,
   password_hash TEXT NOT NULL DEFAULT '',

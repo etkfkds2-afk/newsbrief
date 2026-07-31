@@ -11,6 +11,7 @@
 .card.issue-focus{outline:4px solid rgba(37,99,235,.8);outline-offset:3px;box-shadow:0 0 0 8px rgba(37,99,235,.18)}
 .sectionTitle{display:flex;align-items:center;gap:8px}.issueBack{display:inline-flex;flex:0 0 32px;width:32px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:50%;background:transparent;color:#0f172a;font-size:22px;font-weight:700;line-height:1;cursor:pointer}.issueBack:hover{background:#e2e8f0}.issueBack:focus-visible{outline:3px solid rgba(15,118,110,.25);outline-offset:2px}.issueCurrentTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top{padding:18px 20px}.brandBlock{min-width:250px}.brand{font-size:40px;letter-spacing:-2.2px;line-height:.9;transition:transform .18s ease}.brand:hover{transform:translateY(-1px)}.brandIcon{width:29px;height:29px}.brand:after{width:8px;height:8px;margin:0 0 23px 7px;box-shadow:0 0 0 4px rgba(20,184,166,.12)}.tagline{margin-top:12px}.controls{padding-top:29px}.accountBar{position:absolute;top:14px;right:20px;display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:11.5px;font-weight:750}.accountName{color:#64748b}.accountDivider{color:#cbd5e1}.accountLink,.logoutButton{padding:3px 5px;border:0;background:transparent;color:#64748b;font:inherit;text-decoration:none;cursor:pointer;border-radius:7px}.accountLink:hover,.logoutButton:hover{background:#f1f5f9;color:#0f172a}.logoutButton:disabled{opacity:.55;cursor:wait}
+.likeAct{display:inline-flex;align-items:center;margin-right:auto;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}.likeAct.on{border-color:rgba(220,38,38,.5)}.likeAct button{border:0;background:transparent;padding:6px 8px;font-size:12px;font-weight:720;font-family:inherit;color:#9ca3af;cursor:pointer}.likeAct.on .likeBtn{color:#dc2626}.likeAct .likeCount{border-left:1px solid var(--line);color:#6b7280;min-width:20px}.likeAct .likeCount:hover{background:rgba(15,23,42,.05)}.likeAct button:disabled{opacity:.55;cursor:wait}
 @media(max-width:680px){.top{padding:16px}.brand{font-size:34px;letter-spacing:-1.8px}.brandIcon{width:24px;height:24px}.brand:after{margin-bottom:19px}.brandBlock{min-width:0;padding-right:68px}.controls{padding-top:0}.accountBar{top:13px;right:16px}.accountName,.accountDivider{display:none}.accountLink{font-size:11px}.logoutButton{padding:5px 7px}}
 </style></head><body>
 <header class="top"><div class="brandBlock"><div class="brand" aria-label="NewsBrief, 홈으로 이동"><svg class="brandIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-9"/><path d="M9.5 20v-6h5v6"/></svg><span class="brand-news">News</span><span class="brand-brief">Brief</span></div><div class="tagline">오늘의 뉴스를 3줄로 정리해, 판단을 가볍게.<br>중요한 기사만 저장하고 미래의 나에게 남기세요.</div></div><div class="accountBar"><a class="accountLink" id="adminLink" href="/admin" hidden>계정 관리</a><span class="accountName" id="accountName"></span><span class="accountDivider" aria-hidden="true">·</span><button class="logoutButton" id="logoutButton" type="button">로그아웃</button></div><div class="controls"><div class="sectionBar"><button class="sectionPill baduk" data-section="baduk">바둑</button><button class="sectionPill" data-section="general">일반</button></div><div class="subnavWrap" id="subNav"></div><div class="filterbar" id="categories"></div><form class="searchbar" id="search"><input id="query" aria-label="뉴스 검색"><button>검색</button></form></div></header>
@@ -49,7 +50,7 @@ const relTime=ms=>{
   return`${Math.floor(hr/24)}일 전`;
 };
 let toastTimer;
-function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1800)}
+function toast(message,duration=1800){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),duration)}
 $('logoutButton').addEventListener('click',async()=>{
   if(!confirm('로그아웃할까요?'))return;
   const button=$('logoutButton');button.disabled=true;
@@ -181,7 +182,8 @@ function relatedHtml(item){
 }
 function cardHtml(x){
   const isNew=Date.now()-+parseTime(x.published_at||x.fetched_at||'')<(currentSubview()==='daily'?21600000:86400000);
-  const actions=`<button class="act ${x.saved?'on':''}" data-action="${x.saved?'unsave':'save'}">${x.saved?'저장됨':'저장'}</button><button class="act del" data-action="hide">삭제</button>`;
+  const likeAct=`<span class="likeAct ${x.liked?'on':''}"><button type="button" class="likeBtn" data-action="${x.liked?'unlike':'like'}" aria-label="좋아요">${x.liked?'♥':'♡'}</button><button type="button" class="likeCount" data-show-likes="1">${x.like_count||0}</button></span>`;
+  const actions=`${likeAct}<button class="act ${x.saved?'on':''}" data-action="${x.saved?'unsave':'save'}">${x.saved?'저장됨':'저장'}</button><button class="act del" data-action="hide">삭제</button>`;
   return `<article class="card ${x.category==='바둑'?'cat-baduk':''}" id="article-${esc(x.url_key)}" data-key="${esc(x.url_key)}"><div class="meta"><div class="meta-left">${isNew?'<span class="tagNew">NEW</span>':''}<span class="tag" title="${esc(x.outlet||x.press||x.source)}">${esc(x.outlet||x.press||x.source)}</span><span class="tag">${esc(x.category)}</span></div><span class="time">${esc(fmt(x.published_at))}</span></div><div class="row"><a class="thumb" href="${esc(x.url)}" target="_blank" rel="noopener"><img src="/api/news/image?key=${encodeURIComponent(x.url_key)}" alt="" loading="lazy" onerror="this.remove()"></a><div class="content"><a class="title" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a><div class="sum">${String(x.summary||'').split('\n').map(s=>`<div class="sline">${esc(s)}</div>`).join('')}</div>${relatedHtml(x)}</div></div><div class="actions">${actions}</div></article>`;
 }
 function render(){
@@ -277,6 +279,19 @@ document.addEventListener('click',e=>{
   if(category){state.category=category;state.issueKey='';resetIssueUrl();load()}
 });
 $('cards').addEventListener('click',async e=>{
+  const likesBtn=e.target.closest('[data-show-likes]');
+  if(likesBtn){
+    const key=likesBtn.closest('.card').dataset.key;
+    likesBtn.disabled=true;
+    try{
+      const r=await fetchTimed(`/api/news/likes?url_key=${encodeURIComponent(key)}`);
+      const result=await r.json().catch(()=>null);
+      if(!r.ok||!result?.ok)throw Error();
+      toast(result.users.length?`좋아요 ${result.count}명: ${result.users.join(', ')}`:'아직 좋아요가 없습니다.',4000);
+    }catch{toast('좋아요 목록을 불러오지 못했습니다.')}
+    finally{likesBtn.disabled=false}
+    return;
+  }
   const action=e.target.dataset.action;if(!action)return;
   const button=e.target,card=button.closest('.card'),key=card.dataset.key;
   if(action==='hide'&&!confirm('이 기사를 삭제하시겠습니까?'))return;
@@ -290,6 +305,8 @@ $('cards').addEventListener('click',async e=>{
     clearResponseCache();
     if(action==='save'&&item){item.saved=1;button.dataset.action='unsave';button.textContent='저장됨';button.classList.add('on');button.disabled=false;toast('기사를 저장했습니다.');return}
     if(action==='unsave'&&currentSubview()!=='saved'&&item){item.saved=0;button.dataset.action='save';button.textContent='저장';button.classList.remove('on');button.disabled=false;toast('저장을 해제했습니다.');return}
+    if(action==='like'&&item){item.liked=1;item.like_count=(item.like_count||0)+1;button.dataset.action='unlike';button.textContent='♥';button.closest('.likeAct')?.classList.add('on');const cnt=button.parentElement.querySelector('.likeCount');if(cnt)cnt.textContent=item.like_count;button.disabled=false;return}
+    if(action==='unlike'&&item){item.liked=0;item.like_count=Math.max(0,(item.like_count||0)-1);button.dataset.action='like';button.textContent='♡';button.closest('.likeAct')?.classList.remove('on');const cnt=button.parentElement.querySelector('.likeCount');if(cnt)cnt.textContent=item.like_count;button.disabled=false;return}
     card.classList.add('removing');setTimeout(()=>{state.items=state.items.filter(x=>x.url_key!==key);card.remove();if(!$('cards').querySelector('.card'))render()},180);toast(action==='hide'?(result?.affected>1?`같은 뉴스 ${result.affected}건을 삭제했습니다.`:'기사를 삭제했습니다.'):'저장을 해제했습니다.');
   }catch{button.disabled=false;toast('처리하지 못했습니다. 다시 시도해 주세요.')}
 });
