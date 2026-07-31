@@ -154,6 +154,20 @@ test('일반 이슈는 capCount로 자르되 기타 묶음은 그대로 둔다',
   assert.equal(uncapped.filter(issue => !issue.key.endsWith('|ai:misc')).length, 14);
 });
 
+test('인기 점수가 있으면 최신순보다 우선하고, 없으면 최신순으로 되돌아간다', () => {
+  const items = [
+    { url_key: 'old-popular', title: '오래됐지만 랭킹 상위', published_at: '2026-07-01T00:00:00.000Z', popularity_score: 95 },
+    { url_key: 'new-quiet', title: '최근이지만 랭킹 밖', published_at: '2026-07-14T00:00:00.000Z' },
+    { url_key: 'newer-quiet', title: '더 최근이지만 랭킹 밖', published_at: '2026-07-15T00:00:00.000Z' }
+  ];
+  const cached = items.map((item, index) => ({ key: `일반|ai:${index}`, title: item.title, url_keys: [item.url_key] }));
+  const issues = buildIssuesFromCache(items, cached);
+  // Score wins outright even against a two-week-older publish date.
+  assert.equal(issues[0].key, '일반|ai:0');
+  // Among the untracked (score 0) issues, recency still breaks the tie.
+  assert.deepEqual(issues.slice(1).map(issue => issue.key), ['일반|ai:2', '일반|ai:1']);
+});
+
 test('이슈 키워드는 기사 수가 아니라 가장 최근 활동 순서로 정렬한다', () => {
   const items = [
     { url_key: 'a1', category: '바둑', title: '오래된 대형 이슈 기사 1', published_at: '2026-07-01T00:00:00.000Z' },
@@ -882,6 +896,15 @@ test('인기뉴스 조회는 OR 조인 없이 URL·제목 인덱스를 따로 �
   assert.match(source, /EXISTS\(SELECT 1 FROM news_popular_items pp WHERE pp\.title=a\.title\)/);
   assert.doesNotMatch(source, /LEFT JOIN news_popularity/);
   assert.match(source, /similarTokens\(titleTokens, old\.titleTokens/);
+});
+
+test('인기 점수 조인은 일반 이슈 조회에만 켜지고 바둑·일반 목록 조회에는 켜지지 않는다', async () => {
+  const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  // The past incident this guards against: joining popularity tables on
+  // every request (not just issues=1) caused Cloudflare Worker resource
+  // limit 503s - see the comment above includePopularityScore.
+  assert.match(source, /const includePopularityScore = issues && category !== '바둑'/);
+  assert.match(source, /\$\{includePopularityScore \? `, \$\{popularityScore\} AS popularity_score` : ''\}/);
 });
 
 test('NewsBrief 로고를 누르면 현재 섹션의 일간 탭으로 복귀한다', async () => {

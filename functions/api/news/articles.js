@@ -170,14 +170,21 @@ export function buildIssuesFromCache(items, cached, capCount = Infinity) {
       const time = String(itemByKey.get(key)?.published_at || itemByKey.get(key)?.fetched_at || '');
       return time > max ? time : max;
     }, '');
-    return { key: group.key, title: group.title, count: group.url_keys.length, latest };
+    // popularity_score only exists on the row when the caller opted into the
+    // extra join (see includePopularityScore in onRequestGet) - baduk and
+    // plain listings never carry it, so this is always 0 there and the sort
+    // below degrades to the original recency order for them, unchanged.
+    const score = group.url_keys.reduce((max, key) =>
+      Math.max(max, Number(itemByKey.get(key)?.popularity_score) || 0), 0);
+    return { key: group.key, title: group.title, count: group.url_keys.length, latest, score };
   });
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
-  // count, so it is kept out of the sort and appended last instead. Ordering
-  // by most recent activity (not article count) keeps breaking stories at
-  // the front instead of long-running ones burying same-day news.
+  // count, so it is kept out of the sort and appended last instead. Real
+  // portal popularity (score) leads; recency only breaks ties among issues
+  // that never ranked (score 0), which is most of them.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
-  const rest = mapped.filter(group => !group.key.endsWith('|ai:misc')).sort((a, b) => b.latest.localeCompare(a.latest));
+  const rest = mapped.filter(group => !group.key.endsWith('|ai:misc'))
+    .sort((a, b) => b.score - a.score || b.latest.localeCompare(a.latest));
   // capCount bounds only the real issue tiles (weekly/monthly display caps).
   // Dropped tiles just stop being advertised as issues - their articles are
   // still reachable through the plain article feed, untouched by this cap.
@@ -228,6 +235,12 @@ export async function onRequestGet({ request, env }) {
     const view = ['saved', 'hidden', 'popular', 'home'].includes(requestedView) ? requestedView : 'latest';
     const excludeBaduk = url.searchParams.get('exclude_baduk') === '1';
     const issues = url.searchParams.get('issues') === '1';
+    // The popularity subquery join was previously run for every request and
+    // caused intermittent Cloudflare "Worker exceeded resource limits" 503s
+    // (see popularityScore below) - keep it scoped to general issue-keyword
+    // requests only, not every plain article listing, and not baduk (whose
+    // issue tiles are ordered by recency on purpose, untouched here).
+    const includePopularityScore = issues && category !== '바둑';
     const issueKeyFilter = url.searchParams.get('issue_key') || '';
     const issueCategory = issueKeyFilter.split('|')[0] || '';
     const maxLimit = 300;
@@ -304,6 +317,7 @@ export async function onRequestGet({ request, env }) {
       SELECT a.id, a.url, a.url_key, a.title, a.source, a.press, a.category,
              a.published_at, a.fetched_at, a.summary, a.summary_quality, a.image_url,
              CASE WHEN s.url_key IS NULL THEN 0 ELSE 1 END AS saved
+             ${includePopularityScore ? `, ${popularityScore} AS popularity_score` : ''}
       FROM news_articles a
       LEFT JOIN news_saved s ON s.url_key=a.url_key AND s.user_id=?
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
