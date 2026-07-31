@@ -6,7 +6,7 @@ import { articleSectionCategory, fetchArticleText, googleNewsSearch, isBadukRele
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import {
   classifyIssues, hasExistingTopicMismatch, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
-  standaloneBadukIssueTitle
+  rewriteStandaloneTitles, standaloneBadukIssueTitle
 } from '../functions/_lib/news-issue-classify.js';
 import { buildClassificationPlan, enforceIssueRules } from '../functions/api/news/classify-issues.js';
 import { onRequestGet as getNewsHealth } from '../functions/api/news/health.js';
@@ -202,6 +202,32 @@ test('바둑 단일 대회 AI 응답은 독립 이슈로 유지하고, 일반은
   assert.equal(omitted.groups[0].url_keys[0], 'mu-an');
 });
 
+test('단독 이슈 제목 재작성은 인덱스로 기사에 맞춰 매핑하고 실패 시 빈 결과를 낸다', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const articles = [
+      { url_key: 'a1', title: '[단독] 정부, 전기요금 동결 발표 - 연합뉴스', summary: '전기요금이 동결됐다.' },
+      { url_key: 'a2', title: '서울시, 청년 지원금 확대 - 뉴시스', summary: '청년 지원금이 확대된다.' }
+    ];
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      content: [{ type: 'text', text: '[{"index":0,"title":"전기요금 동결"},{"index":1,"title":"청년 지원금 확대"}]' }],
+      usage: { input_tokens: 10, output_tokens: 5 }
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const result = await rewriteStandaloneTitles({ ANTHROPIC_API_KEY: 'test-key' }, articles);
+    assert.equal(result.titles.get('a1'), '전기요금 동결');
+    assert.equal(result.titles.get('a2'), '청년 지원금 확대');
+
+    globalThis.fetch = async () => new Response('', { status: 500 });
+    const failed = await rewriteStandaloneTitles({ ANTHROPIC_API_KEY: 'test-key' }, articles);
+    assert.equal(failed.titles.size, 0);
+
+    const noKey = await rewriteStandaloneTitles({}, articles);
+    assert.equal(noKey.titles.size, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('기타 바둑소식은 별도 타일을 만들지 않고 기타로 합친다', async () => {
   const articles = [
     { url_key: 'plain-1', title: '기사 하나', summary: '' },
@@ -254,6 +280,14 @@ test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', (
   assert.deepEqual(plan.candidateArticles.map(article => article.url_key), ['misc-old', 'new-one']);
   const reset = buildClassificationPlan(articles, existing, true);
   assert.deepEqual(reset.candidateArticles.map(article => article.url_key), ['established', 'misc-old', 'new-one']);
+});
+
+test('일반 단독 이슈 제목은 저장 전에 재작성을 시도하고 무료 모드에서는 건너뛴다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  assert.match(endpoint, /category === '일반' && !forceFree && env\?\.ANTHROPIC_API_KEY/);
+  assert.match(endpoint, /group\.url_keys\.length === 1/);
+  assert.match(endpoint, /rewriteStandaloneTitles\(env, standaloneArticles\)/);
+  assert.match(endpoint, /const titleBudget = await canUseClaude\(env, ESTIMATED_TITLE_REWRITE_MICRO_USD\)/);
 });
 
 test('이슈 후보 조회는 일반 기사에도 포털 인기 신호를 함께 읽는다', async () => {

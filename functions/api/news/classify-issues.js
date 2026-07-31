@@ -1,12 +1,18 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
-import { classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches, standaloneIssueTitle } from '../../_lib/news-issue-classify.js';
+import {
+  classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches,
+  rewriteStandaloneTitles, standaloneIssueTitle
+} from '../../_lib/news-issue-classify.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
 
 const SUPPORTED_CATEGORIES = new Set(['바둑', '일반']);
 const ESTIMATED_ISSUE_CALL_MICRO_USD = 180_000;
+// A handful of short headlines in one small prompt - a fraction of a full
+// classification call's cost (see ESTIMATED_ISSUE_CALL_MICRO_USD above).
+const ESTIMATED_TITLE_REWRITE_MICRO_USD = 20_000;
 
 function loadExistingPayload(row) {
   if (!row) return [];
@@ -281,6 +287,35 @@ export async function onRequestPost({ request, env }) {
     }
 
     const payload = enforceIssueRules([...byKey.values()], articles, category);
+
+    // Standalone general tiles never pass through the main clustering prompt
+    // (no peer article to justify a crafted title), so they otherwise show
+    // the raw scraped headline. One small follow-up call rewrites just those
+    // - bounded by the top-12 popularity gate, so this stays cheap even when
+    // the full category is too large to reclassify synchronously.
+    let titleRewriteCost = 0;
+    let monthlySpent = recorded.spent;
+    if (category === '일반' && !forceFree && env?.ANTHROPIC_API_KEY) {
+      const standaloneGroups = payload.filter(group =>
+        !group.misc && !group.key.endsWith('|ai:misc') && group.url_keys.length === 1);
+      if (standaloneGroups.length) {
+        const titleBudget = await canUseClaude(env, ESTIMATED_TITLE_REWRITE_MICRO_USD);
+        if (titleBudget.allowed) {
+          const standaloneArticles = standaloneGroups.map(group => articleByKey.get(group.url_keys[0])).filter(Boolean);
+          const { titles, usage: titleUsage } = await rewriteStandaloneTitles(env, standaloneArticles);
+          for (const group of standaloneGroups) {
+            const rewritten = titles.get(group.url_keys[0]);
+            if (rewritten) group.title = rewritten;
+          }
+          if (titles.size) {
+            const titleRecorded = await recordClaudeUsage(env, 'claude-haiku-4-5-20251001', titleUsage);
+            titleRewriteCost = titleRecorded.cost || 0;
+            monthlySpent = titleRecorded.spent;
+          }
+        }
+      }
+    }
+
     const previousCache = cacheRow?.payload ? loadExistingPayload(cacheRow) : [];
     const writes = [];
     if (previousCache.length) {
@@ -306,8 +341,8 @@ export async function onRequestPost({ request, env }) {
       cloudflare_error,
       anthropic_error,
       usage,
-      cost_micro_usd: recorded.cost,
-      monthly_micro_usd: recorded.spent,
+      cost_micro_usd: recorded.cost + titleRewriteCost,
+      monthly_micro_usd: monthlySpent,
       issues: payload.map(group => ({ key: group.key, title: group.title, count: group.url_keys.length }))
     });
   } catch (error) {

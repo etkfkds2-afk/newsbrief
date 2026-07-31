@@ -227,6 +227,61 @@ function toGroups(parsed, articles, existingTitles) {
   return groups;
 }
 
+function buildTitleRewriteInstructions() {
+  return `당신은 한국 뉴스 데스크의 편집자다. 아래는 각각 단독으로 소개될 기사 목록이다. 기사마다 8~22자의 자연스러운 한국어 명사구 제목을 새로 짓는다.
+규칙:
+- 기사에 실제로 나온 핵심 인물·기관·사건·정책명을 최우선으로 쓴다. 기사에 없는 내용을 추측해서 쓰지 않는다.
+- 언론사명, 대괄호·꺾쇠 태그, 따옴표, 특수기호를 제목에 쓰지 않는다.
+- 반드시 아래 JSON 배열 형식으로만 응답한다. 다른 설명, 주석, 마크다운 코드블록은 절대 쓰지 않는다.
+
+출력 형식: [{"index":0,"title":"제목"}]`;
+}
+
+function buildTitleRewritePrompt(articles) {
+  return buildListing(articles);
+}
+
+// Standalone general tiles (portal-popularity gated, see isStandaloneEventArticle)
+// never go through the main clustering prompt with a peer to justify a crafted
+// title, so they fall back to the raw scraped headline. This is a small,
+// separate call scoped to just those few articles (bounded by the top-12
+// popularity gate) so it stays cheap and fast even when the full clustering
+// pass for the whole category would be too large to run synchronously.
+export async function rewriteStandaloneTitles(env, articles) {
+  if (!articles.length || !env?.ANTHROPIC_API_KEY) return { titles: new Map(), usage: {} };
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: CLASSIFY_MODEL,
+        max_tokens: 1024,
+        system: buildTitleRewriteInstructions(),
+        messages: [{ role: 'user', content: buildTitleRewritePrompt(articles) }]
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) return { titles: new Map(), usage: {} };
+    const text = (payload?.content || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
+    const parsed = extractJsonArray(text);
+    const titles = new Map();
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        const index = Number(entry?.index);
+        const title = String(entry?.title || '').trim().slice(0, 40);
+        if (Number.isInteger(index) && articles[index] && title) titles.set(articles[index].url_key, title);
+      }
+    }
+    return { titles, usage: payload?.usage || {} };
+  } catch {
+    return { titles: new Map(), usage: {} };
+  }
+}
+
 async function classifyWithAnthropic(env, articles, existingIssues, allowStandaloneEvents, model) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
