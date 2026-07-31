@@ -18,6 +18,11 @@ import { validPassword, validUsername } from '../functions/_lib/news-users.js';
 import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
 
+test('분류 프롬프트는 같은 재해의 2차 피해를 별도 이슈로 쪼개지 않도록 지시한다', async () => {
+  const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(classifier, /지진·화재·사고처럼 하나의 재해가 원인이 되어 같은 날 이어진 2차 피해/);
+});
+
 test('바둑은 공식 대회·리그 행사만 한 건 독립 이슈 후보로 보존한다', () => {
   assert.equal(isStandaloneEventArticle({ category: '바둑', title: '무안군, 중국 상숙시와 청소년 온라인 바둑대회 개최' }), true);
   assert.equal(isStandaloneEventArticle({ category: '바둑', title: '한중 청소년 바둑 스포츠교류 개최' }), false);
