@@ -133,6 +133,27 @@ test('월간 이슈가 12개를 넘어도 주간에 보인 바둑 대회를 잘�
   assert.equal(issues.some(issue => issue.key === '바둑|ai:12'), true);
 });
 
+test('일반 이슈는 capCount로 자르되 기타 묶음은 그대로 둔다', () => {
+  const items = Array.from({ length: 14 }, (_, index) => ({
+    url_key: `solo-${index}`, category: '경제', title: `이슈 기사 ${index + 1}`,
+    published_at: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+  }));
+  const cached = [
+    ...items.map((item, index) => ({
+      key: `일반|ai:event:${index}`, title: `이슈 ${index + 1}`, url_keys: [item.url_key]
+    })),
+    { key: '일반|ai:misc', title: '기타', url_keys: ['solo-0'] }
+  ];
+  const capped = buildIssuesFromCache(items, cached, 12);
+  const real = capped.filter(issue => !issue.key.endsWith('|ai:misc'));
+  assert.equal(real.length, 12);
+  // Most recent activity survives the cut - solo-13 (July 14) beats solo-1 (July 2).
+  assert.equal(real[0].key, '일반|ai:event:13');
+  assert.equal(capped.some(issue => issue.key === '일반|ai:misc'), true);
+  const uncapped = buildIssuesFromCache(items, cached, 24);
+  assert.equal(uncapped.filter(issue => !issue.key.endsWith('|ai:misc')).length, 14);
+});
+
 test('이슈 키워드는 기사 수가 아니라 가장 최근 활동 순서로 정렬한다', () => {
   const items = [
     { url_key: 'a1', category: '바둑', title: '오래된 대형 이슈 기사 1', published_at: '2026-07-01T00:00:00.000Z' },
@@ -800,7 +821,7 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /AI: undefined,\s+ANTHROPIC_API_KEY: undefined/);
   assert.match(articles, /validateGeneralEditorialSummary/);
   assert.doesNotMatch(articles, /group\.key !== '일반\|ai:misc'/);
-  assert.match(articles, /return \[\.\.\.rest, \.\.\.misc\]/);
+  assert.match(articles, /return \[\.\.\.rest\.slice\(0, capCount\), \.\.\.misc\]/);
   assert.doesNotMatch(articles, /rest\.slice\(0, misc\.length \? 11 : 12\)/);
   assert.match(articles, /reorderGeneralSummary/);
   assert.match(collector, /general_daily_goal = 10/);

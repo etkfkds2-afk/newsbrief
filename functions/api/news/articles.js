@@ -162,7 +162,7 @@ export function normalizeCachedIssues(items, cached) {
   return withoutMisc;
 }
 
-export function buildIssuesFromCache(items, cached) {
+export function buildIssuesFromCache(items, cached, capCount = Infinity) {
   const normalized = normalizeCachedIssues(items, cached);
   const itemByKey = new Map(items.map(item => [item.url_key, item]));
   const mapped = normalized.map(group => {
@@ -178,7 +178,10 @@ export function buildIssuesFromCache(items, cached) {
   // the front instead of long-running ones burying same-day news.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
   const rest = mapped.filter(group => !group.key.endsWith('|ai:misc')).sort((a, b) => b.latest.localeCompare(a.latest));
-  return [...rest, ...misc];
+  // capCount bounds only the real issue tiles (weekly/monthly display caps).
+  // Dropped tiles just stop being advertised as issues - their articles are
+  // still reachable through the plain article feed, untouched by this cap.
+  return [...rest.slice(0, capCount), ...misc];
 }
 
 function bigrams(value) {
@@ -363,7 +366,16 @@ export async function onRequestGet({ request, env }) {
       accepted.push({ ...item, first, titleTokens, firstTokens, related: [], related_count: 0 });
     }
     const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;
-    const issueList = cachedIssues ? buildIssuesFromCache(accepted, cachedIssues) : buildIssues(accepted, category);
+    // Weekly/monthly show the same 30-day general cache, only differing in
+    // which articles' hours window is in play (see `hours` above) - nothing
+    // otherwise bounds how many tiles accumulate over a month. Cap general
+    // issue tiles per period so a long month doesn't outgrow a short week:
+    // weekly (hours<=168) gets 12, monthly (hours>168) gets 24. Baduk is
+    // unbounded on purpose - untouched.
+    const generalIssueCap = cachedIssues && category !== '바둑' ? (hours > 168 ? 24 : 12) : Infinity;
+    const issueList = cachedIssues
+      ? buildIssuesFromCache(accepted, cachedIssues, generalIssueCap)
+      : buildIssues(accepted, category);
     let selected = accepted;
     if (issueKeyFilter) {
       if (normalizedCachedIssues) {
