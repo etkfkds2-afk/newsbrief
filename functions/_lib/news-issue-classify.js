@@ -39,10 +39,24 @@ export function isStandaloneEventArticle(article) {
   return Boolean(article?.is_popular);
 }
 
+// Only reached when the classifier left a standalone-eligible article
+// unclassified (see toGroups' leftover pass), so there is no AI-authored
+// title to fall back on. Strip the noise a raw scraped headline carries
+// (bracket tags, trailing " - 언론사" byline) so these tiles read like the
+// AI-authored ones instead of standing out as leftover raw text.
+function cleanGeneralIssueTitle(value) {
+  return String(value || '')
+    .replace(/^\s*(?:\[[^\]]+\]|【[^】]+】|<[^>]+>)\s*/u, '')
+    .replace(/\s*[-|–—]\s*[^-|–—]{1,30}$/u, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+}
+
 export function standaloneIssueTitle(article) {
   if (article?.category === '바둑') return standaloneBadukIssueTitle(article);
   if (!article?.is_popular) return '';
-  return String(article?.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return cleanGeneralIssueTitle(article?.title);
 }
 
 function cleanEventName(value) {
