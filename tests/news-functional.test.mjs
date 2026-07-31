@@ -237,10 +237,19 @@ test('예약 이슈 분류는 신규 기사와 기타 풀만 재검사한다', (
 
 test('이슈 후보 조회는 일반 기사에도 포털 인기 신호를 함께 읽는다', async () => {
   const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(endpoint, /EXISTS\(SELECT 1 FROM news_popularity np WHERE np\.url_key=a\.url_key\)/);
-  assert.match(endpoint, /EXISTS\(SELECT 1 FROM news_popular_items npi WHERE npi\.title=a\.title\)/);
+  assert.match(endpoint, /FROM news_popularity\s+WHERE datetime\(collected_at\) >= datetime\('now','-7 days'\)/);
+  assert.match(endpoint, /FROM news_popular_items\s+WHERE datetime\(collected_at\) >= datetime\('now','-7 days'\)/);
+  assert.match(endpoint, /SELECT match_key FROM ranked_popularity ORDER BY best_rank ASC, seen_at DESC LIMIT 12/);
   assert.match(endpoint, /AS is_popular/);
   assert.doesNotMatch(endpoint, /category === '바둑'\s*&&\s*isStandaloneEventArticle/);
+});
+
+test('일반 이슈의 포털 인기 신호는 최근 7일 상위 12건으로만 제한된다', async () => {
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  // Guard against regressing to the old unbounded "any historical match" gate,
+  // which made almost every general article qualify as a standalone issue.
+  assert.doesNotMatch(endpoint, /EXISTS\(SELECT 1 FROM news_popularity np WHERE np\.url_key=a\.url_key\)/);
+  assert.doesNotMatch(endpoint, /EXISTS\(SELECT 1 FROM news_popular_items npi WHERE npi\.title=a\.title\)/);
 });
 
 test('Claude 이슈 분류가 가능하면 Cloudflare 호출을 미리 예약하지 않는다', async () => {

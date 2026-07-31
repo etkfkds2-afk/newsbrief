@@ -133,10 +133,27 @@ export async function onRequestPost({ request, env }) {
     bindings.push(400);
 
     const [result, cacheRow] = await Promise.all([
+      // is_popular used to match ANY historical popularity-table hit, so almost
+      // every general article eventually qualified as a standalone 1-article
+      // issue. Scope it to this week's true top 12 (by best portal rank) so the
+      // gate is rare again, the way it was meant to be.
       env.DB.prepare(`
+        WITH ranked_popularity AS (
+          SELECT url_key AS match_key, MIN(rank) AS best_rank, MAX(collected_at) AS seen_at
+          FROM news_popularity
+          WHERE datetime(collected_at) >= datetime('now','-7 days')
+          GROUP BY url_key
+          UNION ALL
+          SELECT title AS match_key, MIN(rank) AS best_rank, MAX(collected_at) AS seen_at
+          FROM news_popular_items
+          WHERE datetime(collected_at) >= datetime('now','-7 days')
+          GROUP BY title
+        ),
+        top_popularity AS (
+          SELECT match_key FROM ranked_popularity ORDER BY best_rank ASC, seen_at DESC LIMIT 12
+        )
         SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at,
-               CASE WHEN EXISTS(SELECT 1 FROM news_popularity np WHERE np.url_key=a.url_key)
-                 OR EXISTS(SELECT 1 FROM news_popular_items npi WHERE npi.title=a.title)
+               CASE WHEN EXISTS(SELECT 1 FROM top_popularity tp WHERE tp.match_key=a.url_key OR tp.match_key=a.title)
                THEN 1 ELSE 0 END AS is_popular
         FROM news_articles a
         WHERE ${where.join(' AND ')}
