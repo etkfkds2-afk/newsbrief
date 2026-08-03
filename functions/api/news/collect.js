@@ -369,6 +369,14 @@ async function fetchArticleTitle(url) {
 // 커서 순회로는 닿지 않는 기사 하나를 제목 조각으로 직접 찾아 고친다.
 // 어느 카테고리로 분류됐는지, 저장된 URL이 무엇인지, 원문에서 제목을 실제로
 // 읽어왔는지를 함께 돌려주기 때문에 복구가 안 될 때 원인이 바로 보인다.
+// 저장본이 원문 제목의 앞부분인지 볼 때 공백은 무시한다. 검색 API가 준 제목과
+// 원문 og:title은 띄어쓰기가 다른 경우가 흔하다("전북 바둑협회"로 저장된 기사의
+// 원문 제목은 "전북바둑협회-장쑤성 청소년 바둑대회 성료"였다). 공백만 다른 걸
+// 다른 기사로 보면 정작 고쳐야 할 행을 전부 놓친다.
+const titleIsTruncationOf = (stored, fresh) => Boolean(fresh)
+  && fresh.length > stored.length
+  && fresh.replace(/\s+/g, '').startsWith(stored.replace(/\s+/g, ''));
+
 async function repairTitleByQuery(env, query) {
   const rows = await env.DB.prepare(`SELECT id,url,title,category FROM news_articles
     WHERE title LIKE ? ORDER BY id DESC LIMIT 10`).bind(`%${String(query).replace(/[\\%_]/g, '\\$&')}%`).all();
@@ -377,7 +385,7 @@ async function repairTitleByQuery(env, query) {
   for (const row of rows.results || []) {
     const stored = String(row.title || '');
     const fresh = await fetchArticleTitle(row.url);
-    const willFix = Boolean(fresh) && fresh.length > stored.length && fresh.startsWith(stored);
+    const willFix = titleIsTruncationOf(stored, fresh);
     if (willFix) {
       await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(fresh, row.id).run();
       repaired += 1;
@@ -412,7 +420,7 @@ async function repairTruncatedTitles(env, limit = 10, reset = false) {
     const fresh = await fetchArticleTitle(row.url);
     // 저장본으로 시작하면서 더 길 때만 늘린다. 원문 제목이 통째로 바뀐
     // 경우에는 손대지 않으므로 다른 기사 제목으로 덮어쓸 수 없다.
-    if (!fresh || fresh.length <= stored.length || !fresh.startsWith(stored)) continue;
+    if (!titleIsTruncationOf(stored, fresh)) continue;
     await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(fresh, row.id).run();
     repaired += 1;
     if (restored.length < 5) restored.push({ from: stored, to: fresh });
