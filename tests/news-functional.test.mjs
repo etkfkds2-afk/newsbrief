@@ -355,8 +355,9 @@ test('일반 이슈는 기존 제목을 유지하면서 기사 소속만 재분�
 
 test('일반 카테고리는 네이버 원문 섹션으로 복구하고 전용 복구 모드를 제공한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const extract = await readFile(new URL('../functions/_lib/news-extract.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
-  assert.match(collector, /NAVER_SECTION_CATEGORIES/);
+  assert.match(extract, /NAVER_SECTION_CATEGORIES/);
   assert.match(collector, /repairGeneralCategories/);
   assert.match(collector, /repair_categories/);
   assert.match(workflow, /repair_categories:/);
@@ -381,11 +382,14 @@ test('article:section이 언론사 이름뿐이면 article:section2의 실제 �
 test('IT 과학 카테고리는 수집·분류·화면·일반 피드에서 제외한다', async () => {
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const extract = await readFile(new URL('../functions/_lib/news-extract.js', import.meta.url), 'utf8');
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   const issues = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /'IT\/과학'/);
   assert.doesNotMatch(collector, /\['IT\/과학', '과학 기술'\]/);
-  assert.doesNotMatch(collector, /'105': 'IT\/과학'/);
+  // 네이버 섹션 표는 news-extract.js로 옮겼다. 여기서 collect.js만 보면
+  // 검사가 항상 통과해 의미를 잃으므로 옮겨간 파일을 함께 본다.
+  assert.doesNotMatch(extract, /'105': 'IT\/과학'/);
   assert.match(articles, /a\.category NOT IN \('바둑','IT\/과학'\)/);
   assert.match(issues, /a\.category NOT IN \('바둑','IT\/과학'\)/);
 });
