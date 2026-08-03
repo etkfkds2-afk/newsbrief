@@ -7,10 +7,13 @@ test('포털 자동요약 안내와 UI 문장을 제거한다', () => {
   const summary = buildSummary({
     title: '정부가 새 정책을 발표했다',
     rawSummary: '기사 제목과 주요 문장을 기반으로 자동 요약한 결과입니다.\n음성으로 듣기 번역 베타 타임톡',
-    body: '정부는 23일 새 정책의 세부 내용을 공개했다. 지원 대상은 다음 달부터 확대된다. 관계 부처는 현장 의견을 추가로 수렴할 계획이다.'
+    body: '정부는 23일 새 정책의 세부 내용을 공개했다. 지원 대상은 다음 달부터 전국 사업장으로 확대된다. 관계 부처는 현장 의견을 추가로 수렴할 계획이다.'
   });
   assert.equal(summary.split('\n').length, 3);
   assert.doesNotMatch(summary, /자동\s*요약|음성으로 듣기|타임톡/);
+  // 후보 선정과 저장 검증이 같은 줄 길이 기준을 봐야 한다. 예전에는 선정이
+  // 18자, 검증이 24자여서 여기서 만든 세 줄이 저장 단계에서 통째로 탈락했다.
+  assert.equal(validateThreeLineSummary(summary, '정부가 새 정책을 발표했다'), true);
 });
 
 test('여러 소식을 합친 편집 기사와 방송 예고를 제외한다', () => {
@@ -23,7 +26,7 @@ test('제목 복붙과 중복 문장을 요약에 넣지 않는다', () => {
   const summary = buildSummary({
     title: '한국 대표팀이 결승에 진출했다',
     rawSummary: '한국 대표팀이 결승에 진출했다. 한국 대표팀이 결승에 진출했다.',
-    body: '대표팀은 준결승에서 두 점 차 승리를 거뒀다. 결승전은 오는 일요일 서울에서 열린다.'
+    body: '대표팀은 준결승에서 두 점 차 승리를 거뒀다. 결승전은 오는 일요일 서울 잠실체육관에서 열린다.'
   });
   assert.equal(summary.split('\n').length, 2);
   assert.doesNotMatch(summary, /한국 대표팀이 결승에 진출했다/);

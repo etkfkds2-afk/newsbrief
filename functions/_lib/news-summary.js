@@ -25,6 +25,14 @@ const JUNK_PATTERNS = [
   ,/완독\s*약?\s*\d+\s*분\s*소요/i
 ];
 
+// 요약 한 줄의 허용 길이. 후보를 고르는 buildSummary와 저장 직전에 검사하는
+// validateThreeLineSummary가 같은 값을 봐야 한다. 예전에는 후보 선정이
+// 18~220자, 최종 검사가 24~190자여서 그 사이 길이의 줄을 뽑아 넣은 요약은
+// 반드시 검증에서 떨어졌다 - 다음 후보를 써보지도 못하고 기사 하나가
+// 통째로 발행 대상에서 빠졌다.
+const LINE_MIN_LENGTH = 24;
+const LINE_MAX_LENGTH = 190;
+
 export function normalizeText(value) {
   return String(value || '')
     .replace(/<[^>]+>/g, ' ')
@@ -114,7 +122,7 @@ function cleanCandidate(value) {
 function validCandidate(value, title) {
   if (isJunkLine(value)) return false;
   const line = cleanCandidate(value);
-  if (line.length < 18 || line.length > 220) return false;
+  if (line.length < LINE_MIN_LENGTH || line.length > LINE_MAX_LENGTH) return false;
   if (/(?:\.{3,}|…)$/.test(line)) return false;
   if (title && isTitleCopy(line, title)) return false;
   if (/^(?:기자|특파원|앵커)\s*[=:]/.test(line)) return false;
@@ -168,7 +176,7 @@ export function validateThreeLineSummary(summary, title = '') {
   if (lines.length !== 3) return false;
   const titleKey = comparisonKey(title);
   for (const line of lines) {
-    if (line.length < 24 || line.length > 190) return false;
+    if (line.length < LINE_MIN_LENGTH || line.length > LINE_MAX_LENGTH) return false;
     if (POISON_PATTERNS.some(pattern => pattern.test(line)) || isJunkLine(line)) return false;
     if (titleKey && isTitleCopy(line, title)) return false;
     if (!/(?:다|니다)[.!]?$/u.test(line)) return false;

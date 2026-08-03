@@ -324,17 +324,31 @@ async function repairGeneralCategories(env, limit = 10, reset = false) {
   return { attempted: candidates.length, repaired, done: candidates.length < 10 };
 }
 
+// 30일 창의 일반 기사는 DAILY_CATEGORY_PUBLISH_LIMIT(하루 12건) 때문에 최대
+// 360건이라 이 한도가 지금은 걸리지 않는다. 다만 id 오름차순으로 읽으면 한도에
+// 닿는 순간 조용히 "가장 오래된 N건만" 검사하게 되고, 정작 새로 들어온 기사가
+// 영영 검사에서 빠진다. 최신순으로 읽어 그 상황에서도 최근 기사를 먼저 지키고,
+// 한도에 닿았는지를 응답에 남겨 조용히 넘어가지 않게 한다.
+const WEAK_SUMMARY_SCAN_LIMIT = 400;
+
 async function quarantineWeakGeneralSummaries(env) {
   const rows = await env.DB.prepare(`SELECT id,title,summary FROM news_articles
     WHERE category<>'바둑' AND summary_quality='full'
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
-    ORDER BY id LIMIT 400`).all();
+    ORDER BY datetime(COALESCE(NULLIF(published_at,''),fetched_at)) DESC, id DESC
+    LIMIT ?`).bind(WEAK_SUMMARY_SCAN_LIMIT).all();
   const weak = (rows.results || []).filter(row => !validateGeneralEditorialSummary(row.summary, row.title));
   for (let index = 0; index < weak.length; index += 50) {
     await env.DB.batch(weak.slice(index, index + 50).map(row =>
       env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id)));
   }
-  return { checked: (rows.results || []).length, quarantined: weak.length, ids: weak.map(row => row.id) };
+  const checked = (rows.results || []).length;
+  return {
+    checked,
+    quarantined: weak.length,
+    scan_limit_reached: checked >= WEAK_SUMMARY_SCAN_LIMIT,
+    ids: weak.map(row => row.id)
+  };
 }
 
 // 옛 cleanTitle이 공백 없는 하이픈을 언론사 꼬리표로 오인해 잘라 저장한 제목을
