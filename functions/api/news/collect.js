@@ -366,6 +366,27 @@ async function fetchArticleTitle(url) {
   }
 }
 
+// 커서 순회로는 닿지 않는 기사 하나를 제목 조각으로 직접 찾아 고친다.
+// 어느 카테고리로 분류됐는지, 저장된 URL이 무엇인지, 원문에서 제목을 실제로
+// 읽어왔는지를 함께 돌려주기 때문에 복구가 안 될 때 원인이 바로 보인다.
+async function repairTitleByQuery(env, query) {
+  const rows = await env.DB.prepare(`SELECT id,url,title,category FROM news_articles
+    WHERE title LIKE ? ORDER BY id DESC LIMIT 10`).bind(`%${String(query).replace(/[\\%_]/g, '\\$&')}%`).all();
+  const found = [];
+  let repaired = 0;
+  for (const row of rows.results || []) {
+    const stored = String(row.title || '');
+    const fresh = await fetchArticleTitle(row.url);
+    const willFix = Boolean(fresh) && fresh.length > stored.length && fresh.startsWith(stored);
+    if (willFix) {
+      await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(fresh, row.id).run();
+      repaired += 1;
+    }
+    found.push({ id: row.id, category: row.category, url: row.url, stored, fetched: fresh, repaired: willFix });
+  }
+  return { matched: (rows.results || []).length, repaired, found };
+}
+
 async function repairTruncatedTitles(env, limit = 10, reset = false) {
   const cursorKey = 'baduk_title_repair_cursor';
   if (reset) {
@@ -1374,7 +1395,10 @@ export async function onRequestPost({ request, env }) {
     const popularityOffset = Math.max(0, Math.min(Number(requestUrl.searchParams.get('popularity_offset')) || 0, 48));
     const repairTitles = requestUrl.searchParams.get('repair_titles') === '1';
     if (repairTitles) {
-      const titleRepair = await repairTruncatedTitles(env, 10, requestUrl.searchParams.get('reset') === '1');
+      const titleQuery = (requestUrl.searchParams.get('q') || '').trim().slice(0, 100);
+      const titleRepair = titleQuery
+        ? await repairTitleByQuery(env, titleQuery)
+        : await repairTruncatedTitles(env, 10, requestUrl.searchParams.get('reset') === '1');
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
         .bind(new Date().toISOString(), JSON.stringify({ title_repair: titleRepair }).slice(0, 500), runId).run();
       return json({ ok: true, title_repair: titleRepair });
