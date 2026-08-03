@@ -1,0 +1,52 @@
+// 뉴스가 아닌 출처와 광고성 문서를 걸러내는 규칙을 한곳에 모은다.
+//
+// 예전에는 같은 규칙이 최소 세 곳에 흩어져 있었다. 수집 단계의 도메인 정규식
+// (collect.js), 조회 단계의 SQL LIKE 목록(articles.js), 화면 단계의 홍보성
+// 제목 정규식(articles.js). 예를 들어 '자동차월드'는 세 파일에 하드코딩돼
+// 있어서, 새 스팸이 뚫고 들어왔을 때 어디를 고쳐야 하는지 코드만 봐서는 알 수
+// 없었다. 새 차단 규칙은 이 파일에만 추가하면 된다.
+
+// 커뮤니티·블로그·위키·영상 플랫폼. 뉴스 기사가 아니거나 원문 출처가 아니다.
+export const BLOCKED_ARTICLE_HOSTS = [
+  'dcinside.com', 'tistory.com', 'blog.naver.com', 'cafe.naver.com',
+  'fmkorea.com', 'theqoo.net', 'ruliweb.com', 'clien.net',
+  'ppomppu.co.kr', 'instiz.net', 'youtube.com', 'namu.wiki'
+];
+
+// 수집 단계: 호스트명이 차단 도메인으로 끝나는지 본다. 종전 정규식
+// (/(?:dcinside\.com|...)$/)과 동일한 판정을 유지하려고 단순 끝일치를 쓴다.
+//
+// 주의: 끝일치라서 'notdcinside.com'처럼 접미사만 같은 별개 도메인도 함께
+// 차단된다. 점 경계를 요구하면(host === blocked || host.endsWith('.'+blocked))
+// 더 정확해지지만 그건 동작 변경이라 여기서는 하지 않았다. 실제로 그런 도메인이
+// 피드에 들어와 문제가 되면 그때 별도로 판단할 일이다.
+export function isBlockedArticleHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return BLOCKED_ARTICLE_HOSTS.some(blocked => host.endsWith(blocked));
+}
+
+// 조회 단계: 이미 저장된 행을 SQL에서 거른다. 수집기를 통과했던 시절의 행이
+// 남아 있을 수 있어 읽을 때도 같은 목록을 적용한다. URL 전체를 부분 문자열로
+// 보므로 수집 단계보다 넓게 걸리는데, 저장된 행을 보수적으로 감추는 쪽이라
+// 의도된 차이다.
+export const BLOCKED_HOST_SQL_FILTERS = BLOCKED_ARTICLE_HOSTS
+  .map(host => `lower(a.url) NOT LIKE '%${host}%'`);
+
+// 바둑 지면에 섞여 들어오는 SEO 광고 페이지. 실례:
+// "한게임 바둑 앱 다운로드 대국 예측 정보" (v.daum.net, 실제 발행처 자동차월드).
+// 이런 글은 제목에 '바둑'과 '대국'이 다 들어가서 바둑 관련성 검사를 통과하고,
+// 뱃지에는 발행처 대신 'Daum'만 찍혀서 언론사 기준으로는 걸러낼 수가 없다. 앱
+// 설치·다운로드 유도와 게임 포털 바둑 서비스 홍보라는, 뉴스 제목에는 나올 일이
+// 없는 문구를 제목에서 직접 잡는다.
+export const BADUK_PROMO_TITLE_PATTERNS = [
+  /(?:앱|어플|어플리케이션|프로그램|게임|모바일|PC)\s*(?:무료\s*)?(?:다운(?:로드|받기)?|설치)/i,
+  /(?:다운로드|설치|가입|충전|쿠폰|머니)\s*(?:방법|링크|하기|받기|안내|총정리)/,
+  // 게임 포털 이름만으로는 막지 않는다. "한게임 바둑리그 후원 협약 체결"처럼
+  // 후원사로 등장하는 정상 보도가 같이 걸린다.
+  /바로\s*가기\s*(?:링크|안내)?$/
+];
+
+// 바둑과 무관한 콘텐츠 팜이 바둑 키워드만 끼워 넣어 올리는 발행처. press가
+// 'Daum'으로 뭉개지지 않고 살아남은 경우를 위한 보조 차단이다.
+// 같은 이름이 news-summary.js의 isRejectedTitle에도 제목 기준으로 들어 있다.
+export const BADUK_PROMO_OUTLETS = /자동차월드/;

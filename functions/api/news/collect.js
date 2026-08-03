@@ -10,6 +10,7 @@ import {
 } from '../../_lib/news-ai-budget.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
+import { isBlockedArticleHost } from '../../_lib/news-blocklist.js';
 export { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 
 const SEARCHES = [
@@ -200,7 +201,7 @@ function allowedCandidate(url, discovery) {
     // KAKAO_RESOLVED already matched a specific known headline by title, so
     // it just needs the normal spam/UGC blocklist like every other source.
     if (discovery === 'KAKAO') return host === 'v.daum.net' || host.endsWith('.news.daum.net') || host === 'news.daum.net';
-    return !/(?:dcinside\.com|tistory\.com|blog\.naver\.com|cafe\.naver\.com|fmkorea\.com|theqoo\.net|ruliweb\.com|clien\.net|ppomppu\.co\.kr|instiz\.net|youtube\.com|namu\.wiki)$/i.test(host);
+    return !isBlockedArticleHost(host);
   } catch { return false; }
 }
 

@@ -250,6 +250,10 @@ export function validateGeneralEditorialSummary(summary, title = '') {
 export function isRejectedTitle(title = '') {
   if (/^(?:카타고|바둑)$/i.test(normalizeText(title))) return true;
   if (/�/.test(title) || (String(title).match(/\?/g) || []).length >= 5) return true;
+  // 광고성 제목은 수집 단계(여기)와 조회 단계(articles.js의
+  // CONTENT_QUALITY_FILTERS) 양쪽에서 막는다. 수집기를 통과했던 시절의 행이
+  // DB에 남아 있어서 읽을 때도 걸러야 하기 때문이다. 여기를 고칠 때는 그쪽도
+  // 함께 봐야 한다 - 표현이 서로 달라(정규식 대 SQL LIKE) 자동으로 맞춰지지 않는다.
   if (/(?:시세\s*조회로|현명한\s*투자하세요|신청\s*및\s*.*(?:환급|상세)\s*안내|자동차월드)/i.test(title)) return true;
   return /(?:\[?[^\]\n]{0,20}(?:칼럼|사설|기고|시론|논단|오피니언)\]?|\[(?:건설\s*Pick|패트롤)\]|퇴근길\s*이슈|뉴스\s*브리핑|뉴스\s*잇\s*\(|뉴스\s*바이트|모닝픽|주요\s*뉴스\s*]|주요뉴스\s*…|미리보는\s*.*신문|\d{1,2}월\s*\d{1,2}일\s*['‘]?뉴스\s*9['’]?\s*예고|증시\s*포커스|증시포커스|뉴스\s*새벽배송|\[\s*뉴스\s*(?:\.{2,}|…)|스포츠용어\s*산책)/i.test(title);
 }
