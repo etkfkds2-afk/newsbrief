@@ -937,11 +937,11 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
 });
 
 
-test('Claude 월간 비용은 2.50달러 목표와 2.70달러 절대 한도를 사용한다', async () => {
+test('Claude 월간 비용은 3.80달러 목표와 4.00달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 2_500_000/);
-  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 3_800_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 4_000_000/);
   assert.match(budget, /claude_budget_month/);
   assert.doesNotMatch(classifier, /MAX_NEW_ARTICLES_PER_RUN/);
   assert.match(classifier, /buildClassificationPlan\(articles, existingPayload, resetIssues \|\| regroupIssues\)/);

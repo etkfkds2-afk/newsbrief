@@ -1,5 +1,8 @@
-export const CLAUDE_MONTHLY_TARGET_MICRO_USD = 2_500_000;
-export const CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 2_700_000;
+// 사용자 예산은 월 4달러다. 목표치에서 신규 호출을 끊고, 하드 한도는 예산
+// 자체에 맞춘다(예전에는 2.50/2.70이라 실제 상한이 2.70달러였다). 목표와
+// 하드 사이의 0.20달러는 마지막 한 건이 추정보다 비싸게 끝날 때를 위한 여유다.
+export const CLAUDE_MONTHLY_TARGET_MICRO_USD = 3_800_000;
+export const CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 4_000_000;
 export const CLOUDFLARE_DAILY_CALL_LIMIT = 4;
 
 const PRICES = {
