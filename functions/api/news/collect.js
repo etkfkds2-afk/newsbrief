@@ -9,6 +9,7 @@ import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
+import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
 export { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 
 const SEARCHES = [
@@ -17,16 +18,6 @@ const SEARCHES = [
   ['생활/문화', '생활 문화'], ['세계', '국제']
 ];
 
-const BADUK_SEARCHES = [
-  '바둑', 'baduk', '바둑 대회', '바둑 행사', '바둑 축제', '전국 바둑대회',
-  '한국기원 대회', '대한바둑협회 바둑대회', '아마 바둑대회', '아마추어 바둑대회',
-  '어린이 바둑대회', '전국 어린이 바둑대회', '초등 바둑대회', '학생 바둑대회',
-  '청소년 바둑대회', '유소년 바둑대회', '꿈나무 바둑대회', '학교 바둑대회',
-  '지역 바둑대회', '시니어 아마 바둑대회', '생활체육 바둑대회', '바둑 참가자 모집',
-  '바둑교실 대회', '바둑문화 행사', '시도 바둑협회 대회', '전국체전 바둑',
-  '소년체전 바둑', '바둑 신진서', '프로바둑 대회', '바둑리그', '여자바둑리그',
-  '시니어바둑리그', '바둑 기전', '세계 바둑대회', '신진서 대국', '최정 바둑'
-];
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
 const DAILY_ANTHROPIC_CALL_LIMIT = 60;
