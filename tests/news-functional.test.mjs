@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../functions/api/news/articles.js';
 import { articleSectionCategory, fetchArticleText, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
+import { runMessage } from '../functions/_lib/news-db.js';
 import {
   classifyIssues, hasExistingTopicMismatch, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
   rewriteStandaloneTitles, standaloneBadukIssueTitle
@@ -936,6 +937,44 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
   assert.match(page, /limit:isBaduk\?'120':'150'/);
 });
 
+
+test('수집 기록 메시지는 한도를 넘겨도 항상 파싱 가능한 JSON이다', async () => {
+  const short = runMessage({ ok: true, count: 1 });
+  assert.deepEqual(JSON.parse(short), { ok: true, count: 1 });
+
+  // 실제 수집 진단과 같은 모양. 예전에는 slice(0, 500)으로 문자열 중간을
+  // 잘라 JSON이 깨졌고, 진단이 길어질수록 - 문제가 많아 정작 읽어야 할
+  // 때일수록 - 확실히 못 읽었다.
+  const message = runMessage({
+    warnings: ['naver_error: Naver API 429'],
+    diagnostics: {
+      mode: 'scheduled',
+      retry_repaired: 1,
+      samples: [{ title: 'a'.repeat(150), normalized: 'b'.repeat(400) }],
+      body_too_short_hosts: { 'example.co.kr:selector_miss': 4 }
+    }
+  });
+  assert.ok(message.length <= 500);
+  const parsed = JSON.parse(message);
+  // 부피가 큰 진단부터 버리므로 요약 정보는 살아남는다.
+  assert.deepEqual(parsed.warnings, ['naver_error: Naver API 429']);
+  assert.equal(parsed.diagnostics.mode, 'scheduled');
+  assert.equal(parsed.diagnostics.retry_repaired, 1);
+  assert.ok(parsed.diagnostics.dropped_keys >= 1);
+
+  // diagnostics 묶음이 없는 복구 응답도 같은 규칙을 따른다.
+  const repair = runMessage({
+    title_repair: { matched: 2, repaired: 1, found: [{ url: `http://${'u'.repeat(400)}` }] }
+  });
+  assert.ok(repair.length <= 500);
+  assert.equal(JSON.parse(repair).title_repair.repaired, 1);
+
+  // 덜어낼 것이 없을 만큼 통짜로 큰 값도 유효한 JSON을 낸다.
+  assert.doesNotThrow(() => JSON.parse(runMessage({ diagnostics: { blob: 'z'.repeat(5000) } })));
+
+  const collect = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(collect, /JSON\.stringify\([^)]*\)\.slice\(0, 500\)/);
+});
 
 test('Claude 월간 비용은 3.80달러 목표와 4.00달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');

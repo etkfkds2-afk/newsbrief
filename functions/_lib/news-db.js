@@ -95,6 +95,47 @@ CREATE TABLE IF NOT EXISTS news_category_checks (
   detected_category TEXT NOT NULL DEFAULT ''
 );`;
 
+// news_runs.message에 넣을 진단 JSON을 길이 한도 안에서 만든다.
+// 예전에는 호출부마다 JSON.stringify(...).slice(0, 500)을 썼는데, 문자열
+// 중간에서 잘린 JSON은 파싱이 안 된다. 진단이 길어질수록 - 즉 문제가
+// 많아 정작 읽어야 할 때일수록 - 확실히 못 읽는 상태였다. 잘라내는 대신
+// 부피가 큰 진단 키부터 통째로 버려서 항상 유효한 JSON을 남긴다.
+export function runMessage(payload, limit = 500) {
+  const encode = value => JSON.stringify(value) ?? '';
+  const full = encode(payload);
+  if (full.length <= limit) return full;
+  let clone;
+  try {
+    clone = JSON.parse(full);
+  } catch {
+    return JSON.stringify({ truncated: true });
+  }
+  // 덜어낼 곳은 진단 묶음이고, 없으면 가장 부피가 큰 최상위 묶음을 쓴다.
+  // status·warnings 같은 최상위 요약 값은 건드리지 않아 항상 남는다.
+  const containers = Object.values(clone).filter(value => value && typeof value === 'object');
+  const target = (clone.diagnostics && typeof clone.diagnostics === 'object' ? clone.diagnostics : null)
+    || containers.sort((left, right) => encode(right).length - encode(left).length)[0];
+  if (!target) return JSON.stringify({ truncated: true });
+  let dropped = 0;
+  while (encode(clone).length > limit) {
+    const biggest = Object.keys(target)
+      .map(key => [key, encode(target[key]).length])
+      .sort((left, right) => right[1] - left[1])[0];
+    if (!biggest) break;
+    if (Array.isArray(target)) target.splice(Number(biggest[0]), 1);
+    else delete target[biggest[0]];
+    dropped += 1;
+  }
+  // 무엇이 빠졌는지 알 수 있게 개수를 남긴다. 표시 때문에 한도를 다시 넘으면
+  // 표시를 포기한다 - 읽을 수 있는 JSON이 우선이다.
+  if (dropped && !Array.isArray(target)) {
+    target.dropped_keys = dropped;
+    if (encode(clone).length > limit) delete target.dropped_keys;
+  }
+  const result = encode(clone);
+  return result.length <= limit ? result : JSON.stringify({ truncated: true });
+}
+
 export function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,

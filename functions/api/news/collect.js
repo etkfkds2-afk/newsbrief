@@ -3,7 +3,7 @@ import {
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
-  canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, sha256
+  canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
@@ -1410,19 +1410,19 @@ export async function onRequestPost({ request, env }) {
         ? await repairTitleByQuery(env, titleQuery)
         : await repairTruncatedTitles(env, 10, requestUrl.searchParams.get('reset') === '1');
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
-        .bind(new Date().toISOString(), JSON.stringify({ title_repair: titleRepair }).slice(0, 500), runId).run();
+        .bind(new Date().toISOString(), runMessage({ title_repair: titleRepair }), runId).run();
       return json({ ok: true, title_repair: titleRepair });
     }
     if (repairTimes) {
       const timeRepair = await repairGeneralArticleTimes(env);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
-        .bind(new Date().toISOString(), JSON.stringify({ time_repair: timeRepair }), runId).run();
+        .bind(new Date().toISOString(), runMessage({ time_repair: timeRepair }), runId).run();
       return json({ ok: true, time_repair: timeRepair });
     }
     if (repairCategories) {
       const categoryRepair = await repairGeneralCategories(env, 10, resetCategories);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
-        .bind(new Date().toISOString(), JSON.stringify({ category_repair: categoryRepair }), runId).run();
+        .bind(new Date().toISOString(), runMessage({ category_repair: categoryRepair }), runId).run();
       return json({ ok: true, category_repair: categoryRepair });
     }
     if (repairGeneralQuality) {
@@ -1432,7 +1432,7 @@ export async function onRequestPost({ request, env }) {
         qualityRepairIds: qualityRepair.ids
       });
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
-        .bind(new Date().toISOString(), JSON.stringify({ quality_repair: qualityRepair, diagnostics: result.diagnostics }).slice(0, 500), runId).run();
+        .bind(new Date().toISOString(), runMessage({ quality_repair: qualityRepair, diagnostics: result.diagnostics }), runId).run();
       return json({ ok: true, quality_repair: qualityRepair, diagnostics: result.diagnostics });
     }
     if (popularityDate) {
@@ -1454,7 +1454,7 @@ export async function onRequestPost({ request, env }) {
       result.diagnostics.synthetic_times_cleared = Number(cleared?.meta?.changes || 0);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=?,message=? WHERE id=?")
         .bind(new Date().toISOString(), result.inserted,
-          JSON.stringify({ popularity: { date: popularity.date, ranking_items: popularity.ranking_items }, diagnostics: result.diagnostics }).slice(0, 500), runId).run();
+          runMessage({ popularity: { date: popularity.date, ranking_items: popularity.ranking_items }, diagnostics: result.diagnostics }), runId).run();
       return json({
         ok: true,
         popularity: { date: popularity.date, ranking_items: popularity.ranking_items },
@@ -1474,7 +1474,7 @@ export async function onRequestPost({ request, env }) {
       .map(([key, value]) => `${key}: ${value}`);
     if (result.diagnostics.ai_provider_limited) warnings.push('ai_provider_limited');
     const status = warnings.length ? 'degraded' : 'ok';
-    const message = JSON.stringify({ warnings, diagnostics: result.diagnostics }).slice(0, 500);
+    const message = runMessage({ warnings, diagnostics: result.diagnostics });
     await env.DB.prepare("UPDATE news_runs SET finished_at=?,status=?,inserted_count=?,message=? WHERE id=?")
       .bind(new Date().toISOString(), status, result.inserted, message, runId).run();
     return json({ ok: true, status, warnings, ...result });
