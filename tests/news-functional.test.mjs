@@ -396,14 +396,17 @@ test('IT 과학 카테고리는 수집·분류·화면·일반 피드에서 제�
 
 test('일반 카테고리 복구는 최근 미검사 네이버 기사부터 공식 섹션으로 교정한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const repairs = await readFile(new URL('../functions/_lib/news-repairs.js', import.meta.url), 'utf8');
   const db = await readFile(new URL('../functions/_lib/news-db.js', import.meta.url), 'utf8');
   assert.equal(naverSectionCategory('sectionId : "101"'), '경제');
   assert.match(db, /CREATE TABLE IF NOT EXISTS news_category_checks/);
-  assert.match(collector, /LEFT JOIN news_category_checks c ON c\.url_key=a\.url_key/);
-  assert.match(collector, /c\.url_key IS NULL/);
-  assert.match(collector, /ORDER BY datetime\(COALESCE\(NULLIF\(a\.published_at/);
-  assert.match(collector, /INSERT INTO news_category_checks/);
-  assert.doesNotMatch(collector, /general_category_repair_cursor/);
+  // 복구 구현은 news-repairs.js로 옮겼다. collect.js에는 호출부만 남는다.
+  assert.match(collector, /repairGeneralCategories\(env/);
+  assert.match(repairs, /LEFT JOIN news_category_checks c ON c\.url_key=a\.url_key/);
+  assert.match(repairs, /c\.url_key IS NULL/);
+  assert.match(repairs, /ORDER BY datetime\(COALESCE\(NULLIF\(a\.published_at/);
+  assert.match(repairs, /INSERT INTO news_category_checks/);
+  assert.doesNotMatch(repairs, /general_category_repair_cursor/);
 });
 
 test('일반 저품질 요약은 문제 기사만 격리해 AI 재요약한다', async () => {
@@ -613,11 +616,13 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
 
 test('일반 보강 실행은 인기 뉴스를 먼저 처리하고 지역 매체 검색 단신을 제외한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const sources = await readFile(new URL('../functions/_lib/news-sources.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(collector, /isPopular: true/);
   assert.match(collector, /popularOrder/);
   assert.match(collector, /LOCAL_GENERAL_PRESS\.test\(resolvedPress\)/);
-  assert.match(collector, /groups\.flatMap/);
+  // 랭킹 페이지를 교차로 섞는 부분은 news-sources.js로 옮겼다.
+  assert.match(sources, /groups\.flatMap/);
   assert.match(workflow, /general_boost:/);
   assert.match(workflow, /general_boost=1/);
   assert.match(workflow, /NEWSBRIEF_GENERAL_BOOST/);
@@ -742,10 +747,12 @@ test('과거 인기기사 시간은 임의의 오후 9시를 만들지 않고 �
 
 test('날짜만 있거나 발행시간이 빈 일반기사는 원문 발행시각을 묶음 복구한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const repairs = await readFile(new URL('../functions/_lib/news-repairs.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(collector, /repairGeneralArticleTimes/);
-  assert.match(collector, /TRIM\(published_at\)='' OR published_at GLOB '....-..-..'/);
-  assert.match(collector, /general_time_repair_cursor/);
+  // 복구 구현은 news-repairs.js로 옮겼다.
+  assert.match(repairs, /TRIM\(published_at\)='' OR published_at GLOB '....-..-..'/);
+  assert.match(repairs, /general_time_repair_cursor/);
   assert.match(collector, /hasDateOnly/);
   assert.match(collector, /hasMissingTime/);
   assert.match(workflow, /repair_times=1/);
