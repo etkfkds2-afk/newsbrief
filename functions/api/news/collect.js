@@ -337,6 +337,71 @@ async function quarantineWeakGeneralSummaries(env) {
   return { checked: (rows.results || []).length, quarantined: weak.length, ids: weak.map(row => row.id) };
 }
 
+// 옛 cleanTitle이 공백 없는 하이픈을 언론사 꼬리표로 오인해 잘라 저장한 제목을
+// 되살린다("전북바둑협회-장쑤성 청소년 바둑대회 성료" -> "전북바둑협회").
+// 검색으로 기사를 다시 찾는 경로는 같은 사건을 다룬 다른 매체 기사에 걸리거나
+// http/https 차이로 url_key가 어긋나서 원본 행에 닿지 못했다. 저장된 URL에서
+// og:title을 직접 읽는 이 경로는 그런 실패가 없다.
+async function fetchArticleTitle(url) {
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'user-agent': 'Mozilla/5.0 NewsBrief/Cloudflare' },
+      cf: { cacheTtl: 300, cacheEverything: false }
+    });
+    if (!response.ok) return '';
+    const type = response.headers.get('content-type') || '';
+    if (!type.includes('text/html')) return '';
+    const bytes = await response.arrayBuffer();
+    let html = new TextDecoder('utf-8').decode(bytes);
+    if (/euc-?kr|ks_c_5601|cp949/i.test(type) || (html.match(/�/g) || []).length >= 3) {
+      html = new TextDecoder('euc-kr').decode(bytes);
+    }
+    html = html.slice(0, 200000);
+    if (DEAD_PAGE.test(html.slice(0, 30000))) return '';
+    return cleanTitle(html.match(/<meta[^>]+(?:property|name)=["']og:title["'][^>]+content=["']([^"']+)/i)?.[1]
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:title["']/i)?.[1] || '');
+  } catch {
+    return '';
+  }
+}
+
+async function repairTruncatedTitles(env, limit = 10, reset = false) {
+  const cursorKey = 'baduk_title_repair_cursor';
+  if (reset) {
+    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
+      ON CONFLICT(key) DO UPDATE SET value=0`).bind(cursorKey).run();
+  }
+  const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
+  const cursor = reset ? 0 : Number(cursorRow?.value || 0);
+  const rows = await env.DB.prepare(`SELECT id,url,title FROM news_articles
+    WHERE id>? AND category='바둑'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+    ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+  const candidates = rows.results || [];
+  if (!candidates.length) {
+    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
+      ON CONFLICT(key) DO UPDATE SET value=0`).bind(cursorKey).run();
+    return { attempted: 0, repaired: 0, done: true, restored: [] };
+  }
+  let repaired = 0;
+  const restored = [];
+  for (const row of candidates) {
+    const stored = String(row.title || '');
+    const fresh = await fetchArticleTitle(row.url);
+    // 저장본으로 시작하면서 더 길 때만 늘린다. 원문 제목이 통째로 바뀐
+    // 경우에는 손대지 않으므로 다른 기사 제목으로 덮어쓸 수 없다.
+    if (!fresh || fresh.length <= stored.length || !fresh.startsWith(stored)) continue;
+    await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(fresh, row.id).run();
+    repaired += 1;
+    if (restored.length < 5) restored.push({ from: stored, to: fresh });
+  }
+  const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
+  await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
+  return { attempted: candidates.length, repaired, done: candidates.length < 10, restored };
+}
+
 async function repairGeneralArticleTimes(env, limit = 10) {
   const cursorKey = 'general_time_repair_cursor';
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
@@ -1307,6 +1372,13 @@ export async function onRequestPost({ request, env }) {
     const repairGeneralQuality = requestUrl.searchParams.get('repair_general_quality') === '1';
     const popularityDate = requestUrl.searchParams.get('popularity_date') || '';
     const popularityOffset = Math.max(0, Math.min(Number(requestUrl.searchParams.get('popularity_offset')) || 0, 48));
+    const repairTitles = requestUrl.searchParams.get('repair_titles') === '1';
+    if (repairTitles) {
+      const titleRepair = await repairTruncatedTitles(env, 10, requestUrl.searchParams.get('reset') === '1');
+      await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
+        .bind(new Date().toISOString(), JSON.stringify({ title_repair: titleRepair }).slice(0, 500), runId).run();
+      return json({ ok: true, title_repair: titleRepair });
+    }
     if (repairTimes) {
       const timeRepair = await repairGeneralArticleTimes(env);
       await env.DB.prepare("UPDATE news_runs SET finished_at=?,status='ok',inserted_count=0,message=? WHERE id=?")
