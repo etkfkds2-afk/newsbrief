@@ -71,6 +71,11 @@ on:
         required: false
         default: false
         type: boolean
+      repair_titles:
+        description: '잘려 저장된 바둑기사 제목을 원문 제목으로 복구'
+        required: false
+        default: false
+        type: boolean
   schedule:
     # GitHub may delay or occasionally drop scheduled runs during busy
     # periods (observed firsthand: gaps of several hours with no trigger at
@@ -237,7 +242,7 @@ jobs:
           !inputs.rollback_issues &&
           !inputs.regroup_issues &&
           (github.event_name != 'workflow_dispatch' ||
-          (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality))
+          (!inputs.repair_popularity && !inputs.repair_times && !inputs.repair_categories && !inputs.repair_general_quality && !inputs.repair_titles))
         env:
           NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
           NEWSBRIEF_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && '1' || '0' }}
@@ -318,6 +323,24 @@ jobs:
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
               "https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_general_quality=1"
+          fi
+          # Walk every baduk article of the last 30 days, ten per call, and
+          # restore any title the old cleanTitle truncated at a space-less
+          # hyphen. The first call resets the cursor so a dispatch always
+          # sweeps from the start; each call only lengthens a title that the
+          # stored one is still a prefix of, so repeating it is harmless.
+          if [ "${{ inputs.repair_titles }}" = "true" ]; then
+            for i in $(seq 1 40); do
+              endpoint="https://newsbrief-etkfkds2.pages.dev/api/news/collect?repair_titles=1"
+              if [ "$i" = "1" ]; then endpoint="${endpoint}&reset=1"; fi
+              response=$(curl --fail-with-body --retry 3 --max-time 120 \
+                -X POST \
+                -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+                "$endpoint")
+              echo "$response"
+              if echo "$response" | jq -e '.title_repair.done == true' >/dev/null; then break; fi
+              sleep 2
+            done
           fi
 
   classify-issues:

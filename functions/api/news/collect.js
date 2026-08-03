@@ -1171,9 +1171,11 @@ async function collect(env, {
         // 공백 없는 하이픈을 언론사 꼬리표로 오인해 잘라 저장한 제목만 되살린다
         // ("전북바둑협회-장쑤성 청소년 바둑대회 성료" -> "전북바둑협회").
         // 지금 검색 결과가 저장본으로 시작하면서 더 길 때만 늘리므로, 다른
-        // 기사의 제목으로 바뀌는 일은 없다.
-        if (title.length > String(exists.title || '').length
-          && title.startsWith(String(exists.title || ''))) {
+        // 기사의 제목으로 바뀌는 일은 없다. 앞부분인지 볼 때 공백은 무시한다.
+        // 검색 API가 준 제목은 띄어쓰기가 저장본과 다른 경우가 흔해서
+        // ("전북 바둑협회"로 저장된 기사의 원문 제목은 "전북바둑협회-...")
+        // 글자 그대로 비교하면 정작 고쳐야 할 행을 그냥 지나쳤다.
+        if (titleIsTruncationOf(String(exists.title || ''), title)) {
           await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(title, exists.id).run();
           diagnostics.titles_restored = Number(diagnostics.titles_restored || 0) + 1;
         }
