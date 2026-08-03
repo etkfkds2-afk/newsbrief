@@ -48,6 +48,24 @@ const HOST_OUTLETS = {
   'yna.co.kr': '연합뉴스'
 };
 
+// 바둑 지면에 섞여 들어오는 SEO 광고 페이지. 실례:
+// "한게임 바둑 앱 다운로드 대국 예측 정보" (v.daum.net, 실제 발행처 자동차월드).
+// 이런 글은 제목에 '바둑'과 '대국'이 다 들어가서 isBadukRelevant를 통과하고,
+// 뱃지에는 발행처 대신 'Daum'만 찍혀서(cleanPressName이 "Daum | 자동차월드"의
+// 파이프 뒤를 버린다) 언론사 기준으로는 걸러낼 수가 없다. 앱 설치·다운로드
+// 유도와 게임 포털 바둑 서비스 홍보라는, 뉴스 제목에는 나올 일이 없는 문구를
+// 제목에서 직접 잡는다.
+const BADUK_PROMO_TITLE = [
+  /(?:앱|어플|어플리케이션|프로그램|게임|모바일|PC)\s*(?:무료\s*)?(?:다운(?:로드|받기)?|설치)/i,
+  /(?:다운로드|설치|가입|충전|쿠폰|머니)\s*(?:방법|링크|하기|받기|안내|총정리)/,
+  // 게임 포털 이름만으로는 막지 않는다. "한게임 바둑리그 후원 협약 체결"처럼
+  // 후원사로 등장하는 정상 보도가 같이 걸린다.
+  /바로\s*가기\s*(?:링크|안내)?$/
+];
+// 바둑과 무관한 콘텐츠 팜이 바둑 키워드만 끼워 넣어 올리는 발행처. press가
+// 'Daum'으로 뭉개지지 않고 살아남은 경우를 위한 보조 차단이다.
+const BADUK_PROMO_OUTLETS = /자동차월드/;
+
 const BADUK_NAMES = ['신진서', '최정', '박정환', '변상일', '커제', '구쯔하오', '이세돌', '김은지', '카타고', '한돌', 'NHN', '한국기원', '대한바둑협회'];
 const ISSUE_STOPWORDS = new Set(['오늘', '이번', '관련', '전국', '한국', '중국', '세계', '프로', '기사', '대국', '승리', '패배', '소식', '전망', '발표', '바둑']);
 const RESULT_WORDS = /(?:우승|준우승|결승|진출|승리|패배|개최|개막|폐막|공사|차질|중단|지원|교류|합동훈련|선발|입단)/;
@@ -364,6 +382,9 @@ export async function onRequestGet({ request, env }) {
       if (!validateThreeLineSummary(item.summary, item.title)) continue;
       if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
       if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;
+      if (item.category === '바둑'
+        && (BADUK_PROMO_TITLE.some(pattern => pattern.test(item.title))
+          || BADUK_PROMO_OUTLETS.test(`${item.outlet} ${item.press} ${item.source}`))) continue;
       const first = String(item.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '');
       // Baduk headlines legitimately repeat player and tournament names. Use a
       // much stricter threshold so separate games are not collapsed together.

@@ -103,7 +103,12 @@ function findArticleBodies(value, found = []) {
 
 function cleanTitle(value) {
   return stripHtml(value)
-    .replace(/\s*[-|–—]\s*[^-|–—]{1,30}$/u, '')
+    // 끝에 붙은 " - 언론사" 꼬리표만 떼어낸다. 예전에는 구분자 양옆 공백을
+    // 요구하지 않아서 "전북바둑협회-장쑤성 청소년 바둑대회 성료" 같은 제목이
+    // 통째로 "전북바둑협회"로 잘려 DB에 저장됐다. 한국어 제목은 공백 없이
+    // 하이픈으로 두 주체를 잇는 경우가 흔하고, 언론사 꼬리표는 항상 공백을
+    // 사이에 둔다(googleNewsSearch도 같은 " - " 형식을 가정한다).
+    .replace(/\s+[-|–—]\s+[^-|–—]{1,30}$/u, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 300);
@@ -1065,9 +1070,19 @@ async function collect(env, {
     if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return outcome('too_old');
     const press = item.press || pressFromTitle(item.title);
     const urlKey = knownUrlKey || await sha256(url);
-    const exists = await env.DB.prepare('SELECT id,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
+    const exists = await env.DB.prepare('SELECT id,title,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
     if (exists) {
       if (exists.summary_quality === 'full') {
+        // 이미 발행된 기사는 제목을 다시 쓰지 않는다. 단 하나, 예전 cleanTitle이
+        // 공백 없는 하이픈을 언론사 꼬리표로 오인해 잘라 저장한 제목만 되살린다
+        // ("전북바둑협회-장쑤성 청소년 바둑대회 성료" -> "전북바둑협회").
+        // 지금 검색 결과가 저장본으로 시작하면서 더 길 때만 늘리므로, 다른
+        // 기사의 제목으로 바뀌는 일은 없다.
+        if (title.length > String(exists.title || '').length
+          && title.startsWith(String(exists.title || ''))) {
+          await env.DB.prepare('UPDATE news_articles SET title=? WHERE id=?').bind(title, exists.id).run();
+          diagnostics.titles_restored = Number(diagnostics.titles_restored || 0) + 1;
+        }
         const existingDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(exists.published_at || ''));
         const hasSyntheticTime = /T12:00:00\.000Z$/.test(String(exists.published_at || ''));
         const hasDateOnly = isPopular && existingDateOnly;
