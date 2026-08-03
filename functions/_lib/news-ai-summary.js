@@ -55,7 +55,12 @@ async function runAnthropic(apiKey, instructions, title, source) {
 }
 
 export async function makeBestSummary(env, { title = '', rawSummary = '', body = '', category = '' } = {}, diagnostics = null) {
-  const source = normalizeText(body || rawSummary).slice(0, 6000);
+  // 원문을 앞에서 2500자만 보낸다. Haiku 요금은 입력 $1 / 출력 $5(per 1M)라
+  // 3줄 요약 한 건의 비용은 대부분 입력 토큰에서 나오는데, 한국어 기사는
+  // 핵심 사실이 리드와 앞 문단에 몰려 있고 뒤쪽은 기자 이메일·저작권·관련기사
+  // 같은 요약에 쓸 수 없는 꼬리가 차지한다. 6000자를 보내던 시절에는 그 꼬리까지
+  // 매번 토큰으로 지불하면서 월 예산을 열흘 만에 태웠다.
+  const source = normalizeText(body || rawSummary).slice(0, 2500);
   if (!source) return '';
 
   const useAnthropic = env?.NEWSBRIEF_USE_ANTHROPIC === '1'
