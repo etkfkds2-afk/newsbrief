@@ -12,7 +12,7 @@ import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
 import {
   allowedCandidate, articleSource, classify, cleanTitle, fetchArticleText,
-  parseDate, pressFromTitle, stripHtml, titleSimilarity
+  parseDate, pressFromTitle, stripHtml, titleIsTruncationOf, titleSimilarity
 } from '../../_lib/news-extract.js';
 import {
   collectArchivedTop, collectPopularity, googleNewsSearch, kakaoSearch, koreanBadukLatest,

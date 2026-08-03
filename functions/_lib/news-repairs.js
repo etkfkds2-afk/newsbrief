@@ -7,20 +7,14 @@
 // 하나가 일곱 갈래로 분기하면서 어디까지가 정기 수집인지 알아보기 어려웠다.
 import { canonicalUrl, sha256 } from './news-db.js';
 import { validateGeneralEditorialSummary } from './news-summary.js';
-import { classify, cleanTitle, DEAD_PAGE, fetchArticleText } from './news-extract.js';
+import {
+  classify, cleanTitle, DEAD_PAGE, fetchArticleText, titleIsTruncationOf
+} from './news-extract.js';
 import { popularPage } from './news-sources.js';
 
 // 커서 순회로는 닿지 않는 기사 하나를 제목 조각으로 직접 찾아 고친다.
 // 어느 카테고리로 분류됐는지, 저장된 URL이 무엇인지, 원문에서 제목을 실제로
 // 읽어왔는지를 함께 돌려주기 때문에 복구가 안 될 때 원인이 바로 보인다.
-// 저장본이 원문 제목의 앞부분인지 볼 때 공백은 무시한다. 검색 API가 준 제목과
-// 원문 og:title은 띄어쓰기가 다른 경우가 흔하다("전북 바둑협회"로 저장된 기사의
-// 원문 제목은 "전북바둑협회-장쑤성 청소년 바둑대회 성료"였다). 공백만 다른 걸
-// 다른 기사로 보면 정작 고쳐야 할 행을 전부 놓친다.
-const titleIsTruncationOf = (stored, fresh) => Boolean(fresh)
-  && fresh.length > stored.length
-  && fresh.replace(/\s+/g, '').startsWith(stored.replace(/\s+/g, ''));
-
 // 30일 창의 일반 기사는 DAILY_CATEGORY_PUBLISH_LIMIT(하루 12건) 때문에 최대
 // 360건이라 이 한도가 지금은 걸리지 않는다. 다만 id 오름차순으로 읽으면 한도에
 // 닿는 순간 조용히 "가장 오래된 N건만" 검사하게 되고, 정작 새로 들어온 기사가

@@ -5,6 +5,7 @@ import { buildIssuesFromCache, normalizeCachedIssues, onRequestGet } from '../fu
 import { articleSectionCategory, fetchArticleText, googleNewsSearch, isBadukRelevant, naverSectionCategory } from '../functions/api/news/collect.js';
 import { claudeCostMicroUsd } from '../functions/_lib/news-ai-budget.js';
 import { runMessage } from '../functions/_lib/news-db.js';
+import { sourceFiles, undefinedRefs } from '../scripts/check-undefined-refs.mjs';
 import {
   classifyIssues, hasExistingTopicMismatch, hasIncidentLocationConflict, hasLegalCaseConflict, isStandaloneEventArticle, rejectConflictingExistingMatches,
   rewriteStandaloneTitles, standaloneBadukIssueTitle
@@ -952,6 +953,14 @@ test('주간·월간 조회량은 Worker CPU 한도 안으로 제한한다', asy
   assert.match(page, /limit:isBaduk\?'120':'150'/);
 });
 
+
+test('모든 모듈이 정의하지 않은 함수를 호출하지 않는다', () => {
+  // 리팩토링으로 함수를 다른 파일로 옮기면서 호출부의 import를 빠뜨리면,
+  // node --check도 통과하고 D1이 필요한 경로라 단위 테스트도 닿지 않는다.
+  // 실제로 titleIsTruncationOf가 이렇게 빠져 운영 수집이 500을 냈다.
+  const offenders = sourceFiles().map(file => [file, undefinedRefs(file)]).filter(([, missing]) => missing.length);
+  assert.deepEqual(offenders, [], offenders.map(([file, missing]) => `${file}: ${missing.join(', ')}`).join('\n'));
+});
 
 test('수집 기록 메시지는 한도를 넘겨도 항상 파싱 가능한 JSON이다', async () => {
   const short = runMessage({ ok: true, count: 1 });

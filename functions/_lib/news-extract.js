@@ -70,6 +70,17 @@ export function cleanTitle(value) {
     .slice(0, 300);
 }
 
+// 저장된 제목이 원문 제목의 앞부분이 잘린 것인지 판정한다. 비교할 때 공백은
+// 무시한다. 검색 API가 준 제목과 원문 og:title은 띄어쓰기가 다른 경우가 흔해서
+// ("전북 바둑협회"로 저장된 기사의 원문 제목은 "전북바둑협회-장쑤성 청소년
+// 바둑대회 성료"였다) 글자 그대로 비교하면 정작 고쳐야 할 행을 전부 놓친다.
+//
+// 수집 중 되살리는 경로(collect.js)와 사후 복구(news-repairs.js)가 같은 판정을
+// 써야 한다. 한쪽만 공백을 무시하면 같은 기사가 경로에 따라 다르게 처리된다.
+export const titleIsTruncationOf = (stored, fresh) => Boolean(fresh)
+  && fresh.length > stored.length
+  && fresh.replace(/\s+/g, '').startsWith(stored.replace(/\s+/g, ''));
+
 export function titleSimilarity(left, right) {
   const normalize = value => cleanTitle(value).replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
   const a = normalize(left), b = normalize(right);
