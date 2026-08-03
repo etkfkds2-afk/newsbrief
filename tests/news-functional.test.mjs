@@ -487,8 +487,10 @@ test('Google 바둑 발견은 한 검색어가 전체 후보를 독점하지 않
 
 test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처리한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const sources = await readFile(new URL('../functions/_lib/news-sources.js', import.meta.url), 'utf8');
   assert.match(collector, /const SCHEDULED_GENERAL_CANDIDATES = 12/);
-  assert.match(collector, /const naverPages = pages\.slice\(0, 5\)/);
+  // 인기 랭킹 페이지를 읽는 부분은 news-sources.js로 옮겼다.
+  assert.match(sources, /const naverPages = pages\.slice\(0, 5\)/);
   assert.match(collector, /const popular = allPopular\.slice\(0, 12\)/);
   assert.match(collector, /diagnostics\.popular_resolved/);
   assert.match(collector, /await naverSearch\(env, `"\$\{row\.title\}"`, 1, 5\)/);
@@ -660,7 +662,9 @@ test('바둑과 일반 뉴스는 각각 하루 12개까지 게시한다', async 
 
 test('바둑은 네이버 재확인 없이 한국기원 최신 원문을 직접 수집한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /async function koreanBadukLatest/);
+  const sources = await readFile(new URL('../functions/_lib/news-sources.js', import.meta.url), 'utf8');
+  // 한국기원 목록을 읽는 부분은 news-sources.js로 옮겼다.
+  assert.match(sources, /async function koreanBadukLatest/);
   assert.match(collector, /source: 'TRUSTED_BADUK'/);
   assert.match(collector, /official_baduk_found/);
 });
