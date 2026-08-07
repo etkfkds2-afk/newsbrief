@@ -1034,6 +1034,23 @@ test('바둑 표현을 비유로만 쓴 환경·기술 기사는 바둑으로 �
   assert.equal(isBadukRelevant('신진서, 세계바둑 결승 진출', '신진서 9단이 결승 대국을 치른다.'), true);
 });
 
+test('팀 이름의 단과 씨름 장사 최정만은 바둑으로 들어오지 않는다', () => {
+  // 실제 유입 사례: 씨름단(단으로 끝나는 팀 이름) + 우승이 바둑 문맥과
+  // 동작으로 동시에 인정돼 분류를 통과했고, 본문의 '최정만'이 화면 필터의
+  // 맨 '최정'에 부분 일치해 노출까지 됐다.
+  const ssireum = '111회 우승! 영암군민속씨름단 ‘영민씨’, 모래판 밖에서도 영암의 얼굴';
+  assert.equal(isBadukRelevant(ssireum, ''), false);
+  assert.equal(isBadukDisplayRelevant(ssireum, '최정만(35)과 김민재(24)가 나란히 장사에 등극했다.'), false);
+  for (const title of ['현대건설 배구단 결승 진출', '부산 시립합창단 개최', 'LG 트윈스 구단 승리']) {
+    assert.equal(isBadukRelevant(title, ''), false, title);
+  }
+  // 단수(9단)와 입단은 그대로 바둑 문맥으로 인정한다.
+  for (const title of ['최정 9단, 여자기성전 결승 진출', '이세돌 9단 은퇴 대국', '김은지 입단 후 첫 승리']) {
+    assert.equal(isBadukRelevant(title, ''), true, title);
+  }
+  assert.equal(isBadukDisplayRelevant('여자 바둑 1위 탈환', '최정이 랭킹을 역전했다.'), true);
+});
+
 test('기존 바둑 목록은 정상 기사를 보존하고 명백한 AI 일반기사만 숨긴다', () => {
   assert.equal(isBadukDisplayRelevant('쏘팔코사놀 최고기사 결정전, 최강 vs 어린이 승부 펼쳐', '어린이와 프로의 특별 대국'), true);
   assert.equal(isBadukDisplayRelevant('알파고 쇼크 10년', '바둑 AI와 함께 성장한 기사들의 이야기'), true);
