@@ -38,6 +38,10 @@ const SEARCHES = [
 ];
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
+// 하루 호출 상한은 폭주 방지용 거친 뚜껑이고, 실제 지출은 canUseClaude의
+// 일일 예산 배분(dailyAllowanceMicroUsd)이 막는다. 이 값을 예산에 맞춰 다시
+// 낮추지는 않는다 - 같은 것을 두 군데서 막으면 어느 쪽이 기사를 끊었는지
+// 진단에서 구분되지 않고, 예산이 허락하는 날까지 괜히 잘려나간다.
 const DAILY_ANTHROPIC_CALL_LIMIT = 60;
 // A boost adds 24 calls to the normal allowance. Keeping this below the
 // normal limit made the old "boost" disable Claude once 24 calls were used.
@@ -285,8 +289,12 @@ async function collect(env, {
   }
   const retryRowLimit = popularityCandidates.length ? 0 : (repair ? 4 : (backfill ? 4 : 3));
   // force_retry gives exhausted rows exactly one additional attempt instead
-  // of excluding attempts=24 forever or reopening them without a ceiling.
-  const retryAttemptLimit = forceRetry ? 25 : 24;
+  // of excluding exhausted rows forever or reopening them without a ceiling.
+  //
+  // 재시도 상한이 24였을 때는 끝내 요약이 안 되는 기사 한 건에 유료 호출을
+  // 24번까지 썼다. 8월 측정치가 이 낭비를 그대로 보여준다: 하루 22건을
+  // 발행하면서 호출은 60건을 썼다. 6번 실패한 본문은 7번째에도 실패한다.
+  const retryAttemptLimit = forceRetry ? 7 : 6;
   const retryRows = await env.DB.prepare(`SELECT a.id,a.url_key,a.title,a.raw_summary,a.body_text,a.category FROM news_articles a
     LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
     WHERE a.summary_quality='none' AND length(a.body_text)>=300 AND COALESCE(f.attempts,0)<?

@@ -439,7 +439,7 @@ test('건강 점검 API는 콘텐츠 경고를 서버 장애 응답과 분리한
           if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
           if (sql.includes("AS baduk")) return { baduk: 4, general: 9 };
           if (sql.includes("TRIM(published_at)=''")) return { count: missing };
-          if (sql.includes('f.attempts>=24')) return { count: 0 };
+          if (sql.includes('f.attempts>=6')) return { count: 0 };
           return {};
         },
         async all() {
@@ -596,6 +596,25 @@ test('AI 호출은 일일 예산과 당일 차단 상태를 확인한다', async
   assert.match(budget, /CLOUDFLARE_DAILY_CALL_LIMIT = 4/);
   assert.match(budget, /ai_budget_day/);
   assert.match(budget, /ai_blocked/);
+});
+
+test('Claude 월 예산은 남은 날짜로 나눠 하루치만 쓴다', async () => {
+  const { CLAUDE_MONTHLY_TARGET_MICRO_USD, dailyAllowanceMicroUsd } =
+    await import('../functions/_lib/news-ai-budget.js');
+  // 1일에는 목표 예산을 그 달 전체 일수로 나눈 값이 하루 한도다.
+  const first = dailyAllowanceMicroUsd(0, new Date('2026-08-01T00:00:00Z'));
+  assert.equal(first, Math.floor(CLAUDE_MONTHLY_TARGET_MICRO_USD / 31));
+  // 앞서 과하게 쓴 달은 남은 날짜에 맞춰 한도가 줄어든다. 8월 실측값
+  // (7일차에 1,709,224마이크로달러 소진)이면 남은 25일에 하루 83,631이고,
+  // 예산은 소진되지 않은 채 월말까지 간다.
+  const overspent = dailyAllowanceMicroUsd(1_709_224, new Date('2026-08-07T00:00:00Z'));
+  assert.equal(overspent, 121_631);
+  assert.ok(overspent < first, `${overspent} < ${first}`);
+  // 적게 쓴 달의 여유분은 남은 날짜로 다시 퍼져 한도가 올라간다.
+  const underspent = dailyAllowanceMicroUsd(100_000, new Date('2026-08-07T00:00:00Z'));
+  assert.ok(underspent > first, `${underspent} > ${first}`);
+  // 목표를 넘겼으면 0이 되어 canUseClaude가 신규 호출을 막는다.
+  assert.equal(dailyAllowanceMicroUsd(CLAUDE_MONTHLY_TARGET_MICRO_USD + 1, new Date('2026-08-20T00:00:00Z')), 0);
 });
 
 test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
@@ -1000,11 +1019,11 @@ test('수집 기록 메시지는 한도를 넘겨도 항상 파싱 가능한 JSO
   assert.doesNotMatch(collect, /JSON\.stringify\([^)]*\)\.slice\(0, 500\)/);
 });
 
-test('Claude 월간 비용은 3.80달러 목표와 4.00달러 절대 한도를 사용한다', async () => {
+test('Claude 월간 비용은 4.75달러 목표와 5.00달러 절대 한도를 사용한다', async () => {
   const budget = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   const classifier = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 3_800_000/);
-  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 4_000_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_TARGET_MICRO_USD = 4_750_000/);
+  assert.match(budget, /CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 5_000_000/);
   assert.match(budget, /claude_budget_month/);
   assert.doesNotMatch(classifier, /MAX_NEW_ARTICLES_PER_RUN/);
   assert.match(classifier, /buildClassificationPlan\(articles, existingPayload, resetIssues \|\| regroupIssues\)/);
@@ -1078,7 +1097,7 @@ test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', asy
   assert.match(workflow, /backfill=1&force_retry=1/);
   assert.match(workflow, /repair=1&force_retry=1/);
   assert.match(collector, /forceRetry \? 1 : 0/);
-  assert.match(collector, /retryAttemptLimit = forceRetry \? 25 : 24/);
+  assert.match(collector, /retryAttemptLimit = forceRetry \? 7 : 6/);
 });
 
 test('watchdog은 재시도된 헬스 응답에서도 단일 실행 결정을 출력한다', async () => {
