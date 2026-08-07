@@ -567,7 +567,11 @@ async function collect(env, {
     if (publishedAt && Date.parse(publishedAt) < Date.now() - 30 * 86400000) return outcome('too_old');
     const press = item.press || pressFromTitle(item.title);
     const urlKey = knownUrlKey || await sha256(url);
-    const exists = await env.DB.prepare('SELECT id,title,image_url,summary_quality,raw_summary,body_text,category,published_at FROM news_articles WHERE url_key=?').bind(urlKey).first();
+    const exists = await env.DB.prepare(`SELECT a.id,a.title,a.image_url,a.summary_quality,a.raw_summary,
+        a.body_text,a.category,a.published_at,
+        COALESCE(f.attempts,0) AS summary_attempts, f.last_attempt AS summary_last_attempt
+      FROM news_articles a LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
+      WHERE a.url_key=?`).bind(urlKey).first();
     if (exists) {
       if (exists.summary_quality === 'full') {
         // 이미 발행된 기사는 제목을 다시 쓰지 않는다. 단 하나, 예전 cleanTitle이
@@ -615,8 +619,24 @@ async function collect(env, {
       const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
       let article = await fetchArticleText(fetchUrl);
       if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+        // 이 경로에는 시도 횟수도 간격도 없었다. 후보에 다시 잡히기만 하면
+        // 실행마다 유료 요약을 새로 불렀고, 같은 기사가 매번 같은 이유로
+        // 떨어졌다. 8월 7일 실행 진단의 existing_repair_failed 6건이 그것으로,
+        // 한 실행 유료 호출의 절반이 여기서 나갔다. news_summary_attempts는
+        // 이미 아래에서 쌓고 있었는데 읽는 곳이 없었을 뿐이다. 아래 retryRows
+        // 쿼리와 같은 기준(상한 6회, 20시간 간격)을 적용한다.
+        //
+        // 건너뛰어도 본문·이미지·발행시각 갱신은 그대로 돈다. 유료 호출만
+        // 미루는 것이라 언젠가 성공할 기사는 여전히 성공하고, 화면에 뜨는
+        // 기사(summary_quality='full')는 애초에 이 경로로 오지 않는다.
+        const lastAttemptAt = Date.parse(String(exists.summary_last_attempt || '').replace(' ', 'T') + 'Z');
+        const mayResummarize = forceRetry
+          || (Number(exists.summary_attempts || 0) < retryAttemptLimit
+            && !(Number.isFinite(lastAttemptAt) && Date.now() - lastAttemptAt < 20 * 3600000));
         const retryDetail = {};
-        const repaired = await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry');
+        const repaired = mayResummarize
+          ? await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry')
+          : '';
         const valid = validPublishedSummary(repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
@@ -640,6 +660,10 @@ async function collect(env, {
           await env.DB.prepare(`INSERT INTO news_summary_attempts(url_key,attempts,last_attempt) VALUES(?,1,CURRENT_TIMESTAMP)
             ON CONFLICT(url_key) DO UPDATE SET attempts=attempts+1,last_attempt=CURRENT_TIMESTAMP`).bind(urlKey).run();
         }
+      // 미룬 것과 실제로 실패한 것을 구분해 센다. 둘을 한 이름으로 묶으면
+      // 상한 6회가 너무 빡빡한지(미룬 것만 쌓이고 복구가 멈춘다) 판단할 근거가
+      // 사라진다.
+      if (!mayResummarize) return outcome('existing_repair_deferred');
       return outcome(valid ? 'existing_repaired' : 'existing_repair_failed');
     }
 
