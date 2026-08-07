@@ -100,7 +100,14 @@ CREATE TABLE IF NOT EXISTS news_category_checks (
 // 중간에서 잘린 JSON은 파싱이 안 된다. 진단이 길어질수록 - 즉 문제가
 // 많아 정작 읽어야 할 때일수록 - 확실히 못 읽는 상태였다. 잘라내는 대신
 // 부피가 큰 진단 키부터 통째로 버려서 항상 유효한 JSON을 남긴다.
-export function runMessage(payload, limit = 500) {
+//
+// 한도가 500이던 동안에는 이 방식이 정확히 읽어야 할 것부터 버렸다. 부피가
+// 큰 키를 먼저 버리는데, 가장 큰 키가 candidate_outcomes_by_category와
+// body_too_short_hosts - 후보가 어디서 떨어졌는지 알려주는 유일한 기록이다.
+// 8월 7일 실행에는 "dropped_keys":12만 남아, 바둑이 하루 2건에 그친 이유를
+// 진단에서 찾을 수 없었다. news_runs.message는 제약 없는 TEXT 열이므로
+// 500을 지킬 이유가 없었다.
+export function runMessage(payload, limit = 4000) {
   const encode = value => JSON.stringify(value) ?? '';
   const full = encode(payload);
   if (full.length <= limit) return full;

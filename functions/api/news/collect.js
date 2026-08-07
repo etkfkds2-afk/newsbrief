@@ -655,14 +655,16 @@ async function collect(env, {
       // selector matched) determines whether the fix is a selector tweak or a
       // source that can never be scraped this way. Without this,
       // "body_too_short: 12" gives no lead on what to try next.
-      if (category !== '바둑') {
-        diagnostics.body_too_short_hosts ||= {};
-        try {
-          const host = new URL(fetchUrl).hostname;
-          const key = `${host}:${article.fetchStatus || 'unknown'}`;
-          diagnostics.body_too_short_hosts[key] = Number(diagnostics.body_too_short_hosts[key] || 0) + 1;
-        } catch {}
-      }
+      // 예전에는 일반 기사만 기록했다. 그래서 바둑이 하루 2건에 그치는 동안
+      // 그 20개 후보가 차단된 건지, 선택자가 안 맞은 건지, 아니면 일반을 먼저
+      // 처리하느라 subrequest가 떨어져서 애초에 못 가져온 건지 구분할 근거가
+      // 전혀 없었다. 바둑도 같은 기록을 남긴다.
+      diagnostics.body_too_short_hosts ||= {};
+      try {
+        const host = new URL(fetchUrl).hostname;
+        const key = `${category === '바둑' ? 'baduk' : 'general'}:${host}:${article.fetchStatus || 'unknown'}`;
+        diagnostics.body_too_short_hosts[key] = Number(diagnostics.body_too_short_hosts[key] || 0) + 1;
+      } catch {}
       return outcome('body_too_short');
     }
     const finalCategory = category === '바둑'

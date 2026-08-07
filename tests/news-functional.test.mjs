@@ -974,11 +974,11 @@ test('수집 기록 메시지는 한도를 넘겨도 항상 파싱 가능한 JSO
     diagnostics: {
       mode: 'scheduled',
       retry_repaired: 1,
-      samples: [{ title: 'a'.repeat(150), normalized: 'b'.repeat(400) }],
-      body_too_short_hosts: { 'example.co.kr:selector_miss': 4 }
+      samples: [{ title: 'a'.repeat(1500), normalized: 'b'.repeat(4000) }],
+      body_too_short_hosts: { 'general:example.co.kr:selector_miss': 4 }
     }
   });
-  assert.ok(message.length <= 500);
+  assert.ok(message.length <= 4000);
   const parsed = JSON.parse(message);
   // 부피가 큰 진단부터 버리므로 요약 정보는 살아남는다.
   assert.deepEqual(parsed.warnings, ['naver_error: Naver API 429']);
@@ -988,13 +988,13 @@ test('수집 기록 메시지는 한도를 넘겨도 항상 파싱 가능한 JSO
 
   // diagnostics 묶음이 없는 복구 응답도 같은 규칙을 따른다.
   const repair = runMessage({
-    title_repair: { matched: 2, repaired: 1, found: [{ url: `http://${'u'.repeat(400)}` }] }
+    title_repair: { matched: 2, repaired: 1, found: [{ url: `http://${'u'.repeat(4200)}` }] }
   });
-  assert.ok(repair.length <= 500);
+  assert.ok(repair.length <= 4000);
   assert.equal(JSON.parse(repair).title_repair.repaired, 1);
 
   // 덜어낼 것이 없을 만큼 통짜로 큰 값도 유효한 JSON을 낸다.
-  assert.doesNotThrow(() => JSON.parse(runMessage({ diagnostics: { blob: 'z'.repeat(5000) } })));
+  assert.doesNotThrow(() => JSON.parse(runMessage({ diagnostics: { blob: 'z'.repeat(9000) } })));
 
   const collect = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.doesNotMatch(collect, /JSON\.stringify\([^)]*\)\.slice\(0, 500\)/);
