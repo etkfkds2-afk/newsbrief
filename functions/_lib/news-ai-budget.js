@@ -24,12 +24,13 @@ function dayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-// 월 예산을 남은 날짜로 나눠 하루치 한도를 만든다. 고정 호출 횟수(예전 하루
-// 60회)로 막으면 한 건의 실제 단가를 알아야 하는데, 요약 원문 길이와 이슈
-// 분류 출력 길이에 따라 단가가 몇 배씩 흔들린다. 그래서 8월에는 6일 만에
-// 1.71달러를 써서 예산의 45%가 사라졌고, 이대로면 중순에 Claude가 꺼진
-// 채로 보름을 보내게 된다. 남은 예산 기준으로 매일 다시 계산하면 단가를
-// 몰라도 월말까지 균등하게 버티고, 적게 쓴 날의 몫은 다음 날로 넘어간다.
+// 월 예산을 남은 날짜로 나눈 하루치 페이스. 2026-08-09부터 이 값은 **표시
+// 전용**이고 호출을 막지 않는다. canUseClaude의 관문으로 쓰던 동안 하루 한도
+// ($0.12)에 걸려 요약이 낮에 끊겼고, 그 뒤로 들어온 기사는 요약 없이
+// pending_summary로 쌓였다. 바둑은 서브리퀘스트 고갈에서 살아남는 후보가
+// 애초에 두어 건뿐이라 그 두어 건이 잘리자 하루 발행이 0이 됐다.
+// 사용자 판단: 월 예산을 넘기더라도 기사가 끊기지 않는 쪽을 택한다. 월
+// 목표/하드 한도는 그대로 남아 있으므로 지출이 무한정 늘지는 않는다.
 export function dailyAllowanceMicroUsd(spentBeforeToday, date = new Date()) {
   const daysInMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   const daysLeft = Math.max(1, daysInMonth - date.getUTCDate() + 1);
@@ -77,10 +78,11 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
   const spent = await getClaudeMonthlySpend(env);
   const today = await getClaudeDailySpend(env);
   const allowance = dailyAllowanceMicroUsd(spent - today);
+  // 하루치 페이싱은 관문에서 뺐다(위 dailyAllowanceMicroUsd 주석 참고).
+  // today/allowance는 health가 그대로 보여주되 차단은 하지 않는다.
   return {
     allowed: spent < CLAUDE_MONTHLY_TARGET_MICRO_USD
-      && spent + Math.max(0, estimatedMicroUsd) <= CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD
-      && today < allowance,
+      && spent + Math.max(0, estimatedMicroUsd) <= CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
     spent,
     today,
     allowance

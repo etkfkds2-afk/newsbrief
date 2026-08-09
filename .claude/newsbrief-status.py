@@ -14,7 +14,7 @@ KNOWN_FALSE_ALARMS = {'summary_exhausted_below_threshold', 'published_time_compl
 
 
 def mark(now, base):
-    return '유지' if now >= base else '하락(-{})'.format(base - now)
+    return '유지' if now >= base else '-{}'.format(base - now)
 
 
 def main():
@@ -45,13 +45,18 @@ def main():
     print('기사 24h: general {} (기준 {}, {}) / baduk {} (기준 {}, {})'.format(
         general, BASE_GENERAL, mark(general, BASE_GENERAL),
         baduk, BASE_BADUK, mark(baduk, BASE_BADUK)))
-    print('Claude: 오늘 ${:.3f} / 허용 ${:.3f}  |  이번달 ${:.3f} / 목표 $4.75 (하드 $5)'.format(
+    print('Claude: 오늘 ${:.3f} (페이스 ${:.3f}, 차단 아님)  |  이번달 ${:.3f} / 목표 $4.75 (하드 $5)'.format(
         spent, allowance, month))
     print('마지막 자동 실행: {} mode={} ({}시간 전)'.format(finished, mode, age))
     print('헬스 실패: {}  (summary_exhausted/published_time은 알려진 오탐이라 제외)'.format(
         failures if failures else '없음'))
-    print('→ 기사 수가 기준 아래면 사용자에게 먼저 알리고, 원인 커밋만 골라 revert 가능하다고 안내할 것. '
-          '자세한 배경은 메모리 project_newsbrief_claude_budget_2026_08 참고.')
+
+    # 2026-08-09에 하루치 예산 차단을 걷어냈다. 시간대별로 값을 다르게 읽어야
+    # 했던 이유(UTC 자정 리셋 전까지 한도를 다 쓴 채 롤링 창만 빠지는 구간)가
+    # 사라졌으므로, 이제 언제 읽어도 기준선과 직접 비교한다.
+    print('→ 기준 아래면 사용자에게 먼저 알릴 것. 바둑이 0이면 예산이 아니라 '
+          '서브리퀘스트 고갈(진단의 body_too_short 사유가 "Too many subrequests")을 먼저 확인한다.')
+    print('배경: 메모리 project_newsbrief_claude_budget_2026_08 참고.')
 
 
 main()

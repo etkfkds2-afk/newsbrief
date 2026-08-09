@@ -1,7 +1,5 @@
 import { json } from '../../_lib/news-db.js';
-import {
-  CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD, CLAUDE_MONTHLY_TARGET_MICRO_USD, dailyAllowanceMicroUsd
-} from '../../_lib/news-ai-budget.js';
+import { CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD, dailyAllowanceMicroUsd } from '../../_lib/news-ai-budget.js';
 
 function utcMillis(value) {
   const text = String(value || '');
@@ -29,7 +27,7 @@ export async function onRequestGet({ env }) {
          'claude_daily_micro_usd','claude_spend_day')`).all(),
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_summary_attempts f
         JOIN news_articles a ON a.url_key=f.url_key
-        WHERE f.attempts>=6 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
+        WHERE f.attempts>=24 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
       env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all()
     ]);
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
@@ -37,11 +35,10 @@ export async function onRequestGet({ env }) {
     const monthlySpend = Number(state.claude_monthly_micro_usd || 0);
     const dailySpend = String(state.claude_spend_day || '') === now.toISOString().slice(0, 10)
       ? Number(state.claude_daily_micro_usd || 0) : 0;
+    // 하루치 페이스는 계속 보여주되 실패 조건에서는 뺐다. 이 값이 호출을
+    // 막던 동안 요약이 낮에 끊겨 바둑 발행이 0이 됐다. 지출 속도를 눈으로
+    // 보는 용도로만 남긴다 - 차단은 월 목표/하드 한도가 한다.
     const dailyAllowance = dailyAllowanceMicroUsd(monthlySpend - dailySpend, now);
-    // 남은 예산을 남은 날짜로 나눈 값이 0에 가까워지면, 월말까지 Claude 요약이
-    // 사실상 꺼진다는 뜻이다. 8월에는 이 신호가 없어서 6일 만에 예산의 45%가
-    // 나간 것을 아무도 눈치채지 못했다.
-    const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
     const finishedAgeHours = run?.finished_at ? (Date.now() - utcMillis(run.finished_at)) / 3600000 : Infinity;
     const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
     const databaseBytes = Number(storageResult.meta?.size_after || 0);
@@ -57,11 +54,7 @@ export async function onRequestGet({ env }) {
       published_time_complete: Number(missingTime?.count || 0) === 0,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
-      claude_daily_allowance_left: dailyAllowance >= CLAUDE_MONTHLY_TARGET_MICRO_USD / daysInMonth / 2,
-      // 임계값 5는 재시도 상한이 24이던 시절 기준이다. 상한이 6으로 내려가
-      // 같은 기사가 훨씬 빨리 '소진' 상태가 되므로, 실제 값이 쌓이는 것을
-      // 보고 다시 조일 때까지 알림이 매일 뜨지 않을 만큼 여유를 둔다.
-      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 15,
+      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 5,
       database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
     };
     const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
