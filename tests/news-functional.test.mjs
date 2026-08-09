@@ -747,6 +747,16 @@ test('이슈 식별은 제목의 대회·선수 조합을 사용하고 일반 �
   assert.match(source, /if \(category === '바둑'\)[\s\S]*return '';/);
 });
 
+test('홈 일간 헤드라인은 최대 10개까지만 만든다', async () => {
+  const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
+  // 이 값을 10으로 바꾸려던 커밋(0c05a46)이 정작 slice는 12로 둔 채 파일 끝에
+  // '2' 한 글자만 덧붙이고 끝났다. 테스트가 없어서 아무도 몰랐다.
+  assert.match(page, /state\.issueItems=state\.items\.slice\(0,10\)/);
+  assert.doesNotMatch(page, /state\.issueItems=state\.items\.slice\(0,12\)/);
+  // </html> 뒤에 문자가 남으면 그때와 같은 사고가 조용히 통과한다.
+  assert.match(page, /<\/html>\n$/);
+});
+
 test('이슈 필터는 현재 주간·월간 기간을 유지한다', async () => {
   const source = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   const page = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');

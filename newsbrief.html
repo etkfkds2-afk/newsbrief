@@ -237,7 +237,7 @@ async function load({silent=false}={}){
       // 일간 헤드라인은 기사 제목을 절대 다듬지 않는다. 예전 cleanHeadline은
       // 앞뒤 대괄호를 떼어냈는데, "[전북바둑협회] ..."처럼 주최 단체가
       // 대괄호 안에 들어가는 제목에서 핵심 주체가 통째로 사라졌다.
-      state.issueItems=state.items.slice(0,12).map(x=>({key:x.url_key,title:x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
+      state.issueItems=state.items.slice(0,10).map(x=>({key:x.url_key,title:x.title,count:(x.related_count||0)+1,latest:x.published_at||x.fetched_at,jump:true}));
     }else if(indexData)state.issueItems=indexData.issues||[];else if(!state.issueKey)state.issueItems=d.issues||[];
     lastSuccessfulLoad=Date.now();
     // A cached issue tile can outlive the articles behind it (the AI issue
@@ -322,4 +322,3 @@ state.issueKey=initialParams.get('issue')||'';nav();load();
 setInterval(()=>load({silent:true}),600000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&Date.now()-lastSuccessfulLoad>300000)load({silent:true})});
 </script></body></html>
-2
