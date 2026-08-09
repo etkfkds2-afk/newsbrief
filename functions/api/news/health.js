@@ -27,7 +27,7 @@ export async function onRequestGet({ env }) {
          'claude_daily_micro_usd','claude_spend_day')`).all(),
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_summary_attempts f
         JOIN news_articles a ON a.url_key=f.url_key
-        WHERE f.attempts>=24 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
+        WHERE f.attempts>=6 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
       env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all()
     ]);
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
@@ -54,7 +54,10 @@ export async function onRequestGet({ env }) {
       published_time_complete: Number(missingTime?.count || 0) === 0,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
-      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 5,
+      // 임계값 5는 재시도 상한이 24이던 시절 기준이다. 상한이 6이면 같은
+      // 기사가 훨씬 빨리 '소진'으로 잡히므로, 실제 값이 쌓이는 것을 보고 다시
+      // 조일 때까지 알림이 매일 뜨지 않을 만큼 여유를 둔다.
+      summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 15,
       database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
     };
     const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);

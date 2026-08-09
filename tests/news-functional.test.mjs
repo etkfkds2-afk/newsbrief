@@ -439,7 +439,7 @@ test('건강 점검 API는 콘텐츠 경고를 서버 장애 응답과 분리한
           if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
           if (sql.includes("AS baduk")) return { baduk: 4, general: 9 };
           if (sql.includes("TRIM(published_at)=''")) return { count: missing };
-          if (sql.includes('f.attempts>=24')) return { count: 0 };
+          if (sql.includes('f.attempts>=6')) return { count: 0 };
           return {};
         },
         async all() {
@@ -1123,7 +1123,30 @@ test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', asy
   assert.match(workflow, /backfill=1&force_retry=1/);
   assert.match(workflow, /repair=1&force_retry=1/);
   assert.match(collector, /forceRetry \? 1 : 0/);
-  assert.match(collector, /retryAttemptLimit = forceRetry \? 25 : 24/);
+  assert.match(collector, /retryAttemptLimit = forceRetry \? 7 : 6/);
+});
+
+test('재요약 게이트는 유료 호출만 미루고 본문 재수집은 막지 않는다', async () => {
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const path = collector.slice(collector.indexOf('const mayResummarize') - 3000,
+    collector.indexOf("outcome('existing_repair_deferred')"));
+
+  // 게이트가 기사를 잃지 않는 근거 전체가 이 순서에 걸려 있다. 본문 재수집이
+  // 게이트 뒤로 옮겨가면 "본문이 더 잘 긁혀서 성공하는" 유일한 회복 경로가
+  // 같이 막혀, 미룬 기사가 영영 못 살아난다.
+  const fetchAt = path.lastIndexOf('await fetchArticleText');
+  const gateAt = path.indexOf('const mayResummarize');
+  assert.ok(fetchAt >= 0 && gateAt > fetchAt,
+    `본문 재수집(${fetchAt})이 게이트(${gateAt})보다 먼저여야 한다`);
+
+  // 개선된 본문은 요약 성공 여부와 무관하게 저장돼야 다음 시도가 이득을 본다.
+  assert.match(path, /body_text=CASE WHEN \?<>'' THEN \? ELSE body_text END/);
+  // 요약과 품질은 valid일 때만 덮어쓴다 - 미뤄도 기존 요약이 지워지지 않는다.
+  assert.match(path, /summary=CASE WHEN \? THEN \? ELSE summary END/);
+  assert.match(path, /summary_quality=CASE WHEN \? THEN 'full' ELSE summary_quality END/);
+  // 첫 시도(attempts=0, last_attempt 없음)는 통과해야 신규 유입이 안 줄어든다.
+  assert.match(path, /Number\(exists\.summary_attempts \|\| 0\) < retryAttemptLimit/);
+  assert.match(path, /Number\.isFinite\(lastAttemptAt\) && Date\.now\(\) - lastAttemptAt < 20 \* 3600000/);
 });
 
 test('watchdog은 재시도된 헬스 응답에서도 단일 실행 결정을 출력한다', async () => {
