@@ -170,6 +170,28 @@ const POISON_PATTERNS = [
   /(?:\.{3,}|…$)/
 ];
 
+// AI가 요약 대신 프롬프트 자체를 화제로 삼은 응답. 구조 검사로는 절대 걸리지
+// 않는다 - 세 줄이고, 번호가 붙어 있고, 전부 '~니다'로 끝나고, 길이도 따옴표
+// 짝도 맞다. 실제로 아래 응답이 요약으로 저장돼 화면에 노출됐다:
+//
+//   1) 죄송하지만, 제공하신 원문에는 "..."는 제목의 기사 내용이 포함되어 있지 않습니다.
+//   2) 원문은 제목 목록만 있고 해당 기사의 본문이 없어서 요약을 작성할 수 없습니다.
+//   3) 기사 본문을 제공해주시면 정확히 3줄로 요약해드리겠습니다.
+//
+// 판별 기준은 어조다. 기사 요약은 독자에게 말을 걸지 않고("~주시면"),
+// 사과하지 않고, 자기가 받은 원문·본문·제목 목록을 화제로 삼지 않는다.
+// 뉴스 문장에도 나올 수 있는 '제공된' 같은 표현은 일부러 뺐다 - 2인칭 요청형과
+// 짝을 이룬 형태만 잡는다.
+const AI_META_PATTERNS = [
+  /(?:죄송하지만|죄송합니다|유감스럽지만)/,
+  /제공(?:하신|해\s*주신|해\s*주시면|해주시면|해\s*주세요|해주세요)/,
+  /(?:알려|말씀해|보내|공유해|첨부해)\s*주(?:시면|세요)/,
+  /(?:원문|기사\s*본문|본문|기사\s*내용)(?:에는|이|은|을|가|만)?\s*(?:포함되어\s*있지\s*않|제공되지\s*않|없어서|없습니다)/,
+  /요약(?:을|이)?\s*(?:작성할\s*수\s*없|할\s*수\s*없|불가능)/,
+  /요약해\s*드리|요약해드리|도와\s*드리겠|도와드리겠/,
+  /제목\s*목록/
+];
+
 export function validateThreeLineSummary(summary, title = '') {
   if (isRejectedTitle(title)) return false;
   const lines = normalizeText(summary).split('\n').map(stripNumbering).filter(Boolean);
@@ -178,6 +200,7 @@ export function validateThreeLineSummary(summary, title = '') {
   for (const line of lines) {
     if (line.length < LINE_MIN_LENGTH || line.length > LINE_MAX_LENGTH) return false;
     if (POISON_PATTERNS.some(pattern => pattern.test(line)) || isJunkLine(line)) return false;
+    if (AI_META_PATTERNS.some(pattern => pattern.test(line))) return false;
     if (titleKey && isTitleCopy(line, title)) return false;
     if (!/(?:다|니다)[.!]?$/u.test(line)) return false;
     for (const [open, close] of [["'", "'"], ['"', '"'], ['(', ')'], ['[', ']'], ['‘', '’'], ['“', '”']]) {
