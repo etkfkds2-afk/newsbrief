@@ -300,14 +300,13 @@ export async function onRequestGet({ request, env }) {
       EXISTS(SELECT 1 FROM news_popularity npv WHERE npv.url_key=a.url_key)
       OR EXISTS(SELECT 1 FROM news_popular_items pp WHERE pp.title=a.title)
     )`);
-    // A named cached issue already owns an explicit URL-key set. Query those
-    // rows directly instead of loading and validating the entire 150-card
-    // period again merely to return two or three cards. Misc stays on the full
-    // candidate path because it also absorbs ungrouped/invalid singleton rows.
-    const directIssue = issueKeyFilter && !issueKeyFilter.endsWith('|ai:misc')
-      ? cachedIssues?.find(group => group.key === issueKeyFilter)
-      : null;
-    const directKeys = [...new Set(directIssue?.url_keys || [])];
+    // 이슈를 눌렀을 때도 목록과 똑같은 후보 집합에서 출발한다. 예전에는 캐시가
+    // 가진 url_key만 직접 조회하는 지름길이 있었는데, 그 탓에 타일·목록·상세가
+    // 서로 다른 집합을 세어 숫자가 어긋났다. 실측 2026-08-10 'Sh수협은행
+    // 여자바둑최강전': 타일 10건, 목록 카드 2장(관련 9 + 관련 2 = 13건),
+    // 눌러서 들어가면 2건. 지름길이 유사도로 묶인 기사를 아예 못 봤기 때문이다.
+    // 전체 후보를 읽는 만큼 이 요청은 무거워지지만, feedCandidateLimit이 이미
+    // 이슈 클릭을 감안해 폭을 넓혀 두었고 숫자가 맞는 편이 낫다.
     if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
@@ -353,29 +352,8 @@ export async function onRequestGet({ request, env }) {
       ORDER BY ${order}
       LIMIT ?
     `;
-    // D1 rejects statements with more than 100 bound parameters. A long-running
-    // story's cached issue can accumulate far more url_keys than that (a story
-    // covered for weeks can pass 90+ articles), so the direct-key IN clause is
-    // sent in batches instead of one query - otherwise the whole request fails
-    // with SQLITE_ERROR and the issue card looks dead on click.
-    const DIRECT_KEY_BATCH = 90;
-    let resultRows;
-    if (directKeys.length) {
-      resultRows = [];
-      for (let i = 0; i < directKeys.length; i += DIRECT_KEY_BATCH) {
-        const chunk = directKeys.slice(i, i + DIRECT_KEY_BATCH);
-        const chunkResult = await env.DB.prepare(selectSql(`a.url_key IN (${chunk.map(() => '?').join(',')})`))
-          .bind(...bindings, ...chunk, queryLimit).all();
-        resultRows.push(...(chunkResult.results || []));
-      }
-      // Each batch is individually ordered; restore a single date-DESC order
-      // across the merged set so dedup/representative selection below behaves
-      // the same as the unbatched query.
-      resultRows.sort((a, b) => String(b.published_at || b.fetched_at || '').localeCompare(String(a.published_at || a.fetched_at || '')));
-    } else {
-      const result = await env.DB.prepare(selectSql(null)).bind(...bindings, queryLimit).all();
-      resultRows = result.results || [];
-    }
+    const result = await env.DB.prepare(selectSql(null)).bind(...bindings, queryLimit).all();
+    const resultRows = result.results || [];
     // AI 이슈 캐시는 이 요청에서 이미 읽는다(위 cachedIssues). 같은 사건이라고
     // AI가 판단한 기사는 카드도 하나로 접는다. 제목 유사도가 놓치는 표현 차이를
     // AI는 이미 알고 있는데 카드 목록이 그 판단을 쓰지 않아, 한 이슈가 카드
@@ -417,7 +395,15 @@ export async function onRequestGet({ request, env }) {
       // Baduk headlines legitimately repeat player and tournament names. Use a
       // much stricter threshold so separate games are not collapsed together.
       const titleThreshold = category === '바둑' ? 0.86 : 0.64;
-      const summaryThreshold = category === '바둑' ? 0.9 : 0.72;
+      // 요약 첫 줄 문턱은 보고 있는 탭이 아니라 기사 자체의 분류로 나눈다.
+      // 바둑 기사는 요약 문장 구조가 서로 닮아("신진서가 AI와 대국해서…")
+      // 낮추면 다른 대국이 합쳐진다 - 실측 2026-08-10, T=0.45에서 바둑 120장 중
+      // 36건이 묶였고 "[스포츠 속으로] 바둑 AI 카타고"가 "[제49기 SG배 명인전]
+      // 옅은 지점"에 붙는 식의 오판정이 다수였다. 반대로 일반은 안전했다
+      // (138장 중 4건, 태풍 돌핀·민주당 경선·이란 호르무즈 전부 정확).
+      // 바둑 탭에 함께 싣는 사회 기사(기원 사건 보도)도 여기서 일반 문턱을 받는다.
+      const badukItem = item.category === '바둑';
+      const summaryThreshold = badukItem ? 0.9 : 0.45;
       const titleTokens = bigrams(item.title);
       const firstTokens = bigrams(first);
       // 위 두 임계값은 제목이 거의 같을 때만 묶는다. 그래서 같은 보도자료가
@@ -430,7 +416,7 @@ export async function onRequestGet({ request, env }) {
       const itemIssue = issueOf.get(item.url_key) || '';
       const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key))
         || similarTokens(titleTokens, old.titleTokens, titleThreshold)
-        || similarTokens(firstTokens, old.firstTokens, summaryThreshold)
+        || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
         || isSameStory(item.title, old.title));
       if (group) {
         // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그

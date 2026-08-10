@@ -59,12 +59,15 @@ test('오늘 목록 10건과 핵심뉴스 6건을 위해 검증 전 인기 후�
   assert.equal(feedCandidateLimit(10, 'latest', false), 10);
 });
 
-test('이슈 상세는 목록과 같은 후보 수를 쓰고 인기 테이블을 LEFT JOIN하지 않는다', async () => {
+test('이슈 상세는 목록과 같은 후보 집합을 쓰고 인기 테이블을 LEFT JOIN하지 않는다', async () => {
+  // 예전에는 캐시가 가진 url_key만 직접 조회하는 지름길이 있었다. 그 탓에
+  // 타일·목록·상세가 서로 다른 집합을 세어 숫자가 어긋났다. 실측 2026-08-10
+  // 'Sh수협은행 여자바둑최강전': 타일 10건, 목록 카드 2장(합 13건), 상세 2건.
   const env = mockEnv([], [{ key: '일반|ai:0', title: '테스트 이슈', url_keys: ['a', 'b'] }]);
   await onRequestGet({ request: new Request('https://example.com/api/news/articles?limit=150&exclude_baduk=1&issue_key=일반%7Cai%3A0'), env });
   assert.doesNotMatch(env.articleSql, /JOIN news_popularity/);
   assert.doesNotMatch(env.articleSql, /JOIN news_popular_items/);
-  assert.match(env.articleSql, /a\.url_key IN \(\?,\?\)/);
+  assert.doesNotMatch(env.articleSql, /a\.url_key IN/);
 });
 
 test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', async () => {
@@ -270,4 +273,49 @@ test('이슈로 묶은 카드의 대표는 이슈 제목에 가장 가까운 기
   assert.match(data.items[0].title, /카타고/, '이슈 제목에 가까운 기사가 대표가 된다');
   assert.equal(data.items[0].related_count, 1);
   assert.match(data.items[0].related[0].title, /명인전/, '기존 대표는 관련 보도로 내려간다');
+});
+
+test('일반 기사는 요약 첫 줄이 닮으면 묶고 바둑 기사는 묶지 않는다', async () => {
+  // 실측 2026-08-10: 요약 첫 줄 T=0.45가 일반 138장 중 4건을 묶었고 전부
+  // 정확했다(태풍·경선·호르무즈). 같은 문턱을 바둑에 걸면 120장 중 36건이
+  // 묶이는데 명인전 관전기에 무관한 AI 기사가 붙는 오판정이 다수였다.
+  const row = (id, title, category, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category,
+    published_at: '2026-08-09T02:00:00Z', fetched_at: '2026-08-09T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const general = [
+    row(1, '경찰, 바둑 두다 지인 흉기로 살해한 60대 체포', '사회', [
+      '1) 기원에서 바둑을 두던 중 말다툼 끝에 지인을 흉기로 살해한 60대가 붙잡혔다.',
+      '2) 경찰은 전날 오후 신고를 받고 출동해 현장에서 남성을 체포했다고 밝혔다.',
+      '3) 조사에서 그는 말다툼 끝에 범행을 저질렀다고 진술한 것으로 알려졌다.'
+    ].join('\n')),
+    row(2, '“왜 술 마시고 와” 지적에…기원에서 지인 흉기로 살해', '사회', [
+      '1) 기원에서 바둑을 두던 중 말다툼이 벌어져 60대 지인이 흉기에 살해됐다.',
+      '2) 경찰은 신고를 받고 출동해 현장에서 60대 남성을 붙잡았다고 전했다.',
+      '3) 술을 마시고 왔다는 지적이 다툼의 발단이 된 것으로 조사됐다.'
+    ].join('\n'))
+  ];
+  const merged = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(general)
+  })).json();
+  assert.equal(merged.items.length, 1, '일반 기사는 요약이 닮으면 묶인다');
+
+  const baduk = [
+    row(3, '[제49기 SG배 한국일보 명인전] 옅은 지점', '바둑', [
+      '1) 제49기 SG배 명인전 대국에서 신진서 9단이 좌하귀 접전으로 앞서 나갔다.',
+      '2) 상대는 두터움을 노렸으나 신진서 9단의 삭감이 제때 들어가 흐름이 갈렸다.',
+      '3) 종반 끝내기에서 반집을 남긴 신진서 9단이 승부를 가져갔다.'
+    ].join('\n')),
+    row(4, '[스포츠 속으로] 바둑 AI 카타고는 무엇을 남겼나', '바둑', [
+      '1) 인공지능 카타고가 바둑계에 남긴 변화가 무엇인지 짚는 칼럼이다.',
+      '2) 필자는 인공지능 도입 이후 포석 연구 방식이 완전히 달라졌다고 봤다.',
+      '3) 기력 향상의 도구로 삼되 사람의 판단을 놓지 말자는 제언으로 맺는다.'
+    ].join('\n'))
+  ];
+  const kept = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(baduk)
+  })).json();
+  assert.equal(kept.items.length, 2, '바둑 기사는 요약이 닮아도 따로 둔다');
 });
