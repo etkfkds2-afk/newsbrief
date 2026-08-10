@@ -460,7 +460,26 @@ export async function onRequestGet({ request, env }) {
       // isSameStory를 더한다. 수집 단계에서 유료 요약을 아끼는 판정과 같은 기준이라
       // 화면과 수집이 따로 놀지 않는다.
       const itemIssue = issueOf.get(item.url_key) || '';
-      const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key))
+      // AI가 같은 이슈라고 해도 서로 전혀 안 닮은 기사는 카드로 접지 않는다.
+      // 이슈 타일에는 그대로 함께 남고 카드만 따로 선다. AI 분류는 돌릴 때마다
+      // 결과가 달라서 한 번 엉뚱하게 묶이면 화면이 통째로 따라간다. 2026-08-10에
+      // 관측한 것만 네 번이다 - 평택시가 단양군에, NHN 한돌이 신진서 카타고에,
+      // 영종이 단양군에, 부산시장배가 영종에 들어갔다. 프롬프트에 "지역·주최가
+      // 다른 대회는 묶지 않는다"를 넣은 뒤에도 마지막 것이 나왔다.
+      //
+      // 문턱 0.25는 실측으로 잡았다. 0.15로는 영종국제도시배와 부산시장배가
+      // 0.222로 통과했다 - 둘 다 "전국바둑대회"가 들어가 유사도가 부풀려진다.
+      // 셋 중 하나만 넘으면 통과시킨다. 제대로 묶인 쌍은 제목이 0.25를 못 넘어도
+      // 공유 단어가 둘 이상이었다(알파고 이세돌 기사와 카타고 대국 기사가 신진서·AI).
+      //
+      // 요약 경로는 바둑 기사에 열지 않는다. 바둑 요약은 죄다 "신진서가 AI와
+      // 대국해서…" 구조라 서로 닮아(T=0.45에서 120장 중 36건 오판정) 그 통로로
+      // 샌다. 실제로 NHN 한돌 6건이 그렇게 남았다.
+      const issueCollapseAllowed = old =>
+        similarTokens(titleTokens, old.titleTokens, 0.25)
+        || sharesKeywordsPrepared(story, old.story, 2)
+        || (!badukItem && old.category !== '바둑' && similarTokens(firstTokens, old.firstTokens, 0.3));
+      const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key) && issueCollapseAllowed(old))
         || similarTokens(titleTokens, old.titleTokens, titleThreshold)
         || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
         // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다

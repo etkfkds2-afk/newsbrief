@@ -254,7 +254,7 @@ test('이슈로 묶은 카드의 대표는 이슈 제목에 가장 가까운 기
     summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
   });
   const rows = [
-    row(1, '[제49기 SG배 한국일보 명인전] 옅은 지점', [
+    row(1, '[포토타임] 신진서 9단, 카타고와 최종국 대국', [
       '1) 제49기 SG배 명인전 본선 대국에서 신진서 9단이 좌하귀 접전으로 앞섰다.',
       '2) 상대는 두터움을 살리려 했으나 신진서의 삭감이 제때 들어갔다.',
       '3) 종반 끝내기에서 반집을 남긴 신진서 9단이 승부를 가져갔다.'
@@ -270,9 +270,9 @@ test('이슈로 묶은 카드의 대표는 이슈 제목에 가장 가까운 기
     request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows, cached)
   })).json();
   assert.equal(data.items.length, 1);
-  assert.match(data.items[0].title, /카타고/, '이슈 제목에 가까운 기사가 대표가 된다');
+  assert.match(data.items[0].title, /꺾고/, '이슈 제목에 가까운 기사가 대표가 된다');
   assert.equal(data.items[0].related_count, 1);
-  assert.match(data.items[0].related[0].title, /명인전/, '기존 대표는 관련 보도로 내려간다');
+  assert.match(data.items[0].related[0].title, /포토타임/, '기존 대표는 관련 보도로 내려간다');
 });
 
 test('일반 기사는 요약 첫 줄이 닮으면 묶고 바둑 기사는 묶지 않는다', async () => {
