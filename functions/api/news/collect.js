@@ -8,6 +8,7 @@ import {
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
+import { createStoryIndex } from '../../_lib/news-dedup.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
 import {
@@ -64,6 +65,10 @@ const SCHEDULED_GOOGLE_DISCOVERIES = 6;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 12;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
+
+// 같은 이야기인지 견줘 볼 기간. 길게 잡으면 해마다 열리는 같은 대회의 올해 기사가
+// 작년 기사와 묶인다. 보도자료 재탕은 며칠 안에 몰려 들어오므로 이 정도면 잡힌다.
+const STORY_INDEX_WINDOW_DAYS = 7;
 
 const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북|전남|경북|경남|강원|제주|부산|울산|경기|인천).*(?:뉴스|일보|신문|투데이)|(?:중부|제주|경인|영남|호남)(?:매일|일보|신문)/i;
 
@@ -139,12 +144,19 @@ async function collect(env, {
     const text = String(value || '');
     return Date.parse(/Z$|[+-]\d\d:\d\d$/.test(text) ? text : `${text.replace(' ', 'T')}Z`);
   };
+  // 이미 제대로 요약해 둔 이야기 목록. 같은 보도자료가 매체만 바꿔 다시 들어오면
+  // 유료 요약을 또 쓰지 않기 위해 본다. 요약이 성립한 행만 넣는 것이 중요하다.
+  // 요약에 실패해 둔 기사까지 넣으면, 다음에 들어온 같은 이야기가 제대로 요약될
+  // 기회까지 막힌다.
+  const recentStoryStart = now.valueOf() - STORY_INDEX_WINDOW_DAYS * 86400000;
+  const storyIndex = createStoryIndex();
   for (const row of publishedRows.results || []) {
     if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
     const bucket = row.category === '바둑' ? 'baduk' : 'general';
     const timestamp = storedTime(row.published_at || row.fetched_at);
     publicationCounts[bucket].monthly += 1;
     if (timestamp >= dayStart) publicationCounts[bucket].daily += 1;
+    if (timestamp >= recentStoryStart) storyIndex.add(row.title);
   }
   const popularityTargetStart = popularityCandidates.length
     ? Number(popularityCandidates[0].popularityDate) - 9 * 3600000
@@ -170,10 +182,13 @@ async function collect(env, {
   diagnostics.home_display_limits = { baduk: 30, general: 10 };
   diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
   if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
-  const summarize = async (payload, detail, purpose = 'new') => {
+  const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
     const trace = detail || {};
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
-    if (sourceLength < 300) {
+    // freeOnly: 이미 같은 이야기를 요약해 둔 기사다. 카드로 세워질 일이 없으므로
+    // 무료 추출 요약이면 충분하다. 호출부는 이 결과가 검증을 통과하지 못하면
+    // 유료 경로로 다시 부른다 - 중복 판정이 틀렸더라도 기사를 잃지 않기 위해서다.
+    if (freeOnly || sourceLength < 300) {
       const extractive = await makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
       if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
       return extractive;
@@ -707,8 +722,30 @@ async function collect(env, {
     const finalCategory = category === '바둑'
       ? classify(category, title, body || rawSummary)
       : (article.sectionCategory || classify(category, title, body || rawSummary));
-    const summary = await summarize({ title, rawSummary, body, category: finalCategory });
+    const payload = { title, rawSummary, body, category: finalCategory };
+    // 하나의 보도자료가 매체만 바꿔 10건 넘게 들어오면 예전에는 그 전부가 유료
+    // 요약을 받았다. 실측(2026-08-10): 빙그레 부라보콘 대회 기사 14건, 유료 호출
+    // 약 42회, 월 예산의 3%. 화면에서는 어차피 한 이슈로 묶여 관련 보도로 보인다.
+    const duplicateOf = storyIndex.match(title);
+    let summary = '';
+    if (duplicateOf) {
+      summary = await summarize(payload, undefined, 'new', { freeOnly: true });
+      if (validPublishedSummary(summary, title, finalCategory)) {
+        diagnostics.story_duplicate_free = Number(diagnostics.story_duplicate_free || 0) + 1;
+        (diagnostics.story_duplicate_samples ||= []).length < 2
+          && diagnostics.story_duplicate_samples.push(`${title.slice(0, 28)} <- ${duplicateOf.slice(0, 28)}`);
+      } else {
+        // 중복 판정이 틀렸을 수도, 본문이 추출 요약에 안 맞을 수도 있다. 어느
+        // 쪽이든 기사를 잃지 않도록 예전과 똑같은 유료 경로로 되돌린다. 이 값이
+        // 계속 크면 판정이 아니라 추출 요약 쪽을 봐야 한다.
+        summary = '';
+        diagnostics.story_duplicate_paid_fallback = Number(diagnostics.story_duplicate_paid_fallback || 0) + 1;
+      }
+    }
+    if (!summary) summary = await summarize(payload);
     const validSummary = validPublishedSummary(summary, title, finalCategory);
+    // 같은 실행에 같은 보도자료가 몰려 들어와도 첫 건만 유료 요약을 받게 한다.
+    if (validSummary) storyIndex.add(title);
 
     await env.DB.prepare(`
       INSERT INTO news_articles
