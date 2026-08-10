@@ -233,7 +233,12 @@ export async function onRequestPost({ request, env }) {
       },
       newArticles,
       existingIssues,
-      { allowStandaloneEvents: category === '바둑', highAccuracy: resetIssues || regroupIssues }
+      // 항상 Haiku로 돈다. 예전에는 reset/regroup이 정확도 옵션을 켜 Sonnet으로
+      // 수동 재분류 한 번이 Sonnet(입력 $3 / 출력 $15 per M, max_tokens 16000)으로
+      // 돌았다. 2026-08-10 실측: 재분류 두 번에 실제 $0.91을 썼는데 예산에는
+      // $0.041만 기록됐다. 월 목표가 $4.75인 프로젝트에서 한 번에 5분의 1이다.
+      // 정확도가 정말 필요하면 그때 별도 입력으로 되살리되 기본값은 끈다.
+      { allowStandaloneEvents: category === '바둑' }
     );
     if (classification.provider === 'anthropic-failed' && env?.AI) {
       cloudflare = await reserveCloudflareCall(env);

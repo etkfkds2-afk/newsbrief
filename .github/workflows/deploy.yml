@@ -392,7 +392,12 @@ jobs:
             # 카테고리 기사를 통째로 다시 보내므로 프롬프트가 훨씬 크다. 실측
             # 2026-08-10: 일반 regroup이 120초에서 세 번 연속 타임아웃으로 실패했다.
             # 수집 호출과 같은 값으로 맞춘다.
-            curl --fail-with-body -sS --retry 2 --max-time 240 \
+            # 재시도하지 않는다. 타임아웃은 호출이 실패했다는 뜻이 아니라 응답이
+            # 늦다는 뜻일 뿐이고, Worker 쪽 AI 호출은 그대로 끝까지 돌아간다.
+            # 그 상태에서 재시도하면 같은 분류를 돈 내고 여러 번 사면서, 응답을
+            # 못 받은 실행은 recordClaudeUsage까지 못 가 예산에 기록도 안 된다.
+            # 2026-08-10 실측: 재시도 3회로 실제 $0.91을 쓰고 $0.041만 기록됐다.
+            curl --fail-with-body -sS --no-keepalive --max-time 240 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
               "https://newsbrief-etkfkds2.pages.dev/api/news/classify-issues?category=${encoded}${reset_query}" \

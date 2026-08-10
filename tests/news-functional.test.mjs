@@ -271,12 +271,17 @@ test('수동 이슈 재분류는 기존 캐시를 비우는 복구 모드를 제
   assert.match(workflow, /reset_issues:/);
 });
 
-test('전체 이슈 복구는 Sonnet을 쓰고 일상 증분 분류는 Haiku를 유지한다', async () => {
+test('이슈 분류에 Sonnet 경로가 남아 있지 않다', async () => {
+  // 예전에는 reset/regroup을 Sonnet으로 돌렸다. 2026-08-10에 그 경로로 수동
+  // 재분류 한 번이 실제 $0.91을 썼다. 월 목표가 $4.75인데 한 번에 5분의 1이다.
+  // 게다가 응답이 늦어 재시도된 실행은 recordClaudeUsage까지 못 가 예산 기록에도
+  // 안 남았다. 이슈 묶기는 Haiku로 충분하다.
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
   const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
-  assert.match(classifier, /HIGH_ACCURACY_CLASSIFY_MODEL = 'claude-sonnet-5'/);
-  assert.match(classifier, /highAccuracy \? HIGH_ACCURACY_CLASSIFY_MODEL : CLASSIFY_MODEL/);
-  assert.match(endpoint, /highAccuracy: resetIssues \|\| regroupIssues/);
+  assert.doesNotMatch(classifier, /claude-sonnet-5/);
+  assert.doesNotMatch(classifier, /HIGH_ACCURACY/);
+  assert.doesNotMatch(classifier, /highAccuracy/);
+  assert.doesNotMatch(endpoint, /highAccuracy/);
 });
 
 test('이슈 재분류 전 캐시 백업과 직전 상태 복원 경로를 제공한다', async () => {
@@ -1498,3 +1503,4 @@ test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻
   assert.match(classify, /확신이 없으면 묶지 않는다/);
   assert.match(classify, /다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다/);
 });
+
