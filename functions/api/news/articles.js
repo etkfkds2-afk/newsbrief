@@ -375,6 +375,20 @@ export async function onRequestGet({ request, env }) {
       const result = await env.DB.prepare(selectSql(null)).bind(...bindings, queryLimit).all();
       resultRows = result.results || [];
     }
+    // AI 이슈 캐시는 이 요청에서 이미 읽는다(위 cachedIssues). 같은 사건이라고
+    // AI가 판단한 기사는 카드도 하나로 접는다. 제목 유사도가 놓치는 표현 차이를
+    // AI는 이미 알고 있는데 카드 목록이 그 판단을 쓰지 않아, 한 이슈가 카드
+    // 여러 장으로 흩어졌다. 실측 2026-08-10: 부라보콘 이슈 22건이 카드 4장으로
+    // 떴고 그중 3장은 관련 보도 0건인 낱장이었다. 헤드라인과 일간 이슈 키워드가
+    // 모두 카드에서 파생되므로 그쪽 중복도 여기서 같이 사라진다. 추가 비용은 없다.
+    //
+    // 기타 묶음은 반드시 제외한다. 서로 무관한 낱개 기사를 모아두는 자리라
+    // 접으면 관계없는 기사가 한 장으로 뭉개진다.
+    const issueOf = new Map();
+    for (const group of cachedIssues || []) {
+      if (String(group?.key || '').endsWith('|ai:misc') || String(group?.title || '') === '기타') continue;
+      for (const key of group?.url_keys || []) issueOf.set(key, group.key);
+    }
     const accepted = [];
     for (const item of resultRows) {
       item.summary = normalizeText(String(item.summary || '').replace(/([1-3][.)])\s*&#10;/gi, '$1 '));
@@ -410,7 +424,9 @@ export async function onRequestGet({ request, env }) {
       // (0.86은 그래서 높게 잡혀 있다) 대신 연재 회차·일련번호 가드를 갖춘
       // isSameStory를 더한다. 수집 단계에서 유료 요약을 아끼는 판정과 같은 기준이라
       // 화면과 수집이 따로 놀지 않는다.
-      const group = accepted.find(old => similarTokens(titleTokens, old.titleTokens, titleThreshold)
+      const itemIssue = issueOf.get(item.url_key) || '';
+      const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key))
+        || similarTokens(titleTokens, old.titleTokens, titleThreshold)
         || similarTokens(firstTokens, old.firstTokens, summaryThreshold)
         || isSameStory(item.title, old.title));
       if (group) {

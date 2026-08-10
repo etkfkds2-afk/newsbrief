@@ -175,3 +175,67 @@ test('이슈 판정과 건수는 카드가 아니라 관련 보도까지 센다'
   assert.ok(issue, '카드가 1장이어도 보도가 2건이면 이슈로 남아야 한다');
   assert.equal(issue.count, 2, '타일 건수도 접힌 보도를 포함한다');
 });
+
+test('AI가 같은 이슈로 묶은 기사는 카드도 하나로 접는다', async () => {
+  // 제목 표현이 달라 규칙이 못 묶는 것을 AI는 이미 알고 있다. 실측 2026-08-10:
+  // 부라보콘 이슈 22건이 카드 4장으로 떴고 3장은 관련 보도 0건인 낱장이었다.
+  // 요약도 서로 달라야 한다. 같은 요약을 주면 요약 유사도로 묶여서 정작
+  // 보려던 이슈 캐시 경로를 검사하지 못한다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, "빙그레, '제3회 부라보콘 전국 어린이 바둑 대회' 개최", [
+      '1) 빙그레가 제3회 부라보콘 전국 어린이 바둑 대회를 연다고 밝혔다.',
+      '2) 대회는 전국 다섯 개 권역에서 예선을 치른 뒤 본선을 진행한다.',
+      '3) 우승자에게는 국내 어린이 바둑 대회 최고 수준의 상금이 걸렸다.'
+    ].join('\n')),
+    row(2, '빙그레, 바둑으로 어린이·가족 고객 접점 확대…브랜드 마케팅 강화', [
+      '1) 빙그레가 어린이와 가족을 겨냥한 브랜드 마케팅을 넓히고 있다.',
+      '2) 회사는 스포츠 후원과 문화 행사로 접점을 만드는 전략을 택했다.',
+      '3) 업계는 장기 고객을 확보하려는 시도로 이번 행보를 해석했다.'
+    ].join('\n'))
+  ];
+  // 규칙만으로는 안 묶인다는 것부터 확인한다.
+  const noCache = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows)
+  })).json();
+  assert.equal(noCache.items.length, 2);
+  const cached = [{ key: '바둑|ai:9', title: '부라보콘 전국 어린이 바둑대회', url_keys: ['k1', 'k2'] }];
+  const withCache = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(withCache.items.length, 1, 'AI가 같은 이슈로 본 것은 한 장으로 접힌다');
+  assert.equal(withCache.items[0].related_count, 1);
+});
+
+test('기타 묶음은 카드로 접지 않는다', async () => {
+  // 기타는 서로 무관한 낱개 기사를 모아두는 자리다. 접으면 관계없는 기사가
+  // 한 장으로 뭉개진다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, '신진서, 란커배 32강에서 중국 기사 꺾고 16강 진출', [
+      '1) 신진서 9단이 란커배 32강에서 중국 기사를 꺾고 16강에 올랐다.',
+      '2) 초반 포석에서 앞선 뒤 중반 전투에서 격차를 벌리며 승부를 갈랐다.',
+      '3) 한국은 이번 라운드에서 여덟 명 가운데 여섯 명이 승리를 거뒀다.'
+    ].join('\n')),
+    row(2, '한국기원, 하반기 승단대회 일정 확정 발표', [
+      '1) 한국기원이 올해 하반기 승단대회 일정을 확정해 공지했다.',
+      '2) 참가 신청은 다음 달 초까지 온라인으로 받는다고 안내했다.',
+      '3) 대회는 서울 한국기원 대국실에서 주말마다 순차로 열린다.'
+    ].join('\n'))
+  ];
+  const cached = [{ key: '바둑|ai:misc', title: '기타', url_keys: ['k1', 'k2'] }];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(data.items.length, 2);
+});
