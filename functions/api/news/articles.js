@@ -3,6 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
+import { isSameStory } from '../../_lib/news-dedup.js';
 import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
 } from '../../_lib/news-blocklist.js';
@@ -372,8 +373,16 @@ export async function onRequestGet({ request, env }) {
       const summaryThreshold = category === '바둑' ? 0.9 : 0.72;
       const titleTokens = bigrams(item.title);
       const firstTokens = bigrams(first);
+      // 위 두 임계값은 제목이 거의 같을 때만 묶는다. 그래서 같은 보도자료가
+      // 매체마다 조금씩 다르게 쓰이면 전부 따로 뜬다. 실측(2026-08-10): 빙그레
+      // 부라보콘 대회 기사 14건이 바둑 탭에 카드 14개로 떴고 그중 12건은
+      // related_count가 0이었다. 임계값을 그냥 낮추면 다른 대국 결과가 합쳐지므로
+      // (0.86은 그래서 높게 잡혀 있다) 대신 연재 회차·일련번호 가드를 갖춘
+      // isSameStory를 더한다. 수집 단계에서 유료 요약을 아끼는 판정과 같은 기준이라
+      // 화면과 수집이 따로 놀지 않는다.
       const group = accepted.find(old => similarTokens(titleTokens, old.titleTokens, titleThreshold)
-        || similarTokens(firstTokens, old.firstTokens, summaryThreshold));
+        || similarTokens(firstTokens, old.firstTokens, summaryThreshold)
+        || isSameStory(item.title, old.title));
       if (group) {
         if (!group.related.some(old => old.url_key === item.url_key)) {
           group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });

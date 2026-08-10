@@ -74,3 +74,51 @@ test('도메인 출처는 사람이 읽는 언론사명으로 변환한다', asy
   const data = await response.json();
   assert.equal(data.items[0].outlet, '연합뉴스');
 });
+
+test('같은 보도자료가 매체만 바뀐 것은 카드 하나로 접고 관련 보도로 남긴다', async () => {
+  // 2026-08-10 운영 데이터: 빙그레 부라보콘 대회 기사 14건이 바둑 탭에 카드
+  // 14개로 떴다. 제목 임계값 0.86은 다른 대국이 합쳐지는 것을 막으려 높게
+  // 잡혀 있어 이런 표현 차이를 못 잡는다.
+  const row = (id, title) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const env = mockEnv([
+    row(1, "빙그레, '제3회 부라보콘 전국 어린이 바둑 대회' 개최"),
+    row(2, "'제3회 부라보콘 전국 어린이 바둑 대회' 개최...빙그레 후원")
+  ]);
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env
+  })).json();
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].related_count, 1);
+});
+
+test('서로 다른 대국 결과는 접지 않는다', async () => {
+  // 요약도 서로 달라야 한다. 같은 요약을 주면 제목이 아니라 요약 유사도로
+  // 묶여서, 정작 보려던 제목 판정을 검사하지 못한다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-09T02:00:00Z', fetched_at: '2026-08-09T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const env = mockEnv([
+    row(1, '부광 시린메드, 영천 3-0 완파하며 4연패 탈출', [
+      '1) 부광 시린메드가 영천을 3대 0으로 완파하며 4연패에서 벗어났다.',
+      '2) 선봉으로 나선 김채영 9단이 초반부터 주도권을 잡고 상대를 제압했다.',
+      '3) 이번 승리로 부광 시린메드는 여자바둑리그 순위를 한 계단 끌어올렸다.'
+    ].join('\n')),
+    row(2, 'OK 만세보령, 여수 꺾고 3연패 탈출', [
+      '1) OK 만세보령이 여수를 꺾고 이어지던 3연패 사슬을 끊어냈다.',
+      '2) 주장 대결에 나선 오유진 9단이 끝내기에서 앞서며 팀 승리를 이끌었다.',
+      '3) OK 만세보령은 이번 결과로 여자바둑리그 중위권 경쟁에 다시 합류했다.'
+    ].join('\n'))
+  ]);
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env
+  })).json();
+  assert.equal(data.items.length, 2);
+});
