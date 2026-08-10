@@ -124,7 +124,7 @@ async function blockAiForToday(env, diagnostics) {
 
 async function collect(env, {
   backfill = false, repair = false, forceRetry = false, generalBoost = false,
-  generalOnly = false, qualityRepairIds = [], googleDiscoveries = [], popularityCandidates = [], popularityOffset = 0
+  generalOnly = false, badukOnly = false, qualityRepairIds = [], googleDiscoveries = [], popularityCandidates = [], popularityOffset = 0
 } = {}) {
   const diagnostics = { mode: backfill ? 'backfill' : 'scheduled', retry_attempted: 0, retry_repaired: 0, samples: [] };
   const now = new Date();
@@ -316,11 +316,12 @@ async function collect(env, {
     LEFT JOIN news_summary_attempts f ON f.url_key=a.url_key
     WHERE a.summary_quality='none' AND length(a.body_text)>=300 AND COALESCE(f.attempts,0)<?
       AND (?=0 OR a.category<>'바둑')
+      AND (?=0 OR a.category='바둑')
       AND (?=0 OR instr(','||?||',', ','||a.id||',')>0)
       AND (? OR f.last_attempt IS NULL OR f.last_attempt < datetime('now','-20 hours'))
     ORDER BY CASE WHEN a.category='바둑' THEN 0 ELSE 1 END,
       COALESCE(f.attempts,0), COALESCE(f.last_attempt,'1970-01-01'), length(a.body_text) DESC LIMIT ?`)
-    .bind(retryAttemptLimit, generalOnly ? 1 : 0, qualityRepairIds.length ? 1 : 0,
+    .bind(retryAttemptLimit, generalOnly ? 1 : 0, badukOnly ? 1 : 0, qualityRepairIds.length ? 1 : 0,
       qualityRepairIds.join(','), forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
@@ -367,6 +368,7 @@ async function collect(env, {
   const generalSearches = SEARCHES.filter(([category]) => category !== '바둑');
   const selectedSearches = popularityCandidates.length ? [] : backfill
     ? SEARCHES.filter(([category]) => category === '바둑')
+    : badukOnly ? [SEARCHES[0]]
     : [SEARCHES[0], generalSearches[slot % generalSearches.length], generalSearches[(slot + 1) % generalSearches.length]];
   if (!popularityCandidates.length && !backfill) {
     const official = await koreanBadukLatest();
@@ -431,7 +433,10 @@ async function collect(env, {
   const recentGeneral = backfill ? null : await env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
     WHERE category<>'바둑' AND summary_quality='full'
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first();
-  const generalBelowDailyGoal = backfill ? false : Number(recentGeneral?.count || 0) < 10;
+  // 이 게이트는 일반이 뒤처질 때 바둑 전용 해석에 쓰이는 subrequest를 아끼려고
+  // 있다. 바둑 전용 실행에서는 아낄 일반 작업이 아예 없으므로 걸면 안 된다.
+  // 걸어두면 바둑만 돌리는 호출이 정작 바둑 후보를 하나도 못 만든다.
+  const generalBelowDailyGoal = backfill || badukOnly ? false : Number(recentGeneral?.count || 0) < 10;
   // Google News is discovery-only: resolve each headline through the licensed
   // Naver API, then fetch and validate the real article like every other item.
   // Never expose a Google wrapper or its short RSS description as a summary.
@@ -518,7 +523,10 @@ async function collect(env, {
   } else if (!backfill) {
     diagnostics.google_fallback_skipped = true;
   }
-  if (!popularityCandidates.length && !backfill) try {
+  // 인기뉴스는 전부 일반이다. 순위 하나를 실제 기사로 바꾸는 데 subrequest가
+  // 최대 2회 들어가므로, 바둑 전용 실행에서 이걸 돌리면 정작 바둑 본문을 가져올
+  // 예산이 남지 않는다. 이 호출을 따로 떼어낸 이유 자체가 그것이다.
+  if (!popularityCandidates.length && !backfill && !badukOnly) try {
     const allPopular = await collectPopularity(slot);
     // Resolving each ranked headline costs up to 2 subrequests (title search
     // + fallback search). Resolving all 20 ate most of a run's Cloudflare
@@ -820,7 +828,8 @@ async function collect(env, {
     ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
     : (backfill ? uniqueCandidates.slice(0, 8) : [
         ...uniqueCandidates.filter(candidate => candidate.category === '바둑').slice(0, SCHEDULED_BADUK_CANDIDATES),
-        ...uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_GENERAL_CANDIDATES)
+        ...(badukOnly ? []
+          : uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_GENERAL_CANDIDATES))
       ]);
   diagnostics.general_recent_publishable = Number(recentGeneral?.count || 0);
   diagnostics.general_daily_goal = 10;
@@ -847,10 +856,18 @@ async function collect(env, {
   // missing selector, an exception thrown before those checks ever ran. Baduk
   // was already hitting its daily goal even starved of leftover budget, so
   // give general first claim on it instead.
-  for (const row of generalRetries) await retrySummary(row);
-  for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
+  // 2026-08-10: 위 순서가 이제 바둑을 굶기고 있었다. 실측 - 바둑 본문 실패 7건 중
+  // 6건이 "Too many subrequests"였고, 정작 일반은 발행 가능한 후보가 22건이나
+  // 남아돌았다. 순서를 되돌리면 이번엔 일반이 굶으므로(그래서 이 순서가 됐다)
+  // 대신 바둑 전용 호출(badukOnly)을 따로 둔다. Worker 호출마다 subrequest 예산이
+  // 새로 주어지므로, 바둑은 일반과 경쟁하지 않는 자기 몫의 예산을 갖게 된다.
+  if (!badukOnly) {
+    for (const row of generalRetries) await retrySummary(row);
+    for (const candidate of generalCandidates) inserted += await processCandidate(candidate);
+  }
   for (const row of badukRetries) await retrySummary(row);
   for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
+  diagnostics.baduk_only = badukOnly;
   diagnostics.publish_counts_after = publicationCounts;
   if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;
   return { inserted, diagnostics };
@@ -953,7 +970,8 @@ export async function onRequestPost({ request, env }) {
       if ((request.headers.get('content-type') || '').includes('application/json')) payload = await request.json();
     } catch {}
     const googleDiscoveries = Array.isArray(payload?.googleDiscoveries) ? payload.googleDiscoveries : [];
-    const result = await collect(env, { backfill, repair, forceRetry, generalBoost, googleDiscoveries });
+    const badukOnly = requestUrl.searchParams.get('baduk_only') === '1';
+    const result = await collect(env, { backfill, repair, forceRetry, generalBoost, badukOnly, googleDiscoveries });
     result.diagnostics.mode = runSource;
     const warnings = Object.entries(result.diagnostics)
       .filter(([key, value]) => /_error$/.test(key) && value)

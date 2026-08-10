@@ -1464,3 +1464,21 @@ test('보조 공급자 장애는 신규 등록 여부와 무관하게 경고만 
   assert.match(script, /::warning::/);
   assert.doesNotMatch(script, /process\.exitCode = 2/);
 });
+
+test('바둑 전용 수집은 일반 작업을 건너뛰고 자기 subrequest 예산을 쓴다', async () => {
+  // 일반을 먼저 처리하는 순서 자체는 옳다(그 전에는 바둑이 예산을 다 써서 일반이
+  // 굶었다). 다만 이제 반대로 바둑이 남은 것만 받게 됐으므로 - 실측 2026-08-10,
+  // 바둑 본문 실패 7건 중 6건이 "Too many subrequests" - 순서를 뒤집는 대신
+  // 바둑에 자기 호출을 준다. 호출마다 예산이 새로 주어지는 것이 요점이다.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  assert.match(collector, /badukOnly = false/);
+  assert.match(collector, /baduk_only'\) === '1'/);
+  // 일반 후보·재요약 루프를 건너뛴다.
+  assert.match(collector, /if \(!badukOnly\) \{[\s\S]{0,240}generalCandidates\) inserted/);
+  // 인기뉴스 해석은 전부 일반이고 순위당 subrequest를 2회까지 쓴다.
+  assert.match(collector, /!backfill && !badukOnly\) try \{/);
+  // 일반이 뒤처졌다는 이유로 바둑 전용 실행의 구글 해석까지 막으면 안 된다.
+  assert.match(collector, /backfill \|\| badukOnly \? false/);
+  assert.match(workflow, /baduk_only=1/);
+});

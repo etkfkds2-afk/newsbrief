@@ -277,6 +277,19 @@ jobs:
               "$endpoint"
             sleep 3
           done
+          # 바둑 전용 호출. 위 호출들은 일반을 먼저 처리하고 남은 subrequest로
+          # 바둑 본문을 가져오는데 그 예산이 매번 바닥났다 (실측 2026-08-10:
+          # 바둑 본문 실패 7건 중 6건이 "Too many subrequests", 같은 실행에서
+          # 일반은 발행 가능한 후보가 22건 남아돌았다). 순서를 되돌리면 이번엔
+          # 일반이 굶으므로 - 지금 순서가 그래서 생겼다 - 바둑에 자기 호출을 준다.
+          # 호출마다 subrequest 예산이 새로 주어지는 것이 이 방식이 통하는 이유다.
+          if [ "${{ inputs.backfill }}" != "true" ]; then
+            curl --fail-with-body --retry 3 --max-time 240 \
+              -X POST \
+              -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/collect?source=manual&baduk_only=1"
+            sleep 3
+          fi
           if [ "${{ inputs.backfill }}" = "true" ]; then
             for i in $(seq 1 10); do
               curl --fail-with-body --retry 3 --max-time 240 \
