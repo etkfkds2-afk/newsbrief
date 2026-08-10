@@ -399,6 +399,15 @@ export async function onRequestGet({ request, env }) {
       issueTitleOf.set(group.key, group.title);
       for (const key of group?.url_keys || []) issueOf.set(key, group.key);
     }
+    // 관련 보도에 같은 제목을 두 번 싣지 않는다. 대표 기사와 같은 제목도 뺀다.
+    const relatedKey = value => String(value || '').replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+    const addRelated = (group, item) => {
+      const key = relatedKey(item.title);
+      if (!key || key === relatedKey(group.title)) return;
+      if (group.related.some(old => old.url_key === item.url_key || relatedKey(old.title) === key)) return;
+      group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });
+      group.related_count = group.related.length;
+    };
     const accepted = [];
     for (const item of resultRows) {
       item.summary = normalizeText(String(item.summary || '').replace(/([1-3][.)])\s*&#10;/gi, '$1 '));
@@ -465,15 +474,17 @@ export async function onRequestGet({ request, env }) {
           ? String(issueTitleOf.get(itemIssue) || '') : '';
         if (issueTitle && titleSimilarity(item.title, issueTitle) > titleSimilarity(group.title, issueTitle)) {
           const demoted = { url_key: group.url_key, url: group.url, title: group.title, outlet: group.outlet };
-          const related = group.related.filter(old => old.url_key !== item.url_key);
-          related.push(demoted);
+          const related = group.related.filter(old => old.url_key !== item.url_key
+            && relatedKey(old.title) !== relatedKey(item.title));
           Object.assign(group, item, { first, titleTokens, firstTokens, story, related, related_count: related.length });
+          addRelated(group, demoted);
           continue;
         }
-        if (!group.related.some(old => old.url_key === item.url_key)) {
-          group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });
-          group.related_count = group.related.length;
-        }
+        // url_key만 보면 같은 기사가 주소 끝 숫자만 달라 두 번 저장된 경우를
+        // 못 거른다. 실측 2026-08-10: 관련 보도 184건 중 20건이 제목이 똑같은
+        // 중복이었다("빙그레, 제3회 부라보콘 전국 어린이 바둑 대회 개최"가 다섯
+        // 번). 대표와 같은 제목이 관련에 또 실리는 경우도 8건 있었다.
+        addRelated(group, item);
         continue;
       }
       accepted.push({ ...item, first, titleTokens, firstTokens, story, related: [], related_count: 0 });

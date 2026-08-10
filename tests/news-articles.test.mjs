@@ -338,3 +338,22 @@ test('읽을 때도 같은 대회로 쪼개진 이슈를 합치고 기타는 건
   // 기타는 합치지 않는다.
   assert.ok(merged.some(g => g.key.endsWith('|ai:misc')));
 });
+
+test('관련 보도에 같은 제목을 두 번 싣지 않는다', async () => {
+  // 같은 기사가 주소 끝 숫자만 달라 두 번 저장되는 일이 있다. url_key만 보면
+  // 못 거른다. 실측 2026-08-10: 관련 보도 184건 중 20건이 제목 중복이었고,
+  // 대표와 같은 제목이 관련에 또 실린 것도 8건이었다.
+  const row = (id, title) => ({
+    id, url_key: `k${id}`, url: `https://n.news.naver.com/mnews/article/057/000196${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const title = "빙그레, '제3회 부라보콘 전국 어린이 바둑 대회' 개최";
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'),
+    env: mockEnv([row(1, title), row(2, title), row(3, title)])
+  })).json();
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].related_count, 0, '대표와 같은 제목은 관련 보도로 싣지 않는다');
+});
