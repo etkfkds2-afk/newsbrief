@@ -219,11 +219,33 @@ export function buildIssuesFromCache(items, cached, capCount = Infinity) {
   // portal popularity (score) leads; recency only breaks ties among issues
   // that never ranked (score 0), which is most of them.
   const misc = mapped.filter(group => group.key.endsWith('|ai:misc'));
-  const rest = mapped.filter(group => !group.key.endsWith('|ai:misc'))
-    .sort((a, b) => b.score - a.score || b.latest.localeCompare(a.latest));
+  // 대회 타일을 먼저 채우고 남은 자리를 나머지로 채운다. 정렬이 최신순이라
+  // 그냥 자르면 대회가 먼저 잘린다 - 대회 기사는 하루 이틀 반짝이고 끝나서
+  // 뒤로 밀리기 때문이다. 실측 2026-08-10: 월간 상한 20에서 잘리는 8개 중
+  // 5개가 대회였다(하찬석 영재부 결승, 영일만 사랑배, 단양군, 영종국제도시배,
+  // 강원장애인). 대회는 건수가 적어도 중요하다는 것이 사용자 기준이다.
+  // 대회 우선 → 관련 기사 많은 순 → 최신순. 건수를 안 보면 카타고 87건 같은
+  // 큰 이슈가 잘리고 1건짜리 대회가 남는다(실측 2026-08-10).
+  const byRank = (a, b) => b.score - a.score || b.count - a.count || b.latest.localeCompare(a.latest);
+  const isTournament = group => /(?:대회|기전|리그|배|선수권|최강전|결정전)/u.test(group.title);
+  const real = mapped.filter(group => !group.key.endsWith('|ai:misc'));
+  const tournaments = real.filter(isTournament).sort(byRank);
+  const others = real.filter(group => !isTournament(group)).sort(byRank);
+  // 대회가 자리를 전부 먹으면 큰 이슈가 밀린다. 대회에 상한의 절반을 보장하고
+  // 남은 자리는 대회·비대회가 건수순으로 함께 겨룬다.
   // capCount bounds only the real issue tiles (weekly/monthly display caps).
   // Dropped tiles just stop being advertised as issues - their articles are
   // still reachable through the plain article feed, untouched by this cap.
+  const reserved = Math.min(tournaments.length, Math.ceil(capCount / 2));
+  const picked = new Set(tournaments.slice(0, reserved));
+  for (const group of [...tournaments.slice(reserved), ...others].sort(byRank)) {
+    if (picked.size >= capCount) break;
+    picked.add(group);
+  }
+  // 뽑을 때는 위 기준(대회 우선 → 건수 → 최신)을 쓰고, 보여줄 때는 최신순으로
+  // 되돌린다. 건수순으로 늘어놓으면 87건짜리 지난달 이슈가 한 달 내내 맨 위에
+  // 박혀 새 소식이 묻힌다. 자를 때만 건수를 보는 것이 목적이다.
+  const rest = [...picked].sort((a, b) => b.score - a.score || b.latest.localeCompare(a.latest));
   return [...rest.slice(0, capCount), ...misc];
 }
 
@@ -539,12 +561,17 @@ export async function onRequestGet({ request, env }) {
     // Weekly/monthly show the same 30-day general cache, only differing in
     // which articles' hours window is in play (see `hours` above) - nothing
     // otherwise bounds how many tiles accumulate over a month. Cap general
-    // issue tiles per period so a long month doesn't outgrow a short week:
-    // weekly (hours<=168) gets 12, monthly (hours>168) gets 24. Baduk is
-    // unbounded on purpose - untouched.
-    const generalIssueCap = cachedIssues && category !== '바둑' ? (hours > 168 ? 24 : 12) : Infinity;
+    // issue tiles per period so a long month doesn't outgrow a short week.
+    // 바둑에는 상한이 없어서 월간 타일이 27개까지 늘어났다. 30일치가 한 화면에
+    // 다 나오니 읽기 힘들다는 지적(2026-08-10). 주간 10 / 월간 20으로 양쪽을
+    // 같게 맞춘다.
+    //
+    // 잘린 타일의 기사가 사라지지는 않는다. 카드 목록에는 그대로 있고 타일로만
+    // 안 뜬다. 제목에 대회가 있는 기사를 1건이어도 타일로 세우는 규칙
+    // (trustedStandalone)은 그대로다 - 대회는 건수가 적어도 중요하다.
+    const issueCap = cachedIssues ? (hours > 168 ? 20 : 10) : Infinity;
     const issueList = cachedIssues
-      ? buildIssuesFromCache(accepted, cachedIssues, generalIssueCap)
+      ? buildIssuesFromCache(accepted, cachedIssues, issueCap)
       : buildIssues(accepted, category);
     let selected = accepted;
     if (issueKeyFilter) {

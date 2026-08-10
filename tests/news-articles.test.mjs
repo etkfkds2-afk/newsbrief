@@ -451,3 +451,26 @@ test('요약을 사지 않은 중복 기사는 관련 보도로만 붙는다', a
   assert.equal(data.items[0].related_count, 1, '관련 보도로는 붙는다');
   assert.equal(data.items[0].related[0].url_key, 'k2');
 });
+
+test('이슈 타일은 대회를 먼저 채우고 관련 기사 많은 순으로 자른다', async () => {
+  const { buildIssuesFromCache } = await import('../functions/api/news/articles.js');
+  const item = (key, related) => ({ url_key: key, published_at: '2026-08-05T00:00:00Z', related_count: related });
+  const items = [];
+  const cached = [];
+  const add = (key, title, related) => {
+    items.push(item(key, related));
+    cached.push({ key: `바둑|ai:${key}`, title, url_keys: [key] });
+  };
+  add('a', '신진서 AI 카타고 대국', 86);        // 대회 아님, 87건
+  add('b', '부라보콘 전국 어린이 바둑대회', 14); // 대회, 15건
+  add('c', '노원구 기원 흉기 살인 사건', 9);     // 대회 아님, 10건
+  add('d', '영일만 사랑배 전국바둑대회', 1);     // 대회, 2건
+  add('e', '김명훈 통산 500승 달성', 1);        // 대회 아님, 2건
+  const tiles = buildIssuesFromCache(items, cached, 4).filter(g => !g.key.endsWith('|ai:misc'));
+  const titles = tiles.map(t => t.title);
+  assert.equal(tiles.length, 4);
+  // 순서는 최신순이다. 건수는 자를 때만 본다.
+  assert.ok(titles.includes('신진서 AI 카타고 대국'), '건수 많은 이슈는 잘리지 않는다');
+  assert.ok(titles.includes('영일만 사랑배 전국바둑대회'), '2건짜리 대회도 자리를 보장받는다');
+  assert.ok(!titles.includes('김명훈 통산 500승 달성'), '같은 건수면 대회가 아닌 쪽이 밀린다');
+});
