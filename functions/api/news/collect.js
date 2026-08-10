@@ -9,6 +9,7 @@ import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
 import { createStoryIndex } from '../../_lib/news-dedup.js';
+import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
 import {
@@ -150,13 +151,18 @@ async function collect(env, {
   // 기회까지 막힌다.
   const recentStoryStart = now.valueOf() - STORY_INDEX_WINDOW_DAYS * 86400000;
   const storyIndex = createStoryIndex();
+  // 글자 유사도가 놓친 것을 AI에게 한 번 더 묻기 위한 목록(findDuplicateStories).
+  const recentStoryTitles = [];
   for (const row of publishedRows.results || []) {
     if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
     const bucket = row.category === '바둑' ? 'baduk' : 'general';
     const timestamp = storedTime(row.published_at || row.fetched_at);
     publicationCounts[bucket].monthly += 1;
     if (timestamp >= dayStart) publicationCounts[bucket].daily += 1;
-    if (timestamp >= recentStoryStart) storyIndex.add(row.title);
+    if (timestamp >= recentStoryStart) {
+      storyIndex.add(row.title);
+      recentStoryTitles.push(row.title);
+    }
   }
   const popularityTargetStart = popularityCandidates.length
     ? Number(popularityCandidates[0].popularityDate) - 9 * 3600000
@@ -749,7 +755,7 @@ async function collect(env, {
     // 하나의 보도자료가 매체만 바꿔 10건 넘게 들어오면 예전에는 그 전부가 유료
     // 요약을 받았다. 실측(2026-08-10): 빙그레 부라보콘 대회 기사 14건, 유료 호출
     // 약 42회, 월 예산의 3%. 화면에서는 어차피 한 이슈로 묶여 관련 보도로 보인다.
-    const duplicateOf = storyIndex.match(title);
+    const duplicateOf = storyIndex.match(title) || aiDuplicates.get(knownUrlKey) || '';
     let summary = '';
     if (duplicateOf) {
       summary = await summarize(payload, undefined, 'new', { freeOnly: true });
@@ -843,6 +849,26 @@ async function collect(env, {
     baduk: limitedCandidates.filter(candidate => candidate.category === '바둑').length,
     general: limitedCandidates.filter(candidate => candidate.category !== '바둑').length
   };
+  // 요약을 사기 전에 AI에게 "이미 다룬 이야기인가"를 한 번 묻는다. 실행당 1회,
+  // 약 $0.0015. 요약 한 건($0.0126)만 막아도 여덟 번치가 나온다. 우선 바둑에만
+  // 건다 - 효과와 오판정을 먼저 보고 일반으로 넓힌다.
+  const aiDuplicates = new Map();
+  const dedupTargets = limitedCandidates.filter(candidate => candidate.category === '바둑'
+    && candidate.urlKey && !knownCandidateKeys.has(candidate.urlKey));
+  if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
+    && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
+    const judged = await findDuplicateStories(env,
+      dedupTargets.map(candidate => ({ title: cleanTitle(candidate.item?.title || '') })), recentStoryTitles);
+    for (const [index, sameTitle] of judged.duplicates) {
+      if (dedupTargets[index]?.urlKey) aiDuplicates.set(dedupTargets[index].urlKey, sameTitle);
+    }
+    if (judged.model) {
+      const recorded = await recordClaudeUsage(env, judged.model, judged.usage);
+      diagnostics.claude_monthly_micro_usd = recorded.spent;
+    }
+    diagnostics.ai_dedup_checked = dedupTargets.length;
+    diagnostics.ai_dedup_matched = aiDuplicates.size;
+  }
   let inserted = 0;
   const badukRetries = pendingRetries.filter(row => row.category === '바둑');
   const generalRetries = pendingRetries.filter(row => row.category !== '바둑');

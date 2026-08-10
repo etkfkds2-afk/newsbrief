@@ -356,3 +356,71 @@ export async function classifyIssues(env, articles, existingIssues = [], { allow
   }
   return { groups: [], provider: anthropicError ? 'anthropic-failed' : 'none', anthropic_error: anthropicError };
 }
+
+// 수집 단계에서 "이 후보가 이미 요약해 둔 기사와 같은 이야기인가"만 묻는다.
+// news-dedup.js의 글자 유사도 판정이 놓치는 것을 잡으려고 있다. 실측
+// 2026-08-10: 빙그레 부라보콘 보도자료 14건 중 제목 표현이 다른 4건이 유사도
+// 문턱을 못 넘어 각각 유료 요약을 받았다. 사람이 보면 명백히 같은 기사다.
+//
+// 이슈 분류(classifyIssues)와 목적이 다르다. 저쪽은 하루 한 번, 요약을 다 산
+// 뒤에 화면을 묶는다. 여기는 요약을 사기 전에 물어서 돈을 아끼는 자리다.
+//
+// 비용: 실행당 1회. 입력 약 1,200 / 출력 약 50 토큰이면 $0.0015 수준이고,
+// 요약 한 건(유료 호출 3회 = $0.0126)만 막아도 여덟 번치 판정값이 나온다.
+function buildDuplicateInstructions() {
+  return `당신은 한국 뉴스 데스크의 편집자다. 이미 다룬 기사 목록과 새로 들어온 기사 목록을 준다.
+새 기사 각각에 대해, 이미 다룬 기사 중 **같은 사건·같은 발표를 다룬 것**이 있으면 그 번호를 찾는다.
+
+규칙:
+- 같은 보도자료를 매체마다 다르게 쓴 것은 같은 기사다. 제목 표현이 달라도 묶는다.
+- 같은 인물·같은 대회가 나와도 구체적 사건이 다르면 절대 묶지 않는다.
+- 다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다.
+- 같은 연재물의 다른 회차는 절대 묶지 않는다.
+- 확신이 없으면 묶지 않는다. 놓치는 것보다 잘못 묶는 것이 나쁘다.
+- 반드시 아래 JSON 배열 형식으로만 응답한다. 설명, 주석, 코드블록을 쓰지 않는다.
+- 같은 기사가 없는 새 기사는 배열에 넣지 않는다.
+
+출력 형식: [{"new":0,"same":3}]`;
+}
+
+// candidates: [{title}], known: [title]. 반환은 Map(후보 index -> 기존 제목).
+export async function findDuplicateStories(env, candidates = [], known = []) {
+  const empty = { duplicates: new Map(), usage: {} };
+  if (!candidates.length || !known.length || !env?.ANTHROPIC_API_KEY) return empty;
+  const knownList = known.slice(-40);
+  const prompt = `이미 다룬 기사:\n${knownList.map((title, i) => `${i}. ${title}`).join('\n')}\n\n`
+    + `새로 들어온 기사:\n${candidates.map((c, i) => `${i}. ${c.title}`).join('\n')}`;
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: CLASSIFY_MODEL,
+        max_tokens: 512,
+        system: buildDuplicateInstructions(),
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) return empty;
+    const text = (payload?.content || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
+    const parsed = extractJsonArray(text);
+    const duplicates = new Map();
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        const index = Number(entry?.new);
+        const sameIndex = Number(entry?.same);
+        if (!Number.isInteger(index) || !candidates[index]) continue;
+        if (!Number.isInteger(sameIndex) || !knownList[sameIndex]) continue;
+        duplicates.set(index, knownList[sameIndex]);
+      }
+    }
+    return { duplicates, usage: payload?.usage || {}, model: CLASSIFY_MODEL };
+  } catch {
+    return empty;
+  }
+}

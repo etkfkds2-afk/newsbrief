@@ -1482,3 +1482,19 @@ test('바둑 전용 수집은 일반 작업을 건너뛰고 자기 subrequest �
   assert.match(collector, /backfill \|\| badukOnly \? false/);
   assert.match(workflow, /baduk_only=1/);
 });
+
+test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻는다', async () => {
+  // 글자 유사도만으로는 부족하다. 실측 2026-08-10: 빙그레 부라보콘 보도자료
+  // 14건 중 표현이 다른 4건이 문턱을 못 넘어 각각 유료 요약을 받았다.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const classify = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(collector, /findDuplicateStories/);
+  // 판정도 유료 호출이므로 하루 상한·월 예산 관문을 함께 지나야 한다.
+  assert.match(collector, /reserveAnthropicCall\(env, diagnostics, forceRetry, generalBoost\)\) \{/);
+  assert.match(collector, /recordClaudeUsage\(env, judged\.model, judged\.usage\)/);
+  // 판정 결과는 무료 요약 경로로 이어져야 의미가 있다.
+  assert.match(collector, /storyIndex\.match\(title\) \|\| aiDuplicates\.get\(knownUrlKey\)/);
+  // 잘못 묶는 쪽이 더 나쁘다는 지시가 프롬프트에 남아 있어야 한다.
+  assert.match(classify, /확신이 없으면 묶지 않는다/);
+  assert.match(classify, /다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다/);
+});
