@@ -255,8 +255,8 @@ test('이슈로 묶은 카드의 대표는 이슈 제목에 가장 가까운 기
   });
   const rows = [
     row(1, '[제49기 SG배 한국일보 명인전] 옅은 지점', [
-      '1) 제49기 SG배 명인전 본선 대국에서 신진서 9단이 좌하귀 접전으로 앞섰다.',
-      '2) 상대는 두터움을 살리려 했으나 신진서의 삭감이 제때 들어갔다.',
+      '1) 신진서 9단이 인공지능 카타고를 상대로 2승 1패 역전승을 거뒀다.',
+      '2) 상대는 두터움을 살리려 했으나 신진서 9단의 삭감이 제때 들어갔다.',
       '3) 종반 끝내기에서 반집을 남긴 신진서 9단이 승부를 가져갔다.'
     ].join('\n')),
     row(2, '신진서, 카타고 꺾고 2승 1패 역전승', [
@@ -337,4 +337,38 @@ test('읽을 때도 같은 대회로 쪼개진 이슈를 합치고 기타는 건
   assert.ok(merged.some(g => g.title === '하찬석국수배 영재바둑대회 결승'));
   // 기타는 합치지 않는다.
   assert.ok(merged.some(g => g.key.endsWith('|ai:misc')));
+});
+
+test('AI가 같은 이슈라 해도 전혀 안 닮은 기사는 카드로 접지 않는다', async () => {
+  // AI 분류는 돌릴 때마다 결과가 달라 한 번 엉뚱하게 묶이면 화면이 따라간다.
+  // 실측 2026-08-10: 신진서-카타고 카드에 한중 청소년 교류(NHN 한돌) 기사가
+  // 딸려 들어갔다. 제목 유사도 0.053. 이슈 타일에는 함께 남고 카드만 나뉜다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, '[포토타임] 신진서 9단, AI 카타고와 첫 대국', [
+      '1) 신진서 9단이 인공지능 카타고와의 첫 대국에 나서 반상 앞에 앉았다.',
+      '2) 대국장에는 취재진과 관계자가 모여 첫 수를 지켜봤다고 전해졌다.',
+      '3) 신진서 9단은 차분한 표정으로 초반 포석을 이어 나갔다.'
+    ].join('\n')),
+    row(2, "NHN, 한중 청소년스포츠교류에 AI 바둑 '한돌' 제공", [
+      '1) NHN이 한중 청소년 스포츠 교류 행사에 바둑 인공지능 한돌을 지원한다.',
+      '2) 양국 청소년들은 합동훈련에서 한돌을 활용해 기력을 점검할 예정이다.',
+      '3) 회사는 교류 취지에 맞춰 기술 지원을 이어 가겠다고 밝혔다.'
+    ].join('\n'))
+  ];
+  // AI가 둘을 같은 이슈로 묶어 두었더라도 카드는 나뉘어야 한다.
+  const cached = [{ key: '바둑|ai:1', title: '신진서 카타고 AI 격파', url_keys: ['k1', 'k2'] }];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91&issues=1'),
+    env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(data.items.length, 2, '안 닮은 기사는 각자 카드로 남는다');
+  // 이슈 타일에는 둘 다 들어가 있어야 한다.
+  const issue = (data.issues || []).find(g => !String(g.key).endsWith('|ai:misc'));
+  assert.equal(issue.count, 2);
 });
