@@ -448,22 +448,7 @@ export async function onRequestGet({ request, env }) {
       // isSameStory를 더한다. 수집 단계에서 유료 요약을 아끼는 판정과 같은 기준이라
       // 화면과 수집이 따로 놀지 않는다.
       const itemIssue = issueOf.get(item.url_key) || '';
-      // AI가 같은 이슈라고 해도 서로 전혀 안 닮은 기사는 카드로 접지 않는다.
-      // 이슈 타일에는 그대로 함께 남고 카드만 따로 선다. AI 분류는 돌릴 때마다
-      // 결과가 달라서, 한 번 엉뚱하게 묶이면 화면이 통째로 따라간다. 실측
-      // 2026-08-10: "[포토타임] 신진서 9단, AI 카타고와 첫 대국" 카드에 한중
-      // 청소년 교류(NHN 한돌) 기사와 명인전 관전기가 딸려 들어갔다. 각각
-      // 제목 유사도 0.053과 0.000이었다. 반대로 AI가 제대로 묶은 쌍은
-      // 0.178~0.743이었다. 그 사이에 바닥을 둔다.
-      //
-      // 셋 중 하나만 넘으면 통과시킨다. 같은 사건인데 제목이 아주 다른 기사가
-      // 있기 때문이다(부산시장배 대회 기사와 "제2 신진서 될래요" 참가자 스케치).
-      // 그런 기사는 요약 첫 줄이나 공유 단어가 받쳐 준다.
-      const issueCollapseAllowed = old =>
-        similarTokens(titleTokens, old.titleTokens, 0.15)
-        || similarTokens(firstTokens, old.firstTokens, 0.3)
-        || sharesKeywordsPrepared(story, old.story, 2);
-      const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key) && issueCollapseAllowed(old))
+      const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key))
         || similarTokens(titleTokens, old.titleTokens, titleThreshold)
         || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
         // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다
