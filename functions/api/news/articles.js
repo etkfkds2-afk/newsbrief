@@ -459,14 +459,10 @@ export async function onRequestGet({ request, env }) {
       // 셋 중 하나만 넘으면 통과시킨다. 같은 사건인데 제목이 아주 다른 기사가
       // 있기 때문이다(부산시장배 대회 기사와 "제2 신진서 될래요" 참가자 스케치).
       // 그런 기사는 요약 첫 줄이나 공유 단어가 받쳐 준다.
-      // 요약 경로는 바둑 기사에 열어 주면 안 된다. 바둑 요약은 죄다 "신진서가
-      // AI와 대국해서…" 구조라 서로 닮는다(오전에 측정: T=0.45에서 바둑 120장 중
-      // 36건 오판정). 실제로 이 통로로 한중 청소년 교류(NHN 한돌) 기사 6건이
-      // 신진서-카타고 카드에 그대로 남았다. 바둑은 제목과 공유 단어만 본다.
       const issueCollapseAllowed = old =>
         similarTokens(titleTokens, old.titleTokens, 0.15)
-        || sharesKeywordsPrepared(story, old.story, 2)
-        || (!badukItem && old.category !== '바둑' && similarTokens(firstTokens, old.firstTokens, 0.3));
+        || similarTokens(firstTokens, old.firstTokens, 0.3)
+        || sharesKeywordsPrepared(story, old.story, 2);
       const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key) && issueCollapseAllowed(old))
         || similarTokens(titleTokens, old.titleTokens, titleThreshold)
         || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
