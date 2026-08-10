@@ -1533,3 +1533,16 @@ test('이슈 분류 프롬프트가 한 응답 안의 중복 이슈를 금지한
   assert.match(classifier, /같은 대회라도 부문이 다르면 별개다/);
   assert.match(classifier, /하찬석국수배 영재바둑대회/);
 });
+
+test('바둑 이슈 분류는 겹쳐 싣는 일반 기사도 함께 본다', async () => {
+  // 바둑 탭은 분류가 사회여도 바둑 독자에게 소식인 기사를 함께 싣는다.
+  // 분류기가 category='바둑'만 보면 그 기사들은 이슈 캐시에 없어서 카드로는
+  // 떠도 이슈 키워드가 안 만들어진다. 실측 2026-08-10: 노원구 기원 살인 보도
+  // 8건이 바둑 탭 카드에는 있는데 주간·월간 이슈 키워드에는 없었다.
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  assert.match(endpoint, /a\.title LIKE '%바둑%'/);
+  assert.match(endpoint, /a\.title LIKE '%기원%' AND a\.summary LIKE '%바둑%'/);
+  // 읽기와 분류가 같은 조건이어야 카드와 타일이 어긋나지 않는다.
+  assert.match(articles, /a\.title LIKE '%기원%' AND a\.summary LIKE '%바둑%'/);
+});

@@ -139,7 +139,13 @@ export async function onRequestPost({ request, env }) {
     const where = [...CONTENT_QUALITY_FILTERS, "datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')"];
     const bindings = [];
     if (dbCategory) {
-      where.push('a.category = ?');
+      // 바둑 탭은 분류가 사회여도 바둑 독자에게 소식인 기사를 함께 싣는다
+      // (articles.js의 같은 조건). 분류기가 category='바둑'만 보면 그 기사들은
+      // 이슈 캐시에 아예 없어서 카드로는 떠도 이슈 키워드가 안 만들어지고
+      // 기타로 빠진다. 실측 2026-08-10: 노원구 기원 살인 보도 8건이 바둑 탭에
+      // 카드로는 있는데 주간·월간 이슈 키워드에는 없었다. 읽기와 같은 조건을 건다.
+      where.push(`(a.category = ? OR a.title LIKE '%바둑%'
+        OR (a.title LIKE '%기원%' AND a.summary LIKE '%바둑%'))`);
       bindings.push(dbCategory);
     } else if (category === '일반') {
       where.push("a.category NOT IN ('바둑','IT/과학')");
