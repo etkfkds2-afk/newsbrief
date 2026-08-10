@@ -12,12 +12,10 @@ BASE_GENERAL = 19
 # 정상이고, 8/9에 이 값을 회귀로 오해해 예산 커밋을 반나절 뒤졌다. 실제로 볼
 # 것은 "소스에 있는 걸 우리가 가져왔나"이고, 그건 아래 안내대로 소스 날짜를
 # 직접 확인해야 한다.
-KNOWN_FALSE_ALARMS = {
-    'summary_exhausted_below_threshold',
-    'published_time_complete',
-    # 소스가 매일 기사를 내지 않으므로 이 체크는 조용한 날마다 뜬다.
-    'baduk_has_recent_news',
-}
+# 2026-08-10: 오탐 세 개를 health.js에서 직접 고쳤으므로 여기서 걸러낼 것이 없다.
+# 손으로 무시하는 목록은 증상만 가린다 - 새 오탐이 생길 때마다 늘어나고, 그 사이
+# 진짜 실패가 목록에 묻힌다. 다시 채우기 전에 검사 자체를 고칠 수 없는지 본다.
+KNOWN_FALSE_ALARMS = set()
 CLAUDE_MONTHLY_TARGET = 4.75
 
 
@@ -68,14 +66,16 @@ def main():
         print('재요약: 미룸 {} / 실패 {}  (미룸이 늘고 실패가 줄면 게이트가 의도대로 동작)'.format(
             deferred or 0, failed or 0))
 
-    print('헬스 실패: {}  (summary_exhausted/published_time/baduk_has_recent_news는 알려진 오탐이라 제외)'.format(
-        failures if failures else '없음'))
+    print('헬스 실패: {}  (오탐 목록 없음 - 뜨면 진짜다)'.format(failures if failures else '없음'))
+    print('바둑 수집: 소스 최신 {} / 우리 최신 {}'.format(
+        metrics.get('baduk_source_latest') or '기록 없음',
+        metrics.get('baduk_stored_latest') or '없음'))
     print('→ 판정: general이 19 이상이고 오늘 지출이 지속가능선 이하면 8/9 변경은 성공이다. '
           '어긋나면 사용자에게 알리고 `scripts/rollback.sh revert 31afcf0`을 제안할 것. '
           '수동 수집을 돌리면 두 값이 모두 오염되므로 판정 전에는 돌리지 말 것.')
-    print('→ 바둑이 0이어도 그 자체로는 이상이 아니다. 확인 순서: '
-          "curl -s -A 'Mozilla/5.0 NewsBrief/1.0' https://www.baduk.or.kr/news/report_in.asp "
-          '로 소스 최신 날짜를 보고, 며칠 전이면 정상이다.')
+    print('→ 바둑 24h가 0이어도 그 자체로는 이상이 아니다. 소스가 2~4일에 한 번 올린다. '
+          '위 "바둑 수집" 줄에서 우리 최신이 소스 최신 이상이면 정상이고, '
+          'baduk_source_collected 실패가 뜨면 그때가 진짜 누락이다.')
     print('배경: 메모리 project_newsbrief_claude_budget_2026_08 참고.')
 
 

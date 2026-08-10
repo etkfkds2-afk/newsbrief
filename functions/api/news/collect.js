@@ -371,6 +371,21 @@ async function collect(env, {
   if (!popularityCandidates.length && !backfill) {
     const official = await koreanBadukLatest();
     diagnostics.official_baduk_found = official.length;
+    // 한국기원은 2~4일에 한 번만 글을 올린다. 그래서 "24시간 안에 새 바둑
+    // 기사가 있나"를 묻던 건강 검사는 조용한 날마다 틀렸고, 정작 소스엔 새 글이
+    // 있는데 우리가 못 가져온 진짜 고장은 못 잡았다. 소스의 최신 날짜를 적어두면
+    // health가 "소스에 있는 걸 우리가 가져왔나"를 물을 수 있다. 여기서 적는
+    // 이유는 health가 매 호출마다 외부 사이트를 긁지 않게 하기 위해서다.
+    const sourceLatest = official
+      .map(item => String(item.pubDate || '').slice(0, 10))
+      .filter(text => /^\d{4}-\d{2}-\d{2}$/.test(text))
+      .sort()
+      .pop() || '';
+    if (sourceLatest) {
+      diagnostics.baduk_source_latest = sourceLatest;
+      await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES('baduk_source_latest',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(sourceLatest).run();
+    }
     for (const item of official) candidates.push({ category: '바둑', item, source: 'TRUSTED_BADUK' });
   }
   for (const [category, query] of selectedSearches) {

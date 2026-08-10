@@ -423,8 +423,9 @@ test('예약 실행은 production 건강 점검 실패 시 GitHub 이슈를 만�
   const health = await readFile(new URL('../functions/api/news/health.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.match(health, /last_run_within_6h/);
-  assert.match(health, /published_time_complete/);
+  assert.match(health, /published_time_healthy/);
   assert.match(health, /summary_exhausted_below_threshold/);
+  assert.match(health, /baduk_source_collected/);
   assert.match(workflow, /health-check:/);
   assert.match(workflow, /gh issue create/);
 });
@@ -454,13 +455,56 @@ test('건강 점검 API는 콘텐츠 경고를 서버 장애 응답과 분리한
     }
   } });
   const healthy = await getNewsHealth({ env: makeEnv(0) });
-  const unhealthy = await getNewsHealth({ env: makeEnv(2) });
+  // 2건은 통과해야 한다. 발행시각을 안 내는 매체가 섞이는 것은 정상이고, 예전에
+  // 0을 요구하다 옛 행 두 개 때문에 매일 실패해 알람이 통째로 무시됐다.
+  const tolerated = await getNewsHealth({ env: makeEnv(2) });
+  const unhealthy = await getNewsHealth({ env: makeEnv(9) });
   assert.equal(healthy.status, 200);
   assert.equal((await healthy.json()).ok, true);
+  assert.equal((await tolerated.json()).ok, true);
   assert.equal(unhealthy.status, 200);
   const warning = await unhealthy.json();
   assert.equal(warning.ok, false);
-  assert.deepEqual(warning.failures, ['published_time_complete']);
+  assert.deepEqual(warning.failures, ['published_time_healthy']);
+});
+
+test('바둑 건강 점검은 조용한 날이 아니라 소스 누락에만 실패한다', async () => {
+  const makeEnv = (sourceLatest, storedLatest, baduk24h) => ({ DB: {
+    async batch() { return []; },
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async first() {
+          if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
+          if (sql.includes('AS baduk')) return { baduk: baduk24h, general: 9 };
+          if (sql.includes("TRIM(published_at)=''")) return { count: 0 };
+          if (sql.includes('f.attempts>=6')) return { count: 0 };
+          if (sql.includes("url LIKE '%baduk.or.kr%'")) return { latest: storedLatest };
+          return {};
+        },
+        async all() {
+          if (sql.includes('FROM news_state')) return { results: [
+            { key: 'ai_blocked', value: 0 },
+            { key: 'claude_monthly_micro_usd', value: 500000 },
+            { key: 'claude_budget_month', value: new Date().toISOString().slice(0, 7) },
+            { key: 'baduk_source_latest', value: sourceLatest }
+          ] };
+          return { results: [] };
+        }
+      };
+    }
+  } });
+  // 소스가 며칠째 조용해 24시간 신규가 0이어도, 그 최신 글을 갖고 있으면 정상이다.
+  const quiet = await (await getNewsHealth({ env: makeEnv('2026-08-05', '2026-08-05', 0) })).json();
+  assert.equal(quiet.checks.baduk_source_collected, true);
+  assert.equal(quiet.ok, true);
+  // 소스에 새 글이 올라왔는데 우리가 못 가져왔으면 그때가 진짜 실패다.
+  const missed = await (await getNewsHealth({ env: makeEnv('2026-08-09', '2026-08-05', 0) })).json();
+  assert.equal(missed.checks.baduk_source_collected, false);
+  assert.deepEqual(missed.failures, ['baduk_source_collected']);
+  // 소스 날짜를 아직 한 번도 적지 못했으면 비교하지 않는다.
+  const unknown = await (await getNewsHealth({ env: makeEnv('', '', 0) })).json();
+  assert.equal(unknown.checks.baduk_source_collected, true);
 });
 
 test('예약 건강 점검은 HTTP 200이어도 응답의 ok가 false면 경고한다', async () => {

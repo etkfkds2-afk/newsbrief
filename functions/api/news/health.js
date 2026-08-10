@@ -9,7 +9,7 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult] = await Promise.all([
+    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult, badukStored] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -19,16 +19,27 @@ export async function onRequestGet({ env }) {
         SUM(CASE WHEN category<>'바둑' THEN 1 ELSE 0 END) AS general
         FROM news_articles WHERE summary_quality='full'
           AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first(),
+      // 30일 창은 오래전에 한 번 잘못 저장된 행 두 개 때문에 매일 실패했다.
+      // 물어야 할 것은 "지금 들어오는 기사에 발행시각이 붙나"이므로 최근 것만
+      // 본다. 옛 행은 창을 벗어나 사라지고, 진짜 회귀는 하루 안에 다시 뜬다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
         WHERE summary_quality='full' AND TRIM(published_at)=''
-          AND datetime(fetched_at)>=datetime('now','-30 days')`).first(),
+          AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
       env.DB.prepare(`SELECT key,value FROM news_state WHERE key IN
         ('ai_blocked','claude_monthly_micro_usd','claude_budget_month',
-         'claude_daily_micro_usd','claude_spend_day')`).all(),
+         'claude_daily_micro_usd','claude_spend_day','baduk_source_latest')`).all(),
+      // 예전에는 30일 누적을 세어 고정 임계값과 견줬다. 누적은 줄어들 수가
+      // 없으므로 한 번 넘어서면 영원히 실패다(실측 73건, 임계값 15). 알고 싶은
+      // 것은 "지금도 재시도가 벽에 부딪히고 있나"라는 속도이므로 최근 하루에
+      // 새로 상한에 닿은 건수를 센다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_summary_attempts f
-        JOIN news_articles a ON a.url_key=f.url_key
-        WHERE f.attempts>=6 AND datetime(a.fetched_at)>=datetime('now','-30 days')`).first(),
-      env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all()
+        WHERE f.attempts>=6 AND datetime(f.last_attempt)>=datetime('now','-24 hours')`).first(),
+      env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all(),
+      // 한국기원 기사를 어디까지 가져왔는지. 소스 최신 날짜(collect.js가 적는다)와
+      // 견주기 위한 값이다.
+      env.DB.prepare(`SELECT MAX(date(COALESCE(NULLIF(published_at,''),fetched_at))) AS latest
+        FROM news_articles WHERE category='바둑' AND summary_quality='full'
+          AND url LIKE '%baduk.or.kr%'`).first()
     ]);
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const now = new Date();
@@ -43,6 +54,11 @@ export async function onRequestGet({ env }) {
     const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
     const databaseBytes = Number(storageResult.meta?.size_after || 0);
     const databaseStoragePercent = databaseBytes > 0 ? databaseBytes / (500 * 1024 * 1024) * 100 : null;
+    // 둘 다 'YYYY-MM-DD' 라 문자열 비교로 날짜 비교가 된다. 소스 날짜를 아직 한
+    // 번도 적지 못했으면(배포 직후 등) 비교하지 않고 통과시킨다 - 값이 없다는
+    // 이유로 알람을 울리면 그 알람이 또 무시된다.
+    const badukSourceLatest = String(state.baduk_source_latest || '');
+    const badukStoredLatest = String(badukStored?.latest || '');
     const checks = {
       // A degraded run means an optional provider failed, not that the feed or
       // database is unavailable. Freshness checks below still catch real loss.
@@ -50,13 +66,20 @@ export async function onRequestGet({ env }) {
       last_run_within_6h: finishedAgeHours <= 6,
       automatic_run_within_4h: automaticAgeHours <= 4,
       general_has_recent_news: Number(counts?.general || 0) > 0,
-      baduk_has_recent_news: Number(counts?.baduk || 0) > 0,
-      published_time_complete: Number(missingTime?.count || 0) === 0,
+      // 예전 이름은 baduk_has_recent_news 였고 baduk_24h > 0 을 요구했다. 바둑
+      // 소스가 2~4일에 한 번 올리므로 조용한 날마다 실패했고(그래서 사람이 손으로
+      // 무시하게 됐다), 정작 소스엔 새 글이 있는데 우리가 못 가져온 경우는 지나쳤다.
+      // 창을 넓히는 것은 답이 아니다 - 8/9의 간격이 4일이라 72시간으로도 실패하고,
+      // 120시간으로 늘리면 닷새간 수집이 죽어도 조용하다. 물을 것은 기간이 아니라
+      // "소스에 있는 걸 우리가 가져왔나"다.
+      baduk_source_collected: !badukSourceLatest
+        || (badukStoredLatest && badukStoredLatest >= badukSourceLatest),
+      // 0을 요구하면 발행시각을 아예 안 내는 매체가 한 곳만 걸려도 실패한다.
+      // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
+      published_time_healthy: Number(missingTime?.count || 0) <= 3,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
-      // 임계값 5는 재시도 상한이 24이던 시절 기준이다. 상한이 6이면 같은
-      // 기사가 훨씬 빨리 '소진'으로 잡히므로, 실제 값이 쌓이는 것을 보고 다시
-      // 조일 때까지 알림이 매일 뜨지 않을 만큼 여유를 둔다.
+      // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
       summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 15,
       database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
     };
@@ -74,6 +97,8 @@ export async function onRequestGet({ env }) {
         automatic_age_hours: Number.isFinite(automaticAgeHours) ? Number(automaticAgeHours.toFixed(2)) : null,
         general_24h: Number(counts?.general || 0),
         baduk_24h: Number(counts?.baduk || 0),
+        baduk_source_latest: badukSourceLatest || null,
+        baduk_stored_latest: badukStoredLatest || null,
         missing_published_time: Number(missingTime?.count || 0),
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
