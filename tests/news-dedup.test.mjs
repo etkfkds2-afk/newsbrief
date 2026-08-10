@@ -78,3 +78,15 @@ test('빈 제목은 어떤 것과도 묶지 않는다', () => {
   assert.equal(isSameStory('', '빙그레, 전국 어린이 바둑 대회 개최'), false);
   assert.equal(createStoryIndex(['빙그레, 전국 어린이 바둑 대회 개최']).match(''), '');
 });
+
+test('제목이 공유하는 고유 단어로 같은 사건을 잡는다', async () => {
+  const { sharesTitleKeywords } = await import('../functions/_lib/news-dedup.js');
+  // 실측 2026-08-10 노원구 기원 살인 보도. 제목 유사도는 0.146~0.375로 서로
+  // 멀어 isSameStory가 못 잡지만 지인·살해·60대를 공유한다.
+  const a = '[단독] 기원에서 말다툼하다 흉기 휘둘러 지인 살해…60대 남성 체포';
+  assert.equal(sharesTitleKeywords(a, '“왜 술 마시고 와” 지적에…기원에서 지인 흉기로 살해'), true);
+  assert.equal(sharesTitleKeywords(a, '기원서 바둑 두다 말다툼…지인 살해한 60대 현행범 체포'), true);
+  // 다른 사건은 걸리지 않아야 한다.
+  assert.equal(sharesTitleKeywords(a, '말다툼 중 엄마 흉기 살해한 10대 아들…범행 직후 한 짓 충격'), false);
+  assert.equal(sharesTitleKeywords('부광 시린메드, 영천 3-0 완파하며 4연패 탈출', 'OK 만세보령, 여수 꺾고 3연패 탈출'), false);
+});

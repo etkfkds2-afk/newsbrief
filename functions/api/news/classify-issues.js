@@ -5,7 +5,8 @@ import {
   rewriteStandaloneTitles, standaloneIssueTitle
 } from '../../_lib/news-issue-classify.js';
 import {
-  blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
+  blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveClaudeSpend,
+  reserveCloudflareCall, settleClaudeSpend
 } from '../../_lib/news-ai-budget.js';
 
 const SUPPORTED_CATEGORIES = new Set(['바둑', '일반']);
@@ -225,6 +226,10 @@ export async function onRequestPost({ request, env }) {
           context: representatives.map(item => `${item.title} ${String(item.summary || '').replace(/\n/g, ' ').slice(0, 120)}`).join(' / ')
         };
       });
+    // 호출 전에 예상 비용을 먼저 적는다. recordClaudeUsage는 호출이 끝난 뒤에만
+    // 도는데, 응답을 돌려주지 못하고 죽은 실행은 돈을 쓰고도 기록에 안 남았다.
+    // 2026-08-10 실측: 재분류가 실제 $0.91을 썼는데 예산에는 $0.041만 잡혔다.
+    const reserved = useClaude ? await reserveClaudeSpend(env, ESTIMATED_ISSUE_CALL_MICRO_USD) : 0;
     let classification = await classifyIssues(
       {
         ...env,
@@ -257,7 +262,11 @@ export async function onRequestPost({ request, env }) {
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);
     }
-    const recorded = provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent };
+    // 미리 적어 둔 예상치를 실제 비용으로 정산한다. Claude를 안 썼으면 예약분을
+    // 그대로 되돌린다(usage 없이 정산하면 실제 0으로 계산돼 예약분이 빠진다).
+    const recorded = reserved
+      ? await settleClaudeSpend(env, reserved, provider === 'anthropic' ? model : '', usage)
+      : (provider === 'anthropic' ? await recordClaudeUsage(env, model, usage) : { cost: 0, spent: budget.spent });
 
     if (!groups.length) return json({
       ok: true, category, count: articles.length, new_count: genuinelyNewArticles.length,

@@ -89,6 +89,40 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
   };
 }
 
+// 호출 전에 예상 비용을 먼저 적어 두고, 끝난 뒤 차액으로 정산한다.
+// recordClaudeUsage는 호출이 끝난 뒤에만 돌기 때문에, 응답을 돌려주지 못하고
+// 죽은 실행은 돈을 쓰고도 기록에 안 남는다. 2026-08-10 실측: 이슈 재분류가
+// 실제 $0.91을 썼는데 예산에는 $0.041만 잡혔다. 계기판이 실제 지출의 20분의
+// 1을 보여주고 있었고, 월 $4.75 관리가 그만큼 헛돌았다.
+//
+// 미리 적는 쪽이 안전하다. 죽으면 예상치가 남아 과다 계상되지만, 그건 다음
+// 호출을 일찍 막을 뿐이다. 반대 방향의 실수는 예산을 조용히 넘긴다.
+export async function reserveClaudeSpend(env, estimatedMicroUsd = 0) {
+  const amount = Math.max(0, Math.round(estimatedMicroUsd));
+  if (!amount) return 0;
+  await getClaudeMonthlySpend(env);
+  await getClaudeDailySpend(env);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('claude_monthly_micro_usd',?) ON CONFLICT(key) DO UPDATE SET value=value+excluded.value").bind(amount),
+    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('claude_daily_micro_usd',?) ON CONFLICT(key) DO UPDATE SET value=value+excluded.value").bind(amount)
+  ]);
+  return amount;
+}
+
+// 미리 적어 둔 예상치와 실제 비용의 차액만 반영한다. 차액이 음수면 되돌린다.
+export async function settleClaudeSpend(env, reservedMicroUsd, model, usage = {}) {
+  const actual = claudeCostMicroUsd(model, usage);
+  const delta = actual - Math.max(0, Math.round(reservedMicroUsd || 0));
+  if (delta) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('claude_monthly_micro_usd',?) ON CONFLICT(key) DO UPDATE SET value=MAX(0,value+excluded.value)").bind(delta),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('claude_daily_micro_usd',?) ON CONFLICT(key) DO UPDATE SET value=MAX(0,value+excluded.value)").bind(delta)
+    ]);
+  }
+  const row = await env.DB.prepare("SELECT value FROM news_state WHERE key='claude_monthly_micro_usd'").first();
+  return { cost: actual, spent: Number(row?.value || 0) };
+}
+
 export async function recordClaudeUsage(env, model, usage = {}) {
   const cost = claudeCostMicroUsd(model, usage);
   if (!cost) return { cost: 0, spent: await getClaudeMonthlySpend(env) };

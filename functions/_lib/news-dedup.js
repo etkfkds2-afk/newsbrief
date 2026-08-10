@@ -65,3 +65,32 @@ export function createStoryIndex(titles = []) {
   for (const title of titles) add(title);
   return { add, match };
 }
+
+// 제목이 공유하는 고유 단어 수로 보는 판정. 위 문자 유사도가 놓치는 경우를
+// 잡는다. 실측 2026-08-10 노원구 기원 살인 보도 3건은 제목 유사도가
+// 0.146~0.375로 서로 멀지만("[단독] 기원에서 말다툼하다 흉기 휘둘러 지인
+// 살해…60대 남성 체포" 대 "기원서 바둑 두다 말다툼…지인 살해한 60대 현행범
+// 체포") 지인·살해·60대 같은 단어를 공유한다.
+//
+// 바둑 기사에는 쓰지 않는다. 제목마다 기사 이름과 대회 이름이 반복돼 서로 다른
+// 대국이 쉽게 3개를 넘긴다. 호출부(articles.js)가 분류로 갈라 준다.
+const TITLE_STOPWORDS = new Set([
+  '오늘', '이번', '관련', '전국', '한국', '속보', '단독', '종합', '현장', '인터뷰',
+  '뉴스', '기자', '사진', '영상', '오전', '오후', '올해', '지난', '최초', '국내',
+  '우리', '대한', '이날', '이후', '이상', '대해', '통해', '위해'
+]);
+
+export function titleKeywords(value) {
+  return [...new Set(String(cleanTitle(value)).match(/[0-9A-Za-z가-힣]{2,}/gu) || [])]
+    .filter(word => !TITLE_STOPWORDS.has(word) && !/^\d+$/.test(word));
+}
+
+// 3개는 실측으로 잡았다. 일반 209건에 걸었을 때 10건이 묶였고 전부 같은
+// 사건이었다(전당대회 경선, 호르무즈 합의, 태풍 돌핀, 기원 살인 3건,
+// 전남도서관, 구글 AI 개편, 식품업계 소식, 덴마크 징병제). 4개로 올리면
+// 안전하지만 기원 살인 3건이 2장으로 갈린다.
+export function sharesTitleKeywords(left, right, minimum = 3) {
+  const a = new Set(titleKeywords(left));
+  if (!a.size) return false;
+  return titleKeywords(right).filter(word => a.has(word)).length >= minimum;
+}

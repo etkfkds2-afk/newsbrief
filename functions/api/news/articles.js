@@ -3,7 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
-import { isSameStory } from '../../_lib/news-dedup.js';
+import { isSameStory, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { titleSimilarity } from '../../_lib/news-extract.js';
 import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
@@ -417,6 +417,9 @@ export async function onRequestGet({ request, env }) {
       const group = accepted.find(old => (itemIssue && itemIssue === issueOf.get(old.url_key))
         || similarTokens(titleTokens, old.titleTokens, titleThreshold)
         || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
+        // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다
+        // - 기사 이름과 대회 이름이 매 제목에 반복돼 다른 대국이 쉽게 걸린다.
+        || (!badukItem && old.category !== '바둑' && sharesTitleKeywords(item.title, old.title))
         || isSameStory(item.title, old.title));
       if (group) {
         // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그
