@@ -258,7 +258,15 @@ export async function onRequestPost({ request, env }) {
       }
     }
     const { provider, model, usage, cloudflare_error, anthropic_error } = classification;
-    const groups = rejectConflictingExistingMatches(classification.groups, newArticles, existingIssues);
+    // AI가 뭘 돌려줬고 우리가 뭘 버렸는지 남긴다. 이게 없으면 이슈가 안 생겼을 때
+    // AI 탓인지 후처리 탓인지 구분할 수 없다(2026-08-10 기원 살인 보도 8건).
+    const ruleRejections = {};
+    const aiGroups = (classification.groups || []).map(group => ({
+      title: String(group?.title || '').slice(0, 40),
+      count: (group?.url_keys || []).length,
+      misc: Boolean(group?.misc)
+    }));
+    const groups = rejectConflictingExistingMatches(classification.groups, newArticles, existingIssues, ruleRejections);
     if (cloudflare_error && /(?:daily free allocation|Account limited|3036|4006)/i.test(cloudflare_error)) {
       await blockCloudflareForToday(env);
     }
@@ -271,6 +279,7 @@ export async function onRequestPost({ request, env }) {
     if (!groups.length) return json({
       ok: true, category, count: articles.length, new_count: genuinelyNewArticles.length,
       provider, cloudflare_error, anthropic_error, monthly_micro_usd: budget.spent,
+      ai_groups: aiGroups, rule_rejections: ruleRejections,
       // A reset starts with an empty working set, but an AI parse/provider
       // failure must never replace the last good cache with one giant misc
       // bucket. Preserve the saved payload until a valid grouping exists.
@@ -350,6 +359,10 @@ export async function onRequestPost({ request, env }) {
       count: articles.length,
       new_count: genuinelyNewArticles.length,
       candidate_count: newArticles.length,
+      // AI가 돌려준 묶음과 우리가 규칙으로 버린 건수. 이슈가 안 생겼을 때
+      // AI 탓인지 후처리 탓인지 이 두 값으로 갈린다.
+      ai_groups: aiGroups,
+      rule_rejections: ruleRejections,
       provider,
       cloudflare_calls_today: cloudflare.used,
       cloudflare_error,

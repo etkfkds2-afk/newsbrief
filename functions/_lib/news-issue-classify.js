@@ -156,8 +156,13 @@ export function hasExistingTopicMismatch(existingTitle, article) {
   return matches.length < 2 && !matches.some(token => token.length >= 3);
 }
 
-export function rejectConflictingExistingMatches(groups, articles, existingIssues) {
+// reasons: 어느 규칙이 몇 건을 떨어뜨렸는지 호출부가 기록할 수 있게 채워 준다.
+// 이게 없으면 "AI가 못 묶었다"와 "AI는 묶었는데 우리가 버렸다"를 구분할 수
+// 없다. 2026-08-10에 기원 살인 보도 8건이 두 번 연속 기타로 갔는데 어느 쪽인지
+// 알 방법이 없었다.
+export function rejectConflictingExistingMatches(groups, articles, existingIssues, reasons = {}) {
   const issueByTitle = new Map(existingIssues.map(issue => [issue.title, issue]));
+  const count = name => { reasons[name] = Number(reasons[name] || 0) + 1; };
   const kept = [], rejectedKeys = [];
   for (const group of groups || []) {
     const existing = issueByTitle.get(group.title);
@@ -165,9 +170,11 @@ export function rejectConflictingExistingMatches(groups, articles, existingIssue
     const accepted = [], rejected = [];
     for (const key of group.url_keys || []) {
       const article = articles.find(item => item.url_key === key);
-      (hasIncidentLocationConflict(existing.context, article)
-        || hasLegalCaseConflict(existing.title, article)
-        || hasExistingTopicMismatch(existing.title, article) ? rejected : accepted).push(key);
+      let reason = '';
+      if (hasIncidentLocationConflict(existing.context, article)) reason = 'incident_location';
+      else if (hasLegalCaseConflict(existing.title, article)) reason = 'legal_case';
+      else if (hasExistingTopicMismatch(existing.title, article)) reason = 'topic_mismatch';
+      if (reason) { count(reason); rejected.push(key); } else accepted.push(key);
     }
     if (accepted.length) kept.push({ ...group, url_keys: accepted });
     rejectedKeys.push(...rejected);

@@ -1504,3 +1504,17 @@ test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻
   assert.match(classify, /다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다/);
 });
 
+
+test('이슈 분류는 AI 응답과 규칙 탈락 건수를 기록한다', async () => {
+  // 이게 없으면 이슈가 안 생겼을 때 AI가 못 묶은 것인지 우리 후처리가 버린
+  // 것인지 구분할 수 없다. 2026-08-10 기원 살인 보도 8건이 두 번 연속 기타로
+  // 갔는데 어느 쪽인지 알 방법이 없었다.
+  const endpoint = await readFile(new URL('../functions/api/news/classify-issues.js', import.meta.url), 'utf8');
+  const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(endpoint, /ai_groups: aiGroups/);
+  assert.match(endpoint, /rule_rejections: ruleRejections/);
+  // 규칙 이름이 나와야 어느 관문이 버렸는지 알 수 있다.
+  assert.match(classifier, /'incident_location'/);
+  assert.match(classifier, /'legal_case'/);
+  assert.match(classifier, /'topic_mismatch'/);
+});
