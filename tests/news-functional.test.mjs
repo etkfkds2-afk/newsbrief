@@ -1518,3 +1518,18 @@ test('이슈 분류는 AI 응답과 규칙 탈락 건수를 기록한다', async
   assert.match(classifier, /'legal_case'/);
   assert.match(classifier, /'topic_mismatch'/);
 });
+
+test('이슈 분류 프롬프트가 한 응답 안의 중복 이슈를 금지한다', async () => {
+  // 실측 2026-08-10 바둑 재분류: AI가 한 번의 응답에서 같은 사건에 여러 이름을
+  // 붙여 이슈를 쪼갰다. "신진서 카타고 AI 격파"(58건)와 "신진서 AI 카타고
+  // 대국"(40건), "Sh수협은행 여자바둑최강전"(11건)과 "여자 바둑대회"(1건),
+  // "부산시장배"와 "부산광역시장배"가 각각 따로 나왔다.
+  // 제목 유사도로는 못 가른다 - 합쳐야 할 쌍이 0.353~0.818, 따로 둬야 할 쌍이
+  // 0.080~0.696으로 구간이 겹친다. 그래서 프롬프트에서 막는다.
+  const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
+  assert.match(classifier, /이번에 만드는 이슈끼리도 중복을 만들지 않는다/);
+  // 같은 대회의 다른 부문까지 합쳐지면 안 된다. 이 예외가 없으면 하찬석국수배
+  // 영재부와 어린이부가 하나로 뭉개진다.
+  assert.match(classifier, /같은 대회라도 부문이 다르면 별개다/);
+  assert.match(classifier, /하찬석국수배 영재바둑대회/);
+});
