@@ -96,10 +96,22 @@ export function standaloneBadukIssueTitle(article) {
   return '';
 }
 
+// 요약을 80자만 보내던 것이 오분류의 큰 원인이었다. 한국 기사 요약은 첫 줄이
+// 인물 소개나 배경으로 시작하고 **어느 대회·어느 대국인지는 둘째 줄에** 나오는
+// 일이 많다. 실측 2026-08-10: "신진서 9단, 영재에게 한 수 가르쳤다"는 제목에
+// 사건이 없고, 80자 안에도 없다(첫 줄이 "한국 바둑의 살아있는 전설이자
+// 일인자인 신진서 9단이 한 수 위 기량을…"으로 끝난다). '하찬석국수배 영재최강전
+// 조상연 6단 136수'는 둘째 줄에 있다. AI는 무슨 사건인지 볼 수가 없으니
+// "신진서 관련이니 카타고" 쪽으로 묶었다. 스미레·명인전·조상연 오분류가 모두
+// 같은 모양이었다.
+//
+// 240자면 3줄 요약의 둘째 줄까지 대체로 들어간다. 기사 400건 기준 입력이 6만
+// 자쯤 늘지만 Haiku 입력은 백만 토큰에 $1이라 회당 $0.02 안팎이다. 대회 이름을
+// 못 봐서 틀리는 것보다 싸다.
 function buildListing(articles) {
   return articles.map((item, index) => {
     const date = String(item.published_at || item.fetched_at || '').slice(0, 10);
-    const summary = String(item.summary || '').replace(/\n/g, ' ').slice(0, 80);
+    const summary = String(item.summary || '').replace(/\n/g, ' ').slice(0, 240);
     return `${index}. [${date}] ${item.title}${summary ? ` — ${summary}` : ''}`;
   }).join('\n');
 }

@@ -236,7 +236,9 @@ export async function onRequestPost({ request, env }) {
         return {
           key: group.key,
           title: group.title,
-          context: representatives.map(item => `${item.title} ${String(item.summary || '').replace(/\n/g, ' ').slice(0, 120)}`).join(' / ')
+          // 120자로 자르면 대표 기사의 요약 둘째 줄이 잘려 어느 대회인지 사라진다.
+          // buildListing과 같은 이유로 240자까지 보낸다(2026-08-10).
+          context: representatives.map(item => `${item.title} ${String(item.summary || '').replace(/\n/g, ' ').slice(0, 240)}`).join(' / ')
         };
       });
     // 호출 전에 예상 비용을 먼저 적는다. recordClaudeUsage는 호출이 끝난 뒤에만
