@@ -319,3 +319,22 @@ test('일반 기사는 요약 첫 줄이 닮으면 묶고 바둑 기사는 묶�
   })).json();
   assert.equal(kept.items.length, 2, '바둑 기사는 요약이 닮아도 따로 둔다');
 });
+
+test('읽을 때도 같은 대회로 쪼개진 이슈를 합치고 기타는 건드리지 않는다', async () => {
+  const { mergeCachedIssueTitles } = await import('../functions/api/news/articles.js');
+  const merged = mergeCachedIssueTitles([
+    { key: '바둑|ai:1', title: 'Sh수협은행 여자바둑최강전', url_keys: ['a', 'b'] },
+    { key: '바둑|ai:2', title: 'SH수협은행 여자바둑대회', url_keys: ['c'] },
+    { key: '바둑|ai:3', title: '하찬석국수배 어린이 바둑대회', url_keys: ['d'] },
+    { key: '바둑|ai:4', title: '하찬석국수배 영재바둑대회 결승', url_keys: ['e'] },
+    { key: '바둑|ai:misc', title: '기타', url_keys: ['f'] }
+  ]);
+  assert.equal(merged.length, 4, '수협은행 두 개만 합쳐진다');
+  const sh = merged.find(g => /수협/.test(g.title));
+  assert.deepEqual(sh.url_keys, ['a', 'b', 'c']);
+  // 부문이 다른 대회는 그대로 나뉜다.
+  assert.ok(merged.some(g => g.title === '하찬석국수배 어린이 바둑대회'));
+  assert.ok(merged.some(g => g.title === '하찬석국수배 영재바둑대회 결승'));
+  // 기타는 합치지 않는다.
+  assert.ok(merged.some(g => g.key.endsWith('|ai:misc')));
+});

@@ -3,7 +3,9 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
-import { isSameStoryPrepared, sharesKeywordsPrepared, storyFingerprint } from '../../_lib/news-dedup.js';
+import {
+  isSameIssueTitle, isSameStoryPrepared, sharesKeywordsPrepared, storyFingerprint
+} from '../../_lib/news-dedup.js';
 import { titleSimilarity } from '../../_lib/news-extract.js';
 import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
@@ -114,6 +116,26 @@ async function loadIssueCache(env, category) {
   } catch {
     return null;
   }
+}
+
+
+// 제목이 같은 대회를 가리키는 이슈들을 하나로 합친다. 기타 묶음은 서로 무관한
+// 기사를 모아두는 자리라 손대지 않는다.
+export function mergeCachedIssueTitles(cached) {
+  if (!Array.isArray(cached) || cached.length < 2) return cached;
+  const merged = [];
+  for (const group of cached) {
+    const isMisc = String(group?.key || '').endsWith('|ai:misc') || String(group?.title || '') === '기타';
+    const target = isMisc ? null
+      : merged.find(kept => !String(kept.key || '').endsWith('|ai:misc')
+        && kept.title !== '기타' && isSameIssueTitle(kept.title, group.title));
+    if (target) {
+      target.url_keys = [...new Set([...target.url_keys, ...(group.url_keys || [])])];
+      continue;
+    }
+    merged.push({ ...group, url_keys: [...(group.url_keys || [])] });
+  }
+  return merged;
 }
 
 export function normalizeCachedIssues(items, cached) {
@@ -257,9 +279,15 @@ export async function onRequestGet({ request, env }) {
     const maxLimit = 300;
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 60, 1), maxLimit);
     const uid = userId(request);
-    const cachedIssues = category === '바둑'
+    const loadedIssues = category === '바둑'
       ? await loadIssueCache(env, category)
       : ((!category && excludeBaduk) || issueCategory === '일반') ? await loadIssueCache(env, '일반') : null;
+    // AI가 같은 대회에 이름을 다르게 붙여 쪼갠 이슈를 읽을 때 합친다. 분류
+    // 단계(enforceIssueRules)에도 같은 판정이 있지만 그쪽은 다음 분류부터
+    // 적용되므로, 이미 쌓인 캐시는 여기서 합쳐야 지금 바로 정리된다.
+    // 실측 2026-08-10: 'Sh수협은행 여자바둑최강전'과 'SH수협은행 여자바둑대회'가
+    // 대소문자만 다른데 따로 있었다. 기타 묶음은 건드리지 않는다.
+    const cachedIssues = mergeCachedIssueTitles(loadedIssues);
     const where = [
       view === 'hidden' ? "h.url_key IS NOT NULL" : "h.url_key IS NULL",
       ...CONTENT_QUALITY_FILTERS
