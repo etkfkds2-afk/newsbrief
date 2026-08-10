@@ -1498,7 +1498,11 @@ test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻
   assert.match(collector, /reserveAnthropicCall\(env, diagnostics, forceRetry, generalBoost\)\) \{/);
   assert.match(collector, /recordClaudeUsage\(env, judged\.model, judged\.usage\)/);
   // 판정 결과는 무료 요약 경로로 이어져야 의미가 있다.
-  assert.match(collector, /storyIndex\.match\(title\) \|\| aiDuplicates\.get\(knownUrlKey\)/);
+  assert.match(collector, /aiDuplicates\.get\(knownUrlKey\)/);
+  // 중복 판정은 발행일이 같은 날끼리만 한다. 날이 다르면 헤드라인도 달라지므로
+  // 각각 요약을 산다(사용자 결정 2026-08-10).
+  assert.match(collector, /storyIndexByDay/);
+  assert.match(collector, /dayStories \? dayStories\.match\(title\)/);
   // 잘못 묶는 쪽이 더 나쁘다는 지시가 프롬프트에 남아 있어야 한다.
   assert.match(classify, /확신이 없으면 묶지 않는다/);
   assert.match(classify, /다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다/);

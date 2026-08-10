@@ -149,10 +149,24 @@ async function collect(env, {
   // 유료 요약을 또 쓰지 않기 위해 본다. 요약이 성립한 행만 넣는 것이 중요하다.
   // 요약에 실패해 둔 기사까지 넣으면, 다음에 들어온 같은 이야기가 제대로 요약될
   // 기회까지 막힌다.
+  // 중복 판정은 **발행일이 같은 날**끼리만 한다. 날이 다르면 헤드라인도 달라지므로
+  // 각각 요약을 산다. 사용자 결정(2026-08-10).
+  const koreaDayKey = value => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || !parsed) return '';
+    return new Date(parsed + 9 * 3600000).toISOString().slice(0, 10);
+  };
   const recentStoryStart = now.valueOf() - STORY_INDEX_WINDOW_DAYS * 86400000;
-  const storyIndex = createStoryIndex();
-  // 글자 유사도가 놓친 것을 AI에게 한 번 더 묻기 위한 목록(findDuplicateStories).
-  const recentStoryTitles = [];
+  // 날짜별 이야기 목록. 같은 날 안에서만 "이미 다룬 이야기인가"를 묻는다.
+  const storyIndexByDay = new Map();
+  const storyTitlesByDay = new Map();
+  const dayIndex = day => {
+    if (!storyIndexByDay.has(day)) {
+      storyIndexByDay.set(day, createStoryIndex());
+      storyTitlesByDay.set(day, []);
+    }
+    return storyIndexByDay.get(day);
+  };
   for (const row of publishedRows.results || []) {
     if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
     const bucket = row.category === '바둑' ? 'baduk' : 'general';
@@ -160,8 +174,11 @@ async function collect(env, {
     publicationCounts[bucket].monthly += 1;
     if (timestamp >= dayStart) publicationCounts[bucket].daily += 1;
     if (timestamp >= recentStoryStart) {
-      storyIndex.add(row.title);
-      recentStoryTitles.push(row.title);
+      const day = koreaDayKey(timestamp);
+      if (day) {
+        dayIndex(day).add(row.title);
+        storyTitlesByDay.get(day).push(row.title);
+      }
     }
   }
   const popularityTargetStart = popularityCandidates.length
@@ -755,26 +772,34 @@ async function collect(env, {
     // 하나의 보도자료가 매체만 바꿔 10건 넘게 들어오면 예전에는 그 전부가 유료
     // 요약을 받았다. 실측(2026-08-10): 빙그레 부라보콘 대회 기사 14건, 유료 호출
     // 약 42회, 월 예산의 3%. 화면에서는 어차피 한 이슈로 묶여 관련 보도로 보인다.
-    const duplicateOf = storyIndex.match(title) || aiDuplicates.get(knownUrlKey) || '';
+    // 이미 다룬 이야기면 요약을 아예 사지 않는다. 화면에서 관련 보도로 뜰 때는
+    // 제목·언론사·링크만 쓰고 요약은 보이지도 않는다. 예전에는 무료 추출 요약을
+    // 만들어 보고 그것이 검증에 걸리면 유료로 되샀는데, 쓰지도 않을 요약 때문에
+    // 돈을 쓰는 셈이었다(2026-08-10 실측: 판정 3건, 절감 0원).
+    //
+    // 대신 summary_quality='duplicate'로 표시해 둔다. 읽기 단계가 이 행을 카드로
+    // 세우지 않고 대표 기사의 관련 보도로만 붙인다.
+    // 이 기사의 발행일과 같은 날 안에서만 중복을 본다.
+    const itemDay = koreaDayKey(Date.parse(resolvedPublishedAt || '') || storedTime(resolvedPublishedAt));
+    const dayStories = itemDay ? dayIndex(itemDay) : null;
+    const aiSame = aiDuplicates.get(knownUrlKey) || '';
+    const duplicateOf = (dayStories ? dayStories.match(title) : '')
+      || (aiSame && itemDay && (storyTitlesByDay.get(itemDay) || []).includes(aiSame) ? aiSame : '');
     let summary = '';
+    let validSummary = false;
     if (duplicateOf) {
-      summary = await summarize(payload, undefined, 'new', { freeOnly: true });
-      if (validPublishedSummary(summary, title, finalCategory)) {
-        diagnostics.story_duplicate_free = Number(diagnostics.story_duplicate_free || 0) + 1;
-        (diagnostics.story_duplicate_samples ||= []).length < 2
-          && diagnostics.story_duplicate_samples.push(`${title.slice(0, 28)} <- ${duplicateOf.slice(0, 28)}`);
-      } else {
-        // 중복 판정이 틀렸을 수도, 본문이 추출 요약에 안 맞을 수도 있다. 어느
-        // 쪽이든 기사를 잃지 않도록 예전과 똑같은 유료 경로로 되돌린다. 이 값이
-        // 계속 크면 판정이 아니라 추출 요약 쪽을 봐야 한다.
-        summary = '';
-        diagnostics.story_duplicate_paid_fallback = Number(diagnostics.story_duplicate_paid_fallback || 0) + 1;
+      diagnostics.story_duplicate_skipped = Number(diagnostics.story_duplicate_skipped || 0) + 1;
+      (diagnostics.story_duplicate_samples ||= []).length < 2
+        && diagnostics.story_duplicate_samples.push(`${title.slice(0, 28)} <- ${duplicateOf.slice(0, 28)}`);
+    } else {
+      summary = await summarize(payload);
+      validSummary = validPublishedSummary(summary, title, finalCategory);
+      // 같은 실행에 같은 보도자료가 몰려 들어와도 첫 건만 요약을 받게 한다.
+      if (validSummary && dayStories) {
+        dayStories.add(title);
+        storyTitlesByDay.get(itemDay).push(title);
       }
     }
-    if (!summary) summary = await summarize(payload);
-    const validSummary = validPublishedSummary(summary, title, finalCategory);
-    // 같은 실행에 같은 보도자료가 몰려 들어와도 첫 건만 유료 요약을 받게 한다.
-    if (validSummary) storyIndex.add(title);
 
     await env.DB.prepare(`
       INSERT INTO news_articles
@@ -788,10 +813,10 @@ async function collect(env, {
         summary_quality=excluded.summary_quality
     `).bind(
       url, urlKey, title, articleSource(url, source, article.press || press), article.press || press, finalCategory, resolvedPublishedAt, rawSummary,
-      body, validSummary ? summary : '', validSummary ? 'full' : 'none', article.image
+      body, validSummary ? summary : '', duplicateOf ? 'duplicate' : (validSummary ? 'full' : 'none'), article.image
     ).run();
     if (validSummary) consumePublicationCapacity(finalCategory);
-    outcome(validSummary ? 'inserted_publishable' : 'inserted_pending_summary');
+    outcome(duplicateOf ? 'inserted_duplicate' : (validSummary ? 'inserted_publishable' : 'inserted_pending_summary'));
     return 1;
   };
   const uniqueCandidates = [];
@@ -855,6 +880,7 @@ async function collect(env, {
   const aiDuplicates = new Map();
   const dedupTargets = limitedCandidates.filter(candidate => candidate.category === '바둑'
     && candidate.urlKey && !knownCandidateKeys.has(candidate.urlKey));
+  const recentStoryTitles = [...storyTitlesByDay.values()].flat();
   if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
     && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
     const judged = await findDuplicateStories(env,

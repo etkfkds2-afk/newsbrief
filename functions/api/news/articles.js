@@ -13,8 +13,11 @@ import {
 import { hasLegalCaseConflict, isStandaloneEventArticle, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
+// 'duplicate'는 같은 날 이미 다룬 이야기라 요약을 사지 않은 행이다. 카드로
+// 세우지 않고 대표 기사의 관련 보도로만 붙인다(아래 accepted 루프). 관련 보도에는
+// 제목·언론사·링크만 쓰이므로 요약이 없어도 된다.
 export const CONTENT_QUALITY_FILTERS = [
-  "a.summary_quality='full'", "TRIM(a.summary)<>''",
+  "(a.summary_quality='duplicate' OR (a.summary_quality='full' AND TRIM(a.summary)<>''))",
   "instr(a.title,'�')=0",
   // 커뮤니티·블로그·위키 등 뉴스가 아닌 출처는 news-blocklist.js가 관리한다.
   ...BLOCKED_HOST_SQL_FILTERS,
@@ -421,8 +424,10 @@ export async function onRequestGet({ request, env }) {
       if (item.press === item.source) item.press = '';
       item.outlet = outletFor(item);
       if (excludeBaduk && item.category !== '바둑' && isBadukRelevant(item.title, item.summary)) continue;
-      if (!validateThreeLineSummary(item.summary, item.title)) continue;
-      if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
+      // duplicate 행은 요약이 없다. 3줄 검증을 걸면 전부 떨어져 관련 보도가 사라진다.
+      const isDuplicateRow = item.summary_quality === 'duplicate';
+      if (!isDuplicateRow && !validateThreeLineSummary(item.summary, item.title)) continue;
+      if (!isDuplicateRow && item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
       if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;
       // 광고성 차단은 item.category가 아니라 보고 있는 탭을 기준으로 건다. 위
       // where 절이 바둑 탭에 함께 싣는 일반 기사(기원 사건 등)에도 적용해야
@@ -472,8 +477,23 @@ export async function onRequestGet({ request, env }) {
       // 이 구조에서는 타일·카드·관련 보도가 항상 같은 집합이다. AI가 틀리면
       // 틀린 대로 보이지만, 서로 모순되게 보이지는 않는다.
       const itemIssue = issueOf.get(item.url_key) || '';
+      // AI 이슈가 같아도 서로 전혀 안 닮은 기사는 카드로 접지 않는다. 이슈
+      // 타일에는 그대로 함께 남고 카드만 따로 선다. AI 분류는 돌릴 때마다
+      // 결과가 달라서 한 번 크게 묶이면 화면이 통째로 따라간다. 2026-08-10에
+      // 재분류를 여섯 번 돌렸는데 매번 다른 것이 깨졌고, 마지막에는 카타고
+      // 이슈가 99건으로 부풀어 스미레 여자 랭킹, 명인전 관전기, 월간 랭킹
+      // 발표까지 한 카드에 들어갔다.
+      //
+      // 문턱은 실측으로 잡았다. 잘못 묶인 쌍이 0.000~0.222, 제대로 묶인 쌍이
+      // 0.195 이상이면서 공유 단어가 둘 이상이었다. 그래서 제목 0.25이거나
+      // 고유 단어 2개를 요구한다. 요약 경로는 바둑에 열지 않는다 - 바둑 요약은
+      // 죄다 "신진서가 AI와 대국해서…" 구조라 그 통로로 샌다.
+      const issueFloor = old =>
+        similarTokens(titleTokens, old.titleTokens, 0.25)
+        || sharesKeywordsPrepared(story, old.story, 2)
+        || (!badukItem && old.category !== '바둑' && similarTokens(firstTokens, old.firstTokens, 0.3));
       const group = itemIssue
-        ? accepted.find(old => issueOf.get(old.url_key) === itemIssue)
+        ? accepted.find(old => issueOf.get(old.url_key) === itemIssue && issueFloor(old))
         : accepted.find(old => !issueOf.get(old.url_key) && (
           similarTokens(titleTokens, old.titleTokens, titleThreshold)
           || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
@@ -510,6 +530,9 @@ export async function onRequestGet({ request, env }) {
         addRelated(group, item);
         continue;
       }
+      // duplicate 행은 대표를 못 찾았더라도 카드로 세우지 않는다. 요약이 없어
+      // 3줄 카드가 될 수 없다. 붙을 대표가 없으면 그냥 버린다.
+      if (isDuplicateRow) continue;
       accepted.push({ ...item, first, titleTokens, firstTokens, story, related: [], related_count: 0 });
     }
     const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;

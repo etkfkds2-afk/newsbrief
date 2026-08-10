@@ -426,3 +426,28 @@ test('AI 이슈가 카드·관련 보도의 유일한 기준이다', async () =>
   const lead = data.items.find(a => a.url_key === 'k1');
   if (lead) assert.ok((lead.related || []).every(r => r.url_key === 'k2'));
 });
+
+test('요약을 사지 않은 중복 기사는 관련 보도로만 붙는다', async () => {
+  // 같은 날 이미 다룬 이야기는 요약을 사지 않고 summary_quality='duplicate'로
+  // 저장한다. 관련 보도에는 제목·언론사·링크만 쓰이므로 요약이 필요 없다.
+  const base = {
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    image_url: '', saved: 0
+  };
+  const rows = [
+    { ...base, id: 1, url_key: 'k1', url: 'https://example.com/1',
+      title: "빙그레, '제3회 부라보콘 전국 어린이 바둑 대회' 개최",
+      summary, summary_quality: 'full' },
+    { ...base, id: 2, url_key: 'k2', url: 'https://example.com/2',
+      title: "'제3회 부라보콘 전국 어린이 바둑 대회' 개최...빙그레 후원",
+      summary: '', summary_quality: 'duplicate' }
+  ];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows)
+  })).json();
+  assert.equal(data.items.length, 1, '중복 행은 카드가 되지 않는다');
+  assert.equal(data.items[0].url_key, 'k1');
+  assert.equal(data.items[0].related_count, 1, '관련 보도로는 붙는다');
+  assert.equal(data.items[0].related[0].url_key, 'k2');
+});
