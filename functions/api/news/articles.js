@@ -254,7 +254,21 @@ export async function onRequestGet({ request, env }) {
     ];
     const bindings = [uid, uid, uid];
 
-    if (category && CATEGORIES.has(category)) {
+    if (category === '바둑') {
+      // 기원에서 벌어진 사건처럼 분류는 사회인데 바둑 독자에게는 소식인 기사가
+      // 있다. 그런 기사는 일반 탭이 인기순만 쓰므로 인기에 못 들면 어디에도
+      // 안 뜬다(실측 2026-08-10: 노원구 기원 살인 보도 4건 모두 미노출).
+      // 분류를 바둑으로 바꾸는 대신 바둑 탭에서만 함께 읽는다. 일반 탭은
+      // 그대로 두므로 인기에 들면 거기에도 뜬다.
+      //
+      // 규칙을 제목 위주로 좁게 잡은 근거(최근 30일 일반 209건 실측): 요약까지
+      // 보면 '바둑'을 스치는 기사가 16건 걸리는데 그중 10건이 노이즈였다.
+      // 알파고를 언급한 구글 AI 조직 개편 기사, 뉴스 모음, 노숙인 르포 등이다.
+      // 아래 규칙이면 그 10건 중 9건이 빠지고 원하는 6건은 모두 남는다.
+      where.push(`(a.category = ? OR a.title LIKE '%바둑%'
+        OR (a.title LIKE '%기원%' AND a.summary LIKE '%바둑%'))`);
+      bindings.push(category);
+    } else if (category && CATEGORIES.has(category)) {
       where.push('a.category = ?');
       bindings.push(category);
     } else if (issueKeyFilter && CATEGORIES.has(issueCategory)) {
@@ -363,7 +377,12 @@ export async function onRequestGet({ request, env }) {
       if (!validateThreeLineSummary(item.summary, item.title)) continue;
       if (item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
       if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;
-      if (item.category === '바둑'
+      // 광고성 차단은 item.category가 아니라 보고 있는 탭을 기준으로 건다. 위
+      // where 절이 바둑 탭에 함께 싣는 일반 기사(기원 사건 등)에도 적용해야
+      // "넷마블 바둑 설치 다운로드" 같은 것이 그 경로로 새어 들어오지 않는다.
+      // isBadukDisplayRelevant는 여기 걸지 않는다. 그 판정은 바둑계 소식인지를
+      // 보므로 기원 살인 사건을 false로 떨어뜨린다 - 실을 이유가 그것인데.
+      if (category === '바둑'
         && (BADUK_PROMO_TITLE_PATTERNS.some(pattern => pattern.test(item.title))
           || BADUK_PROMO_OUTLETS.test(`${item.outlet} ${item.press} ${item.source}`))) continue;
       const first = String(item.summary || '').split('\n')[0].replace(/^\s*1[.)]\s*/, '');

@@ -122,3 +122,30 @@ test('서로 다른 대국 결과는 접지 않는다', async () => {
   })).json();
   assert.equal(data.items.length, 2);
 });
+
+test('바둑 탭은 기원 사건처럼 분류가 일반인 바둑 관련 기사도 함께 싣는다', async () => {
+  // 일반 탭은 인기순만 쓰므로 인기에 못 든 이런 기사는 어디에도 안 뜬다.
+  // 실측 2026-08-10: 노원구 기원 살인 보도 4건이 모두 일반 탭 미노출이었다.
+  const env = mockEnv([]);
+  await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env
+  });
+  assert.match(env.articleSql, /a\.title LIKE '%바둑%'/);
+  assert.match(env.articleSql, /a\.title LIKE '%기원%' AND a\.summary LIKE '%바둑%'/);
+});
+
+test('바둑 탭에 함께 싣는 일반 기사에도 광고 차단을 적용한다', async () => {
+  // 규칙이 제목의 '바둑'만 보므로 게임 광고가 이 경로로 새어 들어올 수 있다.
+  // 차단 판정을 item.category가 아니라 보고 있는 탭 기준으로 걸어야 막힌다.
+  const row = {
+    id: 1, url_key: 'p1', url: 'https://example.com/1',
+    title: '넷마블 바둑 설치 다운로드 방법 안내',
+    source: 'example.com', press: '', category: '사회',
+    published_at: '2026-08-09T02:00:00Z', fetched_at: '2026-08-09T02:00:00Z',
+    summary, summary_quality: 'full', image_url: '', saved: 0
+  };
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv([row])
+  })).json();
+  assert.equal(data.items.length, 0);
+});
