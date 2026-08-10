@@ -149,3 +149,29 @@ test('바둑 탭에 함께 싣는 일반 기사에도 광고 차단을 적용한
   })).json();
   assert.equal(data.items.length, 0);
 });
+
+test('이슈 판정과 건수는 카드가 아니라 관련 보도까지 센다', async () => {
+  // 같은 보도자료 여러 건이 카드 하나로 접히면 카드 수는 1이다. 카드로 세면
+  // 그 이야기가 '2건 이상' 조건에서 탈락해 기타로 밀려난다. 접기를 넣으면서
+  // 생긴 회귀라, 접힌 보도까지 세야 예전 동작이 유지된다.
+  const row = (id, title) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, "빙그레, '제3회 부라보콘 전국 어린이 바둑 대회' 개최"),
+    row(2, "'제3회 부라보콘 전국 어린이 바둑 대회' 개최...빙그레 후원")
+  ];
+  const cached = [{ key: '바둑|ai:0', title: '부라보콘 전국 어린이 바둑대회', url_keys: ['k1', 'k2'] }];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91&issues=1'),
+    env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(data.items.length, 1, '카드는 하나로 접힌다');
+  assert.equal(data.items[0].related_count, 1);
+  const issue = (data.issues || []).find(g => !String(g.key).endsWith('|ai:misc'));
+  assert.ok(issue, '카드가 1장이어도 보도가 2건이면 이슈로 남아야 한다');
+  assert.equal(issue.count, 2, '타일 건수도 접힌 보도를 포함한다');
+});

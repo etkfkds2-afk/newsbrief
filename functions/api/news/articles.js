@@ -79,7 +79,9 @@ function buildIssues(items, category = '') {
     const key = issueKey(item.title, item.category || category, item.summary);
     if (!key) continue;
     const group = groups.get(key) || { key, title: issueLabel(key), category: item.category, representative: item, related: [], count: 0, latest: item.published_at || item.fetched_at };
-    group.count += 1;
+    // 접힌 관련 보도까지 센다. buildIssuesFromCache와 같은 기준이어야 AI 캐시가
+    // 있을 때와 없을 때 타일에 적히는 건수가 달라지지 않는다.
+    group.count += 1 + Number(item.related_count || 0);
     if (!group.title) group.title = key.split(':').slice(1).filter(Boolean).join(' · ').replace(/·/g, ' · ').replace(/\s+·\s+$/, '');
     if (group.representative.url_key !== item.url_key) group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });
     groups.set(key, group);
@@ -136,9 +138,14 @@ export function normalizeCachedIssues(items, cached) {
     });
     return { key: group.key, title: group.title, url_keys: keys };
   }).filter(group => group.url_keys.length > 0);
+  // 카드 수가 아니라 실제 보도 건수를 센다. 같은 보도자료 14건이 관련 보도로
+  // 접히면 카드는 1장이지만 보도는 14건이다. 카드로 세면 그런 이야기가 '2건
+  // 이상' 조건에서 탈락해 기타로 밀려난다 - 중복 접기를 넣으면서 생긴 회귀다.
+  const storyCount = keys => keys.reduce((total, key) =>
+    total + 1 + Number(itemByKey.get(key)?.related_count || 0), 0);
   const valid = mapped.filter(group => {
     if (group.key.endsWith('|ai:misc')) return true;
-    if (group.url_keys.length >= 2) return true;
+    if (storyCount(group.url_keys) >= 2) return true;
     const item = itemByKey.get(group.url_keys[0]);
     if (trustedStandalone(item)) return true;
     forcedMisc.push(...group.url_keys);
@@ -175,7 +182,11 @@ export function buildIssuesFromCache(items, cached, capCount = Infinity) {
     // below degrades to the original recency order for them, unchanged.
     const score = group.url_keys.reduce((max, key) =>
       Math.max(max, Number(itemByKey.get(key)?.popularity_score) || 0), 0);
-    return { key: group.key, title: group.title, count: group.url_keys.length, latest, score };
+    // 타일에 적히는 '관련 기사 N건'도 접힌 보도를 포함해야 카드 목록과 어긋나지
+    // 않는다. 카드 1장에 관련 보도 13건이면 이 이슈의 보도는 14건이다.
+    const count = group.url_keys.reduce((total, key) =>
+      total + 1 + Number(itemByKey.get(key)?.related_count || 0), 0);
+    return { key: group.key, title: group.title, count, latest, score };
   });
   // The 기타 bucket (leftover singletons) can outnumber every real issue by
   // count, so it is kept out of the sort and appended last instead. Real
