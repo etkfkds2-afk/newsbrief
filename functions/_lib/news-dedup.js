@@ -94,3 +94,74 @@ export function sharesTitleKeywords(left, right, minimum = 3) {
   if (!a.size) return false;
   return titleKeywords(right).filter(word => a.has(word)).length >= minimum;
 }
+
+// ── 미리 계산해 두고 쓰는 경로 ────────────────────────────────────────────
+// 카드 묶기는 기사 쌍마다 판정을 부른다. 150장이면 비교가 1만 번을 넘는데,
+// 그때마다 제목을 정규식으로 쪼개고 bigram 집합을 새로 만들면 Cloudflare
+// Worker의 CPU 한도에 걸려 월간 화면이 통째로 죽는다(2026-08-10 실측).
+// 기사당 한 번만 계산해 두고 집합끼리 비교한다. 판정 결과는 위 문자열 경로와
+// 같아야 하므로 같은 가드를 그대로 쓴다.
+function bigramSet(value) {
+  const out = new Set();
+  for (let index = 0; index + 1 < value.length; index += 1) out.add(value.slice(index, index + 2));
+  return out;
+}
+
+function diceOfSets(left, right) {
+  if (!left.size || !right.size) return 0;
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  let common = 0;
+  for (const gram of small) if (large.has(gram)) common += 1;
+  return (2 * common) / (left.size + right.size);
+}
+
+function normalizeForGrams(value) {
+  return cleanTitle(value).replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+}
+
+// 기사 하나의 제목에서 판정에 필요한 것을 모두 뽑아 둔다.
+export function storyFingerprint(title) {
+  const clean = cleanTitle(title);
+  const whole = normalizeForGrams(clean);
+  const tail = normalizeForGrams(stripSeriesTag(clean));
+  return {
+    empty: !clean,
+    whole,
+    tail,
+    grams: bigramSet(whole),
+    tailGrams: bigramSet(tail),
+    serials: serialNumbers(clean),
+    keywords: new Set(titleKeywords(clean))
+  };
+}
+
+// titleSimilarity는 정규화한 두 문자열이 같으면 bigram을 세지 않고 1을 준다.
+// 한 글자 제목처럼 bigram이 아예 없는 경우가 있어서, 그 지름길까지 그대로
+// 옮겨야 문자열 경로와 판정이 어긋나지 않는다.
+function score(leftText, rightText, leftGrams, rightGrams) {
+  if (!leftText || !rightText) return 0;
+  if (leftText === rightText) return 1;
+  return diceOfSets(leftGrams, rightGrams);
+}
+
+export function isSameStoryPrepared(left, right, threshold = SAME_STORY_THRESHOLD) {
+  if (!left || !right || left.empty || right.empty) return false;
+  if (left.serials.size && right.serials.size) {
+    let shares = false;
+    for (const value of left.serials) if (right.serials.has(value)) { shares = true; break; }
+    if (!shares) return false;
+  }
+  if (score(left.whole, right.whole, left.grams, right.grams) < threshold) return false;
+  return score(left.tail, right.tail, left.tailGrams, right.tailGrams) >= threshold;
+}
+
+export function sharesKeywordsPrepared(left, right, minimum = 3) {
+  if (!left?.keywords.size || !right?.keywords.size) return false;
+  const [small, large] = left.keywords.size <= right.keywords.size
+    ? [left.keywords, right.keywords] : [right.keywords, left.keywords];
+  let shared = 0;
+  for (const word of small) {
+    if (large.has(word) && (shared += 1) >= minimum) return true;
+  }
+  return false;
+}

@@ -3,7 +3,7 @@ import {
   normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
-import { isSameStory, sharesTitleKeywords } from '../../_lib/news-dedup.js';
+import { isSameStoryPrepared, sharesKeywordsPrepared, storyFingerprint } from '../../_lib/news-dedup.js';
 import { titleSimilarity } from '../../_lib/news-extract.js';
 import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
@@ -305,8 +305,9 @@ export async function onRequestGet({ request, env }) {
     // 서로 다른 집합을 세어 숫자가 어긋났다. 실측 2026-08-10 'Sh수협은행
     // 여자바둑최강전': 타일 10건, 목록 카드 2장(관련 9 + 관련 2 = 13건),
     // 눌러서 들어가면 2건. 지름길이 유사도로 묶인 기사를 아예 못 봤기 때문이다.
-    // 전체 후보를 읽는 만큼 이 요청은 무거워지지만, feedCandidateLimit이 이미
-    // 이슈 클릭을 감안해 폭을 넓혀 두었고 숫자가 맞는 편이 낫다.
+    // 전체 후보를 읽는 만큼 이 요청은 무거워진다. 지름길을 없앤 직후에는 카드
+    // 묶기가 쌍마다 문자열을 다시 쪼개고 있어서 월간 화면이 Worker CPU 한도에
+    // 걸려 죽었다. 그건 지문을 미리 계산하는 방식으로 따로 고쳤다(23배).
     if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
@@ -406,6 +407,11 @@ export async function onRequestGet({ request, env }) {
       const summaryThreshold = badukItem ? 0.9 : 0.45;
       const titleTokens = bigrams(item.title);
       const firstTokens = bigrams(first);
+      // 제목 판정에 필요한 것(bigram 집합, 일련번호, 고유 단어)을 기사당 한 번만
+      // 계산한다. 예전에는 아래 find가 쌍마다 원문 문자열을 다시 쪼갰다. 기사
+      // 150장이면 비교가 22,500번이라 Worker CPU 한도에 걸려 월간 화면이 통째로
+      // 죽었다(2026-08-10). 판정 기준은 그대로다.
+      const story = storyFingerprint(item.title);
       // 위 두 임계값은 제목이 거의 같을 때만 묶는다. 그래서 같은 보도자료가
       // 매체마다 조금씩 다르게 쓰이면 전부 따로 뜬다. 실측(2026-08-10): 빙그레
       // 부라보콘 대회 기사 14건이 바둑 탭에 카드 14개로 떴고 그중 12건은
@@ -419,8 +425,8 @@ export async function onRequestGet({ request, env }) {
         || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
         // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다
         // - 기사 이름과 대회 이름이 매 제목에 반복돼 다른 대국이 쉽게 걸린다.
-        || (!badukItem && old.category !== '바둑' && sharesTitleKeywords(item.title, old.title))
-        || isSameStory(item.title, old.title));
+        || (!badukItem && old.category !== '바둑' && sharesKeywordsPrepared(story, old.story))
+        || isSameStoryPrepared(story, old.story));
       if (group) {
         // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그
         // 기사가 이슈를 대표하지 못하면 제목과 내용이 어긋난다. 실측 2026-08-10:
@@ -433,7 +439,7 @@ export async function onRequestGet({ request, env }) {
           const demoted = { url_key: group.url_key, url: group.url, title: group.title, outlet: group.outlet };
           const related = group.related.filter(old => old.url_key !== item.url_key);
           related.push(demoted);
-          Object.assign(group, item, { first, titleTokens, firstTokens, related, related_count: related.length });
+          Object.assign(group, item, { first, titleTokens, firstTokens, story, related, related_count: related.length });
           continue;
         }
         if (!group.related.some(old => old.url_key === item.url_key)) {
@@ -442,7 +448,7 @@ export async function onRequestGet({ request, env }) {
         }
         continue;
       }
-      accepted.push({ ...item, first, titleTokens, firstTokens, related: [], related_count: 0 });
+      accepted.push({ ...item, first, titleTokens, firstTokens, story, related: [], related_count: 0 });
     }
     const normalizedCachedIssues = cachedIssues ? normalizeCachedIssues(accepted, cachedIssues) : null;
     // Weekly/monthly show the same 30-day general cache, only differing in
@@ -468,7 +474,7 @@ export async function onRequestGet({ request, env }) {
     // noon Korea time so it still sorts/filters sanely, but showing that
     // fabricated "12:00" to users reads as a bug. Display just the date, the
     // same as any other date-only published_at.
-    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, titleTokens, firstTokens, ...item }) => {
+    const items = selected.slice(0, issueKeyFilter ? 300 : limit).map(({ first, titleTokens, firstTokens, story, ...item }) => {
       if (/T03:00:00\.000Z$/.test(String(item.published_at || ''))) item.published_at = String(item.published_at).slice(0, 10);
       return item;
     });
