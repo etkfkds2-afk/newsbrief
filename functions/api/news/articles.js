@@ -4,6 +4,7 @@ import {
 } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { isSameStory } from '../../_lib/news-dedup.js';
+import { titleSimilarity } from '../../_lib/news-extract.js';
 import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
 } from '../../_lib/news-blocklist.js';
@@ -385,8 +386,10 @@ export async function onRequestGet({ request, env }) {
     // 기타 묶음은 반드시 제외한다. 서로 무관한 낱개 기사를 모아두는 자리라
     // 접으면 관계없는 기사가 한 장으로 뭉개진다.
     const issueOf = new Map();
+    const issueTitleOf = new Map();
     for (const group of cachedIssues || []) {
       if (String(group?.key || '').endsWith('|ai:misc') || String(group?.title || '') === '기타') continue;
+      issueTitleOf.set(group.key, group.title);
       for (const key of group?.url_keys || []) issueOf.set(key, group.key);
     }
     const accepted = [];
@@ -430,6 +433,20 @@ export async function onRequestGet({ request, env }) {
         || similarTokens(firstTokens, old.firstTokens, summaryThreshold)
         || isSameStory(item.title, old.title));
       if (group) {
+        // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그
+        // 기사가 이슈를 대표하지 못하면 제목과 내용이 어긋난다. 실측 2026-08-10:
+        // 신진서-카타고 이슈 103건이 "[제49기 SG배 명인전] 옅은 지점"이라는
+        // 무관한 관전기를 달고 떴다. 이슈 제목에 더 가까운 기사가 오면 대표를
+        // 바꾸고 기존 대표는 관련 보도로 내린다.
+        const issueTitle = itemIssue && itemIssue === issueOf.get(group.url_key)
+          ? String(issueTitleOf.get(itemIssue) || '') : '';
+        if (issueTitle && titleSimilarity(item.title, issueTitle) > titleSimilarity(group.title, issueTitle)) {
+          const demoted = { url_key: group.url_key, url: group.url, title: group.title, outlet: group.outlet };
+          const related = group.related.filter(old => old.url_key !== item.url_key);
+          related.push(demoted);
+          Object.assign(group, item, { first, titleTokens, firstTokens, related, related_count: related.length });
+          continue;
+        }
         if (!group.related.some(old => old.url_key === item.url_key)) {
           group.related.push({ url_key: item.url_key, url: item.url, title: item.title, outlet: item.outlet });
           group.related_count = group.related.length;

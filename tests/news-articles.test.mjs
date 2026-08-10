@@ -239,3 +239,35 @@ test('기타 묶음은 카드로 접지 않는다', async () => {
   })).json();
   assert.equal(data.items.length, 2);
 });
+
+test('이슈로 묶은 카드의 대표는 이슈 제목에 가장 가까운 기사로 고른다', async () => {
+  // 목록 순서상 맨 앞 기사가 대표가 되면 제목과 내용이 어긋난다. 실측
+  // 2026-08-10: 신진서-카타고 이슈 103건이 "[제49기 SG배 명인전] 옅은 지점"
+  // 이라는 무관한 관전기를 달고 떴다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, '[제49기 SG배 한국일보 명인전] 옅은 지점', [
+      '1) 제49기 SG배 명인전 본선 대국에서 신진서 9단이 좌하귀 접전으로 앞섰다.',
+      '2) 상대는 두터움을 살리려 했으나 신진서의 삭감이 제때 들어갔다.',
+      '3) 종반 끝내기에서 반집을 남긴 신진서 9단이 승부를 가져갔다.'
+    ].join('\n')),
+    row(2, '신진서, 카타고 꺾고 2승 1패 역전승', [
+      '1) 신진서 9단이 인공지능 카타고를 상대로 2승 1패 역전승을 거뒀다.',
+      '2) 첫 판을 내준 뒤 남은 두 판에서 승부호흡을 바꿔 흐름을 되찾았다.',
+      '3) 대국 뒤 그는 인간 바둑의 승부수가 여전히 매력이라고 말했다.'
+    ].join('\n'))
+  ];
+  const cached = [{ key: '바둑|ai:1', title: '신진서 카타고 AI 격파', url_keys: ['k1', 'k2'] }];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(data.items.length, 1);
+  assert.match(data.items[0].title, /카타고/, '이슈 제목에 가까운 기사가 대표가 된다');
+  assert.equal(data.items[0].related_count, 1);
+  assert.match(data.items[0].related[0].title, /명인전/, '기존 대표는 관련 보도로 내려간다');
+});
