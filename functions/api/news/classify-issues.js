@@ -313,12 +313,21 @@ export async function onRequestPost({ request, env }) {
       const matched = existingIssues.find(existing => existing.title === group.title);
       if (matched) {
         const existing = byKey.get(matched.key);
-        if (existing) existing.url_keys.push(...group.url_keys);
-        else byKey.set(matched.key, { key: matched.key, title: matched.title, url_keys: [...group.url_keys] });
+        if (existing) {
+          existing.url_keys.push(...group.url_keys);
+          if (group.main_key) existing.main_key = group.main_key;
+        } else byKey.set(matched.key, {
+          key: matched.key, title: matched.title, url_keys: [...group.url_keys],
+          ...(group.main_key ? { main_key: group.main_key } : {})
+        });
       } else {
         let key;
         do key = `${category}|ai:${nextIndex++}`; while (byKey.has(key));
-        byKey.set(key, { key, title: group.title, url_keys: [...group.url_keys] });
+        // main_key는 AI가 고른 대표 기사다. 화면이 카드 제목을 정할 때 쓴다.
+        byKey.set(key, {
+          key, title: group.title, url_keys: [...group.url_keys],
+          ...(group.main_key ? { main_key: group.main_key } : {})
+        });
       }
     }
 

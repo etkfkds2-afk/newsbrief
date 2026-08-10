@@ -21,13 +21,16 @@ ${hasExisting ? '\n각 새 기사가 기존 이슈 중 하나와 실제로 같�
 ${allowStandaloneEvents ? '- 예외: 기사 제목에 "대회"라는 단어가 명시된 기사는 단독 1건이어도 반드시 독립 이슈로 만든다. 이런 기사를 기타로 보내지 않는다. 본문에 과거 대회 경력만 언급되거나, 리그·기전·행사·교류 등만 있고 제목에 "대회"가 없는 단독 기사는 기타로 보낸다.\n' : ''}
 - 같은 번호를 두 이슈에 중복으로 넣지 않는다.
 - 이번에 만드는 이슈끼리도 중복을 만들지 않는다. 같은 사건·같은 대회를 다룬 기사는 표기가 달라도 반드시 하나의 이슈로 모은다. 예: "Sh수협은행 여자바둑최강전"과 "여자 바둑대회"는 같은 대회이므로 하나다. "부산시장배 전국바둑대회"와 "부산광역시장배 전국 바둑대회"도 하나다. "신진서 카타고 AI 격파"와 "신진서 AI 카타고 대국"도 하나다.
+- 지역이나 주최가 다른 대회는 절대 같은 이슈로 묶지 않는다. 대회 성격이 비슷해도 마찬가지다. 예: "영종국제도시배 전국바둑대회"와 "단양군 노인회장기 대회"는 다른 대회다. "부산시장배"와 "영일만 사랑배"도 다른 대회다.
 - 다만 같은 대회라도 부문이 다르면 별개다. 예: "하찬석국수배 영재바둑대회"와 "하찬석국수배 어린이 바둑대회"는 참가 부문이 달라 서로 다른 이슈다. 부문·연령·등급이 제목에 다르게 적혀 있으면 합치지 않는다.
 - 새로 만드는 이슈 제목은 기사에 나온 공식 대회명·사건명·정책명을 최우선으로 사용해 8~22자의 자연스러운 한국어 명사구로 쓴다. 기사 주변 인물, 기관, 지역만 떼어 제목으로 쓰지 않는다. 어색한 번역투, 따옴표, 특수기호를 쓰지 않는다.
 - 이슈 제목의 핵심 인물·기관·상품·사건 단어는 해당 묶음 기사 제목이나 요약에 실제로 등장해야 한다. 기사에 없는 단어를 추측해서 만들지 않는다.
   예시: "신진서 삼성화재배 우승", "한국기원 정기이사회 개최", "이세돌 은퇴 이후 근황"
 - 반드시 아래 JSON 배열 형식으로만 응답한다. 다른 설명, 주석, 마크다운 코드블록은 절대 쓰지 않는다.
 
-출력 형식: [{"title":"이슈 제목(기존과 같은 사건이면 그 제목 그대로)","indices":[0,3,7]}]`;
+- main에는 그 이슈를 대표할 기사 번호를 하나 고른다. 사건의 핵심을 가장 잘 담은 기사를 고르고, 사진 위주 기사([포토], 화보)나 다른 소식이 섞인 묶음 기사는 대표로 고르지 않는다. main은 반드시 indices 안에 있어야 한다.
+
+출력 형식: [{"title":"이슈 제목(기존과 같은 사건이면 그 제목 그대로)","indices":[0,3,7],"main":3}]`;
 }
 
 // Baduk: a lone article can stand as its own issue when its title names a
@@ -222,7 +225,17 @@ function toGroups(parsed, articles, existingTitles) {
     if (!existingTitles.has(title) && indices.length < 2 && !standaloneEvent) continue;
     indices.forEach(i => used.add(i));
     const genericMisc = /^(?:기타|그 밖의)(?:\s*(?:바둑\s*)?(?:소식|뉴스|이슈))?$/u.test(title);
-    groups.push({ title: genericMisc ? '기타' : title, url_keys: indices.map(i => articles[i].url_key), misc: genericMisc });
+    // AI가 고른 대표 기사. 카드 제목이 이슈와 어긋나지 않게 하려는 것이다.
+    // indices 밖을 가리키면 무시한다.
+    const mainIndex = Number(entry?.main);
+    const mainKey = Number.isInteger(mainIndex) && indices.includes(mainIndex)
+      ? articles[mainIndex].url_key : '';
+    groups.push({
+      title: genericMisc ? '기타' : title,
+      url_keys: indices.map(i => articles[i].url_key),
+      ...(mainKey && !genericMisc ? { main_key: mainKey } : {}),
+      misc: genericMisc
+    });
   }
   const leftover = articles.map((_, i) => i).filter(i => !used.has(i));
   const standaloneLeftover = leftover.filter(i => isStandaloneEventArticle(articles[i]));

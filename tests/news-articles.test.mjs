@@ -357,3 +357,34 @@ test('관련 보도에 같은 제목을 두 번 싣지 않는다', async () => {
   assert.equal(data.items.length, 1);
   assert.equal(data.items[0].related_count, 0, '대표와 같은 제목은 관련 보도로 싣지 않는다');
 });
+
+test('AI가 지목한 대표 기사를 카드 제목으로 올린다', async () => {
+  // 대표를 순서로 정하면 사진 기사나 관전기가 카드 제목이 되어 내용과 어긋난다.
+  // 실측 2026-08-10: 카타고 이슈 카드가 "[포토타임] 신진서 9단…"으로 떴다.
+  // 이제 AI가 이슈마다 대표를 하나 지목한다(main_key).
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const rows = [
+    row(1, '[포토타임] 신진서 9단, AI 카타고와 첫 대국', [
+      '1) 신진서 9단이 인공지능 카타고를 상대로 2승 1패 역전승을 거뒀다.',
+      '2) 첫 판을 내준 뒤 남은 두 판에서 흐름을 되찾아 승부를 뒤집었다.',
+      '3) 대국 뒤 그는 인간 바둑의 승부수가 여전히 매력이라고 말했다.'
+    ].join('\n')),
+    row(2, '신진서, 카타고 꺾고 2승 1패 역전승', [
+      '1) 신진서 9단이 인공지능 카타고를 상대로 2승 1패 역전승을 거뒀다.',
+      '2) 첫 판을 내준 뒤 남은 두 판에서 흐름을 되찾아 승부를 뒤집었다.',
+      '3) 대국 뒤 그는 인간 바둑의 승부수가 여전히 매력이라고 말했다.'
+    ].join('\n'))
+  ];
+  const cached = [{ key: '바둑|ai:1', title: '신진서 카타고 AI 격파', url_keys: ['k1', 'k2'], main_key: 'k2' }];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91'), env: mockEnv(rows, cached)
+  })).json();
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].url_key, 'k2', 'AI가 지목한 기사가 대표가 된다');
+  assert.match(data.items[0].related[0].title, /포토타임/, '기존 대표는 관련 보도로 내려간다');
+});

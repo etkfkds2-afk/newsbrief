@@ -394,9 +394,12 @@ export async function onRequestGet({ request, env }) {
     // 접으면 관계없는 기사가 한 장으로 뭉개진다.
     const issueOf = new Map();
     const issueTitleOf = new Map();
+    // AI가 이슈마다 고른 대표 기사. 카드 제목이 이슈와 어긋나지 않게 쓴다.
+    const issueMainOf = new Map();
     for (const group of cachedIssues || []) {
       if (String(group?.key || '').endsWith('|ai:misc') || String(group?.title || '') === '기타') continue;
       issueTitleOf.set(group.key, group.title);
+      if (group.main_key) issueMainOf.set(group.key, group.main_key);
       for (const key of group?.url_keys || []) issueOf.set(key, group.key);
     }
     // 관련 보도에 같은 제목을 두 번 싣지 않는다. 대표 기사와 같은 제목도 뺀다.
@@ -470,9 +473,15 @@ export async function onRequestGet({ request, env }) {
         // 신진서-카타고 이슈 103건이 "[제49기 SG배 명인전] 옅은 지점"이라는
         // 무관한 관전기를 달고 떴다. 이슈 제목에 더 가까운 기사가 오면 대표를
         // 바꾸고 기존 대표는 관련 보도로 내린다.
-        const issueTitle = itemIssue && itemIssue === issueOf.get(group.url_key)
-          ? String(issueTitleOf.get(itemIssue) || '') : '';
-        if (issueTitle && titleSimilarity(item.title, issueTitle) > titleSimilarity(group.title, issueTitle)) {
+        const sameIssue = itemIssue && itemIssue === issueOf.get(group.url_key);
+        const issueTitle = sameIssue ? String(issueTitleOf.get(itemIssue) || '') : '';
+        // AI가 대표로 지목한 기사가 오면 그것을 카드 제목으로 올린다. 지목이
+        // 없을 때만 이슈 제목과 더 닮은 쪽을 고르는 예전 방식으로 떨어진다.
+        const aiMain = sameIssue ? String(issueMainOf.get(itemIssue) || '') : '';
+        const takeOver = aiMain
+          ? (item.url_key === aiMain && group.url_key !== aiMain)
+          : Boolean(issueTitle) && titleSimilarity(item.title, issueTitle) > titleSimilarity(group.title, issueTitle);
+        if (takeOver) {
           const demoted = { url_key: group.url_key, url: group.url, title: group.title, outlet: group.outlet };
           const related = group.related.filter(old => old.url_key !== item.url_key
             && relatedKey(old.title) !== relatedKey(item.title));
