@@ -388,7 +388,11 @@ jobs:
             if [ "${ROLLBACK_ISSUES}" = "true" ]; then reset_query="&rollback=1"; fi
             if [ "${FREE_ISSUE_AI}" = "true" ]; then reset_query="${reset_query}&free=1"; fi
             if [ "${REGROUP_ISSUES}" = "true" ]; then reset_query="${reset_query}&regroup=1"; fi
-            curl --fail-with-body -sS --retry 2 --max-time 120 \
+            # 240초. 정기 분류는 새 기사만 보내서 금방 끝나지만, regroup은 그
+            # 카테고리 기사를 통째로 다시 보내므로 프롬프트가 훨씬 크다. 실측
+            # 2026-08-10: 일반 regroup이 120초에서 세 번 연속 타임아웃으로 실패했다.
+            # 수집 호출과 같은 값으로 맞춘다.
+            curl --fail-with-body -sS --retry 2 --max-time 240 \
               -X POST \
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
               "https://newsbrief-etkfkds2.pages.dev/api/news/classify-issues?category=${encoded}${reset_query}" \
