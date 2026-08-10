@@ -90,3 +90,18 @@ test('제목이 공유하는 고유 단어로 같은 사건을 잡는다', async
   assert.equal(sharesTitleKeywords(a, '말다툼 중 엄마 흉기 살해한 10대 아들…범행 직후 한 짓 충격'), false);
   assert.equal(sharesTitleKeywords('부광 시린메드, 영천 3-0 완파하며 4연패 탈출', 'OK 만세보령, 여수 꺾고 3연패 탈출'), false);
 });
+
+test('AI가 같은 대회에 다른 이름을 붙인 이슈는 합치고 부문이 다르면 나눈다', async () => {
+  const { isSameIssueTitle } = await import('../functions/_lib/news-dedup.js');
+  // 실측 2026-08-10 바둑 월간 이슈 타일에서 그대로 가져온 제목이다.
+  assert.equal(isSameIssueTitle('Sh수협은행 여자바둑최강전', 'SH수협은행 여자바둑대회'), true);
+  assert.equal(isSameIssueTitle('신진서 카타고 AI 격파', '신진서 AI 카타고 대국'), true);
+  assert.equal(isSameIssueTitle('조상연 하찬석국수배 영재최강전 우승', '하찬석국수배 영재바둑대회 결승'), true);
+  // 부문이 다르면 같은 대회라도 별개다. 이 예외가 없으면 영재부와 어린이부가 뭉개진다.
+  assert.equal(isSameIssueTitle('하찬석국수배 어린이 바둑대회', '하찬석국수배 영재바둑대회 결승'), false);
+  // 겹치는 것이 '전국바둑대회' 같은 일반 명사뿐이면 근거가 못 된다.
+  assert.equal(isSameIssueTitle('부산광역시장배 전국 바둑대회', '영일만 사랑배 전국바둑대회'), false);
+  // 인물 이름 하나만 겹치는 것도 마찬가지다.
+  assert.equal(isSameIssueTitle('신진서 카타고 AI 격파', '신진서 80개월 연속 랭킹 1위'), false);
+  assert.equal(isSameIssueTitle('부라보콘 전국 어린이 바둑대회', '하찬석국수배 어린이 바둑대회'), false);
+});

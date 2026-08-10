@@ -1,5 +1,6 @@
 import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
+import { isSameIssueTitle } from '../../_lib/news-dedup.js';
 import {
   classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches,
   rewriteStandaloneTitles, standaloneIssueTitle
@@ -66,7 +67,13 @@ export function enforceIssueRules(groups, articles, category) {
       miscKeys.push(...keys);
       continue;
     }
-    const existing = mergedByTitle.get(title);
+    // 제목이 완전히 같을 때만 합치면 AI가 같은 대회에 이름을 다르게 붙인 이슈가
+    // 그대로 남는다. 실측 2026-08-10: 'Sh수협은행 여자바둑최강전'과 'SH수협은행
+    // 여자바둑대회'가 대소문자만 다른데 따로 있었다. 고유명사가 겹치면 합친다
+    // (isSameIssueTitle). 부문이 다르면 합치지 않으므로 하찬석국수배 영재부와
+    // 어린이부는 그대로 나뉜다.
+    const existing = mergedByTitle.get(title)
+      || [...mergedByTitle.values()].find(group => isSameIssueTitle(group.title, title));
     if (existing) existing.url_keys.push(...keys);
     else mergedByTitle.set(title, { ...group, title, url_keys: keys });
   }

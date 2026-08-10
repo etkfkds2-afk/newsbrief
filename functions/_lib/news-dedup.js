@@ -165,3 +165,50 @@ export function sharesKeywordsPrepared(left, right, minimum = 3) {
   }
   return false;
 }
+
+// ── 이슈 제목끼리 합치기 ──────────────────────────────────────────────────
+// AI가 같은 대회에 이름을 다르게 붙여 이슈를 쪼개는 일이 남는다. 프롬프트로
+// 줄였지만 없어지지는 않았다(2026-08-10 실측: 'Sh수협은행 여자바둑최강전'과
+// 'SH수협은행 여자바둑대회'가 대소문자만 다른데 따로 남았다).
+//
+// 제목 유사도로는 못 가른다. 합쳐야 할 쌍이 0.353~0.818, 따로 둬야 할 쌍이
+// 0.080~0.696으로 구간이 겹친다. 대신 **겹치는 단어가 고유명사급인지**를 본다.
+// 후원사·대회 이름이 겹치면 같은 대회고, '신진서'나 '어린이'처럼 여러 사건에
+// 걸쳐 나오는 말만 겹치는 것은 근거가 못 된다.
+
+// 대회 성격을 나타내는 일반 명사와, 여러 이슈에 두루 나오는 말.
+const ISSUE_GENERIC = new Set([
+  '바둑', '대회', '바둑대회', '전국', '전국바둑대회', '리그', '바둑리그', '기전',
+  '결승', '우승', '개최', '출범', '진출', '확정', '달성', '대국', '정규리그',
+  '최강전', '기성전', '한국', '랭킹', '1위', '연속', '통산'
+]);
+
+// 같은 대회라도 부문이 다르면 별개다. 하찬석국수배 영재부와 어린이부가 그렇다.
+const ISSUE_DIVISIONS = [
+  '영재', '어린이', '유소년', '청소년', '초등', '중등', '고등', '대학',
+  '시니어', '장애인', '여자', '남자', '아마', '프로', '노인'
+];
+
+function issueTokens(title) {
+  return [...new Set(String(title || '').toLowerCase().match(/[0-9a-z가-힣]{2,}/gu) || [])]
+    .filter(word => !ISSUE_GENERIC.has(word));
+}
+
+// 후원사·대회명급으로 보는 기준. 5자 이상이거나 배·컵·은행 같은 접미사를 가진 말.
+function distinctiveToken(word) {
+  return word.length >= 5 || /(?:배|컵|은행|그룹|기원)$/.test(word);
+}
+
+function divisionsOf(title) {
+  return ISSUE_DIVISIONS.filter(word => String(title || '').includes(word));
+}
+
+export function isSameIssueTitle(left, right) {
+  const leftDivisions = divisionsOf(left), rightDivisions = divisionsOf(right);
+  if (leftDivisions.length && rightDivisions.length
+    && !leftDivisions.some(word => rightDivisions.includes(word))) return false;
+  const seen = new Set(issueTokens(left));
+  const shared = issueTokens(right).filter(word => seen.has(word));
+  // 고유명사급이 하나만 겹쳐도 같은 대회로 본다. 일반 명사끼리는 셋 이상 겹쳐야 한다.
+  return shared.some(distinctiveToken) || shared.length >= 3;
+}
