@@ -388,3 +388,41 @@ test('AI가 지목한 대표 기사를 카드 제목으로 올린다', async () 
   assert.equal(data.items[0].url_key, 'k2', 'AI가 지목한 기사가 대표가 된다');
   assert.match(data.items[0].related[0].title, /포토타임/, '기존 대표는 관련 보도로 내려간다');
 });
+
+test('AI 이슈가 카드·관련 보도의 유일한 기준이다', async () => {
+  // 기준이 둘이면 타일과 카드가 어긋난다. 실측 2026-08-10: 부산시장배 타일을
+  // 누르면 영종국제도시배 카드가 대표로 뜨고 부산시장배가 관련 보도로 나왔다.
+  const row = (id, title, rowSummary) => ({
+    id, url_key: `k${id}`, url: `https://example.com/${id}`, title,
+    source: 'example.com', press: '', category: '바둑',
+    published_at: '2026-08-05T02:00:00Z', fetched_at: '2026-08-05T02:00:00Z',
+    summary: rowSummary, summary_quality: 'full', image_url: '', saved: 0
+  });
+  const sum = who => [
+    `1) ${who} 대회가 열려 참가자들이 반상 앞에서 기량을 겨뤘다.`,
+    `2) ${who} 주최 측은 참가 규모가 예년보다 늘었다고 밝혔다.`,
+    `3) 시상식에서는 부문별 우승자에게 상장과 상금이 전달됐다.`
+  ].join('\n');
+  const rows = [
+    row(1, '제3회 영종국제도시배 전국바둑대회 고급부 우승', sum('영종국제도시배')),
+    row(2, '부산시장배 전국바둑대회 아마 최강부 정상', sum('부산시장배')),
+    row(3, '단양군 노인회장기 대회 개최…어르신 열전', sum('단양군 노인회장기'))
+  ];
+  // AI가 1·2를 한 이슈로 보고 3은 다른 이슈로 봤다면 카드도 정확히 그렇게 나뉜다.
+  const cached = [
+    { key: '바둑|ai:1', title: '영종국제도시배 전국바둑대회', url_keys: ['k1', 'k2'], main_key: 'k1' },
+    { key: '바둑|ai:2', title: '단양군 노인회장기 대회', url_keys: ['k3'] }
+  ];
+  const data = await (await onRequestGet({
+    request: new Request('https://example.com/api/news/articles?category=%EB%B0%94%EB%91%91&issues=1'),
+    env: mockEnv(rows, cached)
+  })).json();
+  // 핵심은 이슈가 다른 기사가 한 카드에 섞이지 않는 것이다.
+  for (const card of data.items) {
+    const keys = [card.url_key, ...(card.related || []).map(r => r.url_key)];
+    const issues = new Set(keys.map(k => (cached.find(g => g.url_keys.includes(k)) || {}).key));
+    assert.equal(issues.size, 1, `한 카드에 이슈가 섞였다: ${card.title}`);
+  }
+  const lead = data.items.find(a => a.url_key === 'k1');
+  if (lead) assert.ok((lead.related || []).every(r => r.url_key === 'k2'));
+});
