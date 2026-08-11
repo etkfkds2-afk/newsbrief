@@ -1721,9 +1721,9 @@ test('아직 이슈 분류를 못 받은 기사도 기존 이슈 카드에 관�
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   assert.match(articles, /const similarityJoin = old =>/);
   assert.match(articles, /: accepted\.find\(old => similarityJoin\(old\)\);/);
-  // 이슈를 받은 기사는 예전처럼 같은 이슈 안에서만 묶는다. 기준이 둘이면
-  // 타일과 카드가 어긋난다.
-  assert.match(articles, /issueOf\.get\(old\.url_key\) === itemIssue && issueFloor\(old\)/);
+  // 이슈를 받은 기사는 같은 이슈 카드에는 issueFloor로 붙는다.
+  assert.match(articles, /issueOf\.get\(old\.url_key\) === itemIssue/);
+  assert.match(articles, /\? issueFloor\(old\)/);
 });
 
 test('허용되지 않는 후보는 배치 상한 앞에서 버린다', async () => {
@@ -1732,4 +1732,54 @@ test('허용되지 않는 후보는 배치 상한 앞에서 버린다', async ()
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /if \(!allowedCandidate\(key, candidate\.source\)\) \{ disallowedBeforeBatch \+= 1; continue; \}/);
   assert.match(collector, /disallowed_before_batch/);
+});
+
+test('이슈 분류를 못 받은 새 기사와 분류된 옛 기사가 한 카드로 묶인다', async () => {
+  // 실측 2026-08-11. 06:01 노원구 기원 살인 기사는 전날 21:23(UTC) 분류에
+  // 들어가 이슈가 있고, 09:58 후속 기사는 그 뒤에 들어와 이슈가 없다. 목록은
+  // 최신순이라 이슈 없는 09:58이 먼저 카드가 되고 이슈 있는 06:01이 나중에
+  // 처리된다. 예전에는 "이슈 있는 것끼리, 없는 것끼리"만 묶어서 둘이 끝내
+  // 따로 섰고, 사용자 화면에 카드 두 장으로 보였다.
+  const rows = [
+    // 최신순: 09:58 (이슈 없음) 먼저
+    { id: 2, url: 'https://b', url_key: 'new', title: '서울 노원구 기원서 지인 흉기 살해 60대 구속',
+      source: 'x', press: '', category: '사회',
+      published_at: '2026-08-11 00:58:00', fetched_at: '2026-08-11 00:58:00',
+      summary: '1) 서울 노원구 기원에서 지인을 흉기로 살해한 60대 남성이 구속됐다.\n2) 경찰은 피의자가 범행을 인정했다고 이날 밝혔다.\n3) 법원은 도주 우려가 있다며 영장을 발부했다고 전했다.',
+      summary_quality: 'full', image_url: '', saved: 0 },
+    { id: 1, url: 'https://a', url_key: 'old', title: '기원서 바둑 두다 말다툼…지인 살해한 60대 현행범 체포',
+      source: 'x', press: '', category: '사회',
+      published_at: '2026-08-10 21:01:00', fetched_at: '2026-08-10 21:01:00',
+      summary: '1) 서울 노원구 기원에서 바둑을 두던 중 말다툼이 벌어져 60대가 지인을 살해했다.\n2) 경찰은 현장에서 피의자를 현행범으로 체포했다고 밝혔다.\n3) 정확한 범행 경위를 조사하고 있다고 이날 전했다.',
+      summary_quality: 'full', image_url: '', saved: 0 }
+  ];
+  let boundCategory = '';
+  const env = { DB: {
+    batch: async () => [],
+    prepare(sql) {
+      if (sql.includes('SELECT payload FROM news_issue_cache')) {
+        return { bind(bound) { boundCategory = bound; return this; },
+          // 옛 기사만 분류돼 있다. 새 기사는 아직 캐시에 없다.
+          async first() { return { payload: JSON.stringify([{ key: '일반|ai:0', title: '노원구 기원 살인', url_keys: ['old'] }]) }; } };
+      }
+      return { bind() { return this; }, async all() { return { results: rows }; } };
+    }
+  } };
+  const response = await onRequestGet({ request: new Request('https://example.com/api/news/articles?issues=1&exclude_baduk=1'), env });
+  const body = await response.json();
+  // 이 검사가 의미를 가지려면 이슈 캐시가 실제로 로드돼야 한다. 안 로드되면
+  // 두 기사 모두 '이슈 없음'이 되어 게이트를 아예 타지 않는다.
+  assert.equal(boundCategory, '일반', '일반 이슈 캐시가 로드되지 않았다');
+  assert.equal(body.items.length, 1, `카드가 ${body.items.length}장이다 - 한 장으로 묶여야 한다`);
+  assert.equal(body.items[0].related_count, 1);
+  const relatedKeys = body.items[0].related.map(entry => entry.url_key);
+  assert.ok(relatedKeys.includes('new') || relatedKeys.includes('old'), '나머지 한 건이 관련 보도로 붙어야 한다');
+});
+
+test('서로 다른 이슈의 카드는 유사도가 높아도 합치지 않는다', async () => {
+  // 위 양방향 허용이 "다른 이슈끼리도 붙는다"로 번지면 타일과 카드가 어긋난다.
+  // 이슈를 가진 기사가 붙을 수 있는 상대는 같은 이슈 카드이거나 이슈가 아직
+  // 없는 카드뿐이다.
+  const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  assert.match(articles, /issueOf\.get\(old\.url_key\) === itemIssue\s*\n\s*\? issueFloor\(old\)\s*\n\s*: !issueOf\.get\(old\.url_key\) && similarityJoin\(old\)/);
 });

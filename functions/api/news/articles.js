@@ -532,8 +532,20 @@ export async function onRequestGet({ request, env }) {
       // 붙는 기준은 유사도 규칙 그대로다 - AI 이슈를 근거로 삼지 않으므로 이슈가
       // 크게 부풀어도 그쪽으로 빨려 들어가지 않는다. 반대로 이슈를 받은 기사는
       // 예전처럼 같은 이슈 안에서만 묶는다(기준이 둘이면 타일과 카드가 어긋난다).
+      //
+      // 양방향이어야 한다. 목록은 최신순(ORDER BY published_at DESC)이라, 아직
+      // 분류를 못 받은 **새** 기사가 카드로 먼저 서고 이슈를 가진 **옛** 기사가
+      // 나중에 처리된다. 한쪽 방향만 열면 그 순서에서 아무것도 안 붙는다.
+      // 실측 2026-08-11: 09:58 기사(이슈 없음)가 먼저 카드가 되고 06:01
+      // 기사(이슈 있음)가 뒤에 와서, 둘이 끝내 따로 섰다.
+      //
+      // 이슈를 가진 기사가 붙을 수 있는 상대는 (a) 같은 이슈 카드, (b) 이슈가
+      // 아직 없는 카드뿐이다. **다른** 이슈의 카드에는 붙지 않는다 - 그러면 서로
+      // 다른 이슈가 한 카드로 합쳐져 타일과 카드가 어긋난다.
       const group = itemIssue
-        ? accepted.find(old => issueOf.get(old.url_key) === itemIssue && issueFloor(old))
+        ? accepted.find(old => issueOf.get(old.url_key) === itemIssue
+          ? issueFloor(old)
+          : !issueOf.get(old.url_key) && similarityJoin(old))
         : accepted.find(old => similarityJoin(old));
       if (group) {
         // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그
