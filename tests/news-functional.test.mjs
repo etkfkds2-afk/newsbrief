@@ -432,6 +432,8 @@ test('예약 실행은 production 건강 점검 실패 시 GitHub 이슈를 만�
   assert.match(health, /published_time_healthy/);
   assert.match(health, /summary_exhausted_below_threshold/);
   assert.match(health, /baduk_source_collected/);
+  // 위 검사는 baduk.or.kr만 본다. 포털 바둑 전멸을 잡는 검사가 함께 있어야 한다.
+  assert.match(health, /baduk_body_fetch_healthy/);
   assert.match(workflow, /health-check:/);
   assert.match(workflow, /gh issue create/);
 });
@@ -1601,4 +1603,58 @@ test('구글 뉴스 중계 URL은 후보로 받지 않고 제목을 원문으로
   // 폴백도 디스커버리와 같은 해석기를 거쳐야 한다.
   assert.match(collector, /resolveBadukHeadline\(item\.title\)/);
   assert.doesNotMatch(collector, /source: 'GOOGLE' \}\)/);
+});
+
+test('한국기원만 살아 있고 포털 바둑이 전멸하면 건강 점검이 잡아낸다', async () => {
+  // 2026-08-11 실측 상황을 그대로 세운다. baduk_source_collected는 baduk.or.kr만
+  // 보므로 그날 하루 종일 통과했고, 포털 바둑 발행이 0건인 채로 health가 ok를
+  // 반환했다. 사람이 화면을 보고서야 알았다.
+  const runMessage = outcomes => JSON.stringify({
+    warnings: [], diagnostics: { candidate_outcomes_by_category: { baduk: outcomes } }
+  });
+  const makeEnv = runs => ({ DB: {
+    async batch() { return []; },
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async first() {
+          if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
+          if (sql.includes('AS baduk')) return { baduk: 1, general: 24 };
+          if (sql.includes("TRIM(published_at)=''")) return { count: 0 };
+          if (sql.includes('f.attempts>=6')) return { count: 0 };
+          return {};
+        },
+        async all() {
+          if (sql.includes('FROM news_state')) return { results: [
+            { key: 'ai_blocked', value: 0 },
+            { key: 'claude_monthly_micro_usd', value: 500000 },
+            { key: 'claude_budget_month', value: new Date().toISOString().slice(0, 7) }
+          ] };
+          if (sql.includes("message LIKE '%diagnostics%'")) return { results: runs.map(o => ({ message: runMessage(o) })) };
+          return { results: [] };
+        }
+      };
+    }
+  } });
+
+  // 그날 실제 값: 정기 실행 4건 + 바둑 전용 실행 8건 = body_too_short 12, 발행 0.
+  const broken = await (await getNewsHealth({ env: makeEnv([
+    { body_too_short: 4, inserted_pending_summary: 2 },
+    { body_too_short: 8, existing_repair_deferred: 5 }
+  ]) })).json();
+  assert.equal(broken.ok, false);
+  assert.ok(broken.failures.includes('baduk_body_fetch_healthy'), broken.failures.join(','));
+  assert.equal(broken.metrics.baduk_body_too_short_24h, 12);
+
+  // 조용한 날은 울리지 않는다. 후보가 적으면 실패도 적다 - 예전 24시간 검사가
+  // 삭제된 이유가 조용한 날마다 틀려서였으므로 이 구분이 핵심이다.
+  const quiet = await (await getNewsHealth({ env: makeEnv([{ body_too_short: 1, existing_full: 6 }]) })).json();
+  assert.equal(quiet.ok, true);
+
+  // 실패가 섞여도 하나라도 실렸으면 경로가 살아 있다는 뜻이라 통과시킨다.
+  const partial = await (await getNewsHealth({ env: makeEnv([
+    { body_too_short: 9, inserted_publishable: 2 }
+  ]) })).json();
+  assert.equal(partial.ok, true);
+  assert.equal(partial.metrics.baduk_published_by_runs_24h, 2);
 });

@@ -9,7 +9,8 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult, badukStored] = await Promise.all([
+    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult, badukStored,
+      badukPortal, recentRuns] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -39,8 +40,36 @@ export async function onRequestGet({ env }) {
       // 견주기 위한 값이다.
       env.DB.prepare(`SELECT MAX(date(COALESCE(NULLIF(published_at,''),fetched_at))) AS latest
         FROM news_articles WHERE category='바둑' AND summary_quality='full'
-          AND url LIKE '%baduk.or.kr%'`).first()
+          AND url LIKE '%baduk.or.kr%'`).first(),
+      // 한국기원 밖에서 들어온 바둑 기사. 위 badukStored와 baduk_source_latest는
+      // 둘 다 baduk.or.kr만 보므로, 포털(네이버·카카오·구글)에서 오는 바둑이
+      // 통째로 끊겨도 두 값은 꿈쩍하지 않는다. 2026-08-11이 정확히 그랬다 -
+      // 포털 바둑 발행이 하루 종일 0건인데 health는 ok를 반환했다.
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+        WHERE category='바둑' AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
+          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first(),
+      // 최근 하루치 수집 실행의 진단. "소스에 있는 걸 우리가 가져왔나"를 바둑
+      // 전체에 대해 묻기 위해 후보가 어디서 죽었는지를 본다.
+      env.DB.prepare(`SELECT message FROM news_runs
+        WHERE datetime(started_at)>=datetime('now','-24 hours') AND message LIKE '%diagnostics%'
+        ORDER BY id DESC LIMIT 30`).all()
     ]);
+    // 바둑 후보를 실제로 처리했는데 본문 단계에서 줄줄이 죽었는지 센다. 발행
+    // 건수만으로는 "조용한 날"과 "고장난 날"이 구분되지 않는다 - 한국기원이
+    // 2~4일에 한 번 올린다는 이유로 예전 24시간 검사가 삭제된 것도 그래서다.
+    // 시도 자체가 없었으면 이 값들이 0이라 아래 검사가 울리지 않는다.
+    let badukBodyTooShort = 0;
+    let badukPublishedByRuns = 0;
+    for (const row of recentRuns?.results || []) {
+      let outcomes = null;
+      try {
+        outcomes = JSON.parse(String(row.message || '') || '{}')?.diagnostics?.candidate_outcomes_by_category?.baduk;
+      } catch { continue; }
+      if (!outcomes) continue;
+      badukBodyTooShort += Number(outcomes.body_too_short || 0);
+      badukPublishedByRuns += Number(outcomes.inserted_publishable || 0)
+        + Number(outcomes.inserted_duplicate || 0) + Number(outcomes.existing_repaired || 0);
+    }
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const now = new Date();
     const monthlySpend = Number(state.claude_monthly_micro_usd || 0);
@@ -74,6 +103,16 @@ export async function onRequestGet({ env }) {
       // "소스에 있는 걸 우리가 가져왔나"다.
       baduk_source_collected: !badukSourceLatest
         || (badukStoredLatest && badukStoredLatest >= badukSourceLatest),
+      // 위 검사는 baduk.or.kr만 본다. 포털에서 오는 바둑이 통째로 끊기는 고장은
+      // 그 검사에 안 잡히므로(2026-08-11 실측) 따로 묻는다. 묻는 것은 "오늘
+      // 바둑이 있나"가 아니라 "가져오려고 했는데 실패했나"다 - 전자는 조용한
+      // 날마다 틀려서 사람이 무시하게 되고, 그래서 예전에 삭제됐다.
+      //
+      // 임계값 6은 하루치 합계다. 실패가 몇 건 섞이는 것은 정상이고(차단·유료
+      // 지면·삭제된 기사), 추출이 진짜 망가지면 그날 두 자리로 뛴다. 2026-08-11:
+      // body_too_short 12건에 발행 0건이었다. 하나라도 실린 날은 통과시킨다 -
+      // 경로가 살아 있다는 뜻이고, 개별 매체 실패까지 알람으로 만들면 또 무시된다.
+      baduk_body_fetch_healthy: badukBodyTooShort < 6 || badukPublishedByRuns > 0,
       // 0을 요구하면 발행시각을 아예 안 내는 매체가 한 곳만 걸려도 실패한다.
       // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
       published_time_healthy: Number(missingTime?.count || 0) <= 3,
@@ -99,6 +138,11 @@ export async function onRequestGet({ env }) {
         baduk_24h: Number(counts?.baduk || 0),
         baduk_source_latest: badukSourceLatest || null,
         baduk_stored_latest: badukStoredLatest || null,
+        // baduk_24h는 한국기원까지 포함한 값이라, 포털만 끊겼을 때 한국기원
+        // 한 건에 가려진다. 나눠서 보여준다.
+        baduk_portal_24h: Number(badukPortal?.count || 0),
+        baduk_body_too_short_24h: badukBodyTooShort,
+        baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
