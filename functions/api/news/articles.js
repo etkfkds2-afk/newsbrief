@@ -514,15 +514,27 @@ export async function onRequestGet({ request, env }) {
         similarTokens(titleTokens, old.titleTokens, 0.25)
         || sharesKeywordsPrepared(story, old.story, 2)
         || (!badukItem && old.category !== '바둑' && similarTokens(firstTokens, old.firstTokens, 0.3));
+      // 유사도만으로 묶는 기준. 아래 두 경로가 같은 식을 써야 한다.
+      const similarityJoin = old =>
+        similarTokens(titleTokens, old.titleTokens, titleThreshold)
+        || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
+        // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다
+        // - 기사 이름과 대회 이름이 매 제목에 반복돼 다른 대국이 쉽게 걸린다.
+        || (!badukItem && old.category !== '바둑' && sharesKeywordsPrepared(story, old.story))
+        || isSameStoryPrepared(story, old.story);
+      // 아직 이슈 분류를 못 받은 기사는 이슈가 있는 카드에도 붙을 수 있어야 한다.
+      // 이슈 분류는 하루 한 번(UTC 21:23) 돌기 때문에, 그 뒤에 들어온 기사는
+      // 다음 분류까지 이슈가 비어 있다. 예전에는 "이슈 있는 것끼리, 없는 것끼리"만
+      // 묶어서 그 기사가 기존 카드에 **구조적으로** 붙을 수 없었다. 실측
+      // 2026-08-11: 06:01 노원구 기원 살인 카드(관련 보도 4건)가 있는데 09:58
+      // 후속 기사가 낱장 카드로 따로 섰다.
+      //
+      // 붙는 기준은 유사도 규칙 그대로다 - AI 이슈를 근거로 삼지 않으므로 이슈가
+      // 크게 부풀어도 그쪽으로 빨려 들어가지 않는다. 반대로 이슈를 받은 기사는
+      // 예전처럼 같은 이슈 안에서만 묶는다(기준이 둘이면 타일과 카드가 어긋난다).
       const group = itemIssue
         ? accepted.find(old => issueOf.get(old.url_key) === itemIssue && issueFloor(old))
-        : accepted.find(old => !issueOf.get(old.url_key) && (
-          similarTokens(titleTokens, old.titleTokens, titleThreshold)
-          || ((badukItem || old.category !== '바둑') && similarTokens(firstTokens, old.firstTokens, summaryThreshold))
-          // 제목이 공유하는 고유 단어로 한 번 더 본다. 바둑 기사끼리는 걸지 않는다
-          // - 기사 이름과 대회 이름이 매 제목에 반복돼 다른 대국이 쉽게 걸린다.
-          || (!badukItem && old.category !== '바둑' && sharesKeywordsPrepared(story, old.story))
-          || isSameStoryPrepared(story, old.story)));
+        : accepted.find(old => similarityJoin(old));
       if (group) {
         // 이슈로 묶은 카드의 대표는 목록 순서상 맨 앞에 있던 기사가 된다. 그
         // 기사가 이슈를 대표하지 못하면 제목과 내용이 어긋난다. 실측 2026-08-10:

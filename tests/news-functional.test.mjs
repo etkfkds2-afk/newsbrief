@@ -19,7 +19,8 @@ import { onRequestPost as login } from '../functions/api/auth/login.js';
 import { validPassword, validUsername } from '../functions/_lib/news-users.js';
 import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
-import { allowedCandidate, readableArticleUrl } from '../functions/_lib/news-extract.js';
+import { allowedCandidate, readableArticleUrl, titleSimilarity } from '../functions/_lib/news-extract.js';
+import { SAME_STORY_THRESHOLD, isSameStory, sharesTitleKeywords } from '../functions/_lib/news-dedup.js';
 
 test('분류 프롬프트는 같은 재해의 2차 피해를 별도 이슈로 쪼개지 않도록 지시한다', async () => {
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
@@ -1522,7 +1523,11 @@ test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻
   // 중복 판정은 발행일이 같은 날끼리만 한다. 날이 다르면 헤드라인도 달라지므로
   // 각각 요약을 산다(사용자 결정 2026-08-10).
   assert.match(collector, /storyIndexByDay/);
-  assert.match(collector, /dayStories \? dayStories\.match\(title\)/);
+  assert.match(collector, /freeDuplicateOf\(title, itemDay, finalCategory\)/);
+  // 무료 규칙을 먼저 태우고, 무료로 가려진 후보는 AI 프롬프트에서 뺀다.
+  assert.match(collector, /!freeDuplicateOf\(cleanTitle\(candidate\.item\?\.title \|\| ''\), candidateDay\(candidate\), candidate\.category\)/);
+  // 판정 대상을 바둑으로 제한하지 않는다. 일반도 같은 배치에 실어 호출 수를 늘리지 않는다.
+  assert.doesNotMatch(collector, /limitedCandidates\.filter\(candidate => candidate\.category === '바둑'\s*\n\s*&& candidate\.urlKey/);
   // 잘못 묶는 쪽이 더 나쁘다는 지시가 프롬프트에 남아 있어야 한다.
   assert.match(classify, /확신이 없으면 묶지 않는다/);
   assert.match(classify, /다른 라운드, 다른 대국, 다른 경기 결과는 절대 묶지 않는다/);
@@ -1674,4 +1679,57 @@ test('한국기원만 살아 있고 포털 바둑이 전멸하면 건강 점검�
   ]) })).json();
   assert.equal(partial.ok, true);
   assert.equal(partial.metrics.baduk_published_by_runs_24h, 2);
+});
+
+test('같은 날 같은 사건은 제목이 달라도 무료 규칙으로 걸러 요약을 사지 않는다', () => {
+  // 실측 2026-08-11. 06:01에 노원구 기원 살인 기사가 이미 실려 있는데, 09:58에
+  // 들어온 후속 기사가 유료 3줄 요약을 또 받았다. 문자 유사도가 0.300~0.318로
+  // 임계값 0.45에 못 미쳤기 때문이다. 그런데 news-dedup.js의 키워드 규칙은 바로
+  // 이 사건을 근거로 만들어졌고, 화면(articles.js)에서는 이미 쓰고 있었다.
+  // 수집이 화면보다 느슨하면 화면에 안 보일 기사에 돈을 쓰게 된다.
+  const 신규 = '서울 노원구 기원서 지인 흉기 살해 60대 구속';
+  const 기존 = [
+    '[단독] 기원에서 말다툼하다 흉기 휘둘러 지인 살해…60대 남성 체포',
+    '기원서 바둑 두다 말다툼…지인 살해한 60대 현행범 체포'
+  ];
+  for (const old of 기존) {
+    assert.ok(titleSimilarity(old, 신규) < SAME_STORY_THRESHOLD, '유사도 규칙은 이 쌍을 놓친다');
+    assert.equal(isSameStory(old, 신규), false);
+    assert.equal(sharesTitleKeywords(old, 신규), true, `키워드 규칙이 잡아야 한다: ${old}`);
+  }
+  // 바둑에는 키워드 규칙을 걸지 않는다. 대회·기사 이름이 매 제목에 반복돼
+  // 서로 다른 대국이 쉽게 3단어를 넘긴다.
+  assert.equal(sharesTitleKeywords(
+    '신진서 9단, 제49기 명인전 본선 1국 승리',
+    '박정환 9단, 제49기 명인전 본선 2국 승리'), true);
+});
+
+test('무료 규칙으로 가려진 후보는 AI 중복 판정 프롬프트에서 뺀다', async () => {
+  // 돈을 두 번 아낀다. 무료로 가릴 수 있는 것에 토큰을 쓰지 않고, 판정 자체는
+  // 배치 한 번이라 바둑과 일반을 같이 실어도 호출 수가 늘지 않는다.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /const dedupTargets = limitedCandidates\.filter\(candidate => candidate\.urlKey/);
+  assert.match(collector, /!freeDuplicateOf\(cleanTitle\(candidate\.item\?\.title \|\| ''\), candidateDay\(candidate\), candidate\.category\)/);
+  assert.match(collector, /ai_dedup_free_skipped/);
+});
+
+test('아직 이슈 분류를 못 받은 기사도 기존 이슈 카드에 관련 보도로 붙는다', async () => {
+  // 이슈 분류는 하루 한 번(UTC 21:23) 돈다. 그 뒤에 들어온 기사는 이슈가 비어
+  // 있는데, 예전 코드는 "이슈 있는 것끼리, 없는 것끼리"만 묶어서 그 기사가 기존
+  // 카드에 구조적으로 붙을 수 없었다. 실측 2026-08-11: 06:01 노원구 카드(관련
+  // 보도 4건)가 있는데 09:58 후속이 낱장으로 따로 섰다.
+  const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
+  assert.match(articles, /const similarityJoin = old =>/);
+  assert.match(articles, /: accepted\.find\(old => similarityJoin\(old\)\);/);
+  // 이슈를 받은 기사는 예전처럼 같은 이슈 안에서만 묶는다. 기준이 둘이면
+  // 타일과 카드가 어긋난다.
+  assert.match(articles, /issueOf\.get\(old\.url_key\) === itemIssue && issueFloor\(old\)/);
+});
+
+test('허용되지 않는 후보는 배치 상한 앞에서 버린다', async () => {
+  // 카카오 광범위 검색은 daum.net만 허용된다. 그 판정이 슬롯 배정 뒤에 돌아서,
+  // 채택을 5건으로 올리자 바둑 20칸 중 10칸이 통과 불가 후보로 날아갔다.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  assert.match(collector, /if \(!allowedCandidate\(key, candidate\.source\)\) \{ disallowedBeforeBatch \+= 1; continue; \}/);
+  assert.match(collector, /disallowed_before_batch/);
 });

@@ -8,7 +8,7 @@ import {
 import {
   blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
-import { createStoryIndex } from '../../_lib/news-dedup.js';
+import { createStoryIndex, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
@@ -175,6 +175,29 @@ async function collect(env, {
       storyTitlesByDay.set(day, []);
     }
     return storyIndexByDay.get(day);
+  };
+  // 돈 안 드는 중복 판정. AI를 부르기 **전에** 이걸 먼저 태우고, 여기서 가려진
+  // 후보는 AI 프롬프트에 아예 안 싣는다.
+  //
+  // 예전에는 문자 유사도(0.45) 하나만 봤다. 그 판정은 같은 사건인데 제목을 다르게
+  // 쓴 보도를 놓친다. 실측 2026-08-11 노원구 기원 살인: 06:01 기사가 이미 있는데
+  // 09:58 "서울 노원구 기원서 지인 흉기 살해 60대 구속"이 유사도 0.300~0.318로
+  // 임계값에 못 미쳐 새 기사로 판정됐고, 3줄 요약을 또 샀다.
+  //
+  // 같은 파일(news-dedup.js)에 그 사건을 근거로 만든 키워드 규칙이 이미 있었다.
+  // 그런데 화면(articles.js)에서만 쓰고 수집에서는 안 썼다. 위 두 제목은 각각
+  // 4개·3개 단어를 공유해서 이 규칙에는 걸린다. 화면이 관련 보도로 접을 기사면
+  // 수집도 요약을 사지 말아야 한다 - 기준이 다르면 돈만 새고 화면은 그대로다.
+  //
+  // 바둑에는 키워드 규칙을 걸지 않는다. 제목마다 기사 이름과 대회 이름이 반복돼
+  // 서로 다른 대국이 쉽게 3단어를 넘긴다(news-dedup.js의 같은 주석 참고).
+  const freeDuplicateOf = (title, day, category) => {
+    if (!day || !title) return '';
+    const index = storyIndexByDay.get(day);
+    const byTitle = index ? index.match(title) : '';
+    if (byTitle) return byTitle;
+    if (category === '바둑') return '';
+    return (storyTitlesByDay.get(day) || []).find(seen => sharesTitleKeywords(seen, title)) || '';
   };
   for (const row of publishedRows.results || []) {
     if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
@@ -808,7 +831,7 @@ async function collect(env, {
     const itemDay = koreaDayKey(Date.parse(resolvedPublishedAt || '') || storedTime(resolvedPublishedAt));
     const dayStories = itemDay ? dayIndex(itemDay) : null;
     const aiSame = aiDuplicates.get(knownUrlKey) || '';
-    const duplicateOf = (dayStories ? dayStories.match(title) : '')
+    const duplicateOf = freeDuplicateOf(title, itemDay, finalCategory)
       || (aiSame && itemDay && (storyTitlesByDay.get(itemDay) || []).includes(aiSame) ? aiSame : '');
     let summary = '';
     let validSummary = false;
@@ -846,12 +869,21 @@ async function collect(env, {
   };
   const uniqueCandidates = [];
   const candidateUrls = new Set();
+  let disallowedBeforeBatch = 0;
   for (const candidate of candidates) {
     const key = candidateUrl(candidate);
     if (!key || candidateUrls.has(key)) continue;
     candidateUrls.add(key);
+    // 통과할 수 없는 후보는 배치 상한 **앞에서** 버린다. 예전에는 20슬롯을 채운
+    // 뒤 처리 단계에서 걸러서, 절대 못 들어올 후보가 슬롯을 차지했다. 실측
+    // 2026-08-11: 카카오 채택을 1건에서 5건으로 올리자 바둑 20칸 중 10칸이
+    // disallowed_url로 날아갔다 - 카카오 광범위 검색은 daum.net만 허용되는데
+    // 그 판정이 슬롯을 배정한 다음에야 돌았기 때문이다.
+    if (!allowedCandidate(key, candidate.source)) { disallowedBeforeBatch += 1; continue; }
     uniqueCandidates.push({ ...candidate, urlKey: await sha256(key) });
   }
+  // 버린 건수는 남긴다. 안 남기면 후보가 왜 적은지 진단에서 사라진다.
+  diagnostics.disallowed_before_batch = disallowedBeforeBatch;
   const knownCandidateKeys = new Set();
   if (uniqueCandidates.length) {
     const placeholders = uniqueCandidates.map(() => '?').join(',');
@@ -900,11 +932,26 @@ async function collect(env, {
     general: limitedCandidates.filter(candidate => candidate.category !== '바둑').length
   };
   // 요약을 사기 전에 AI에게 "이미 다룬 이야기인가"를 한 번 묻는다. 실행당 1회,
-  // 약 $0.0015. 요약 한 건($0.0126)만 막아도 여덟 번치가 나온다. 우선 바둑에만
-  // 건다 - 효과와 오판정을 먼저 보고 일반으로 넓힌다.
+  // 약 $0.0015. 요약 한 건($0.0126)만 막아도 여덟 번치가 나온다.
+  //
+  // 예전에는 바둑 후보에만 걸었다("효과와 오판정을 먼저 보고 일반으로 넓힌다").
+  // 그래서 일반 기사는 유료 요약을 사기 전에 AI 판정을 한 번도 안 받았다. 실측
+  // 2026-08-11: 노원구 기원 살인(분류는 사회다) 후속 기사가 같은 날 이미 실린
+  // 기사와 겹치는데 그대로 요약을 샀다. 이제 일반도 함께 싣는다.
+  //
+  // 호출 수는 늘지 않는다. 이 판정은 후보를 한 번에 묶어 보내는 배치라, 바둑과
+  // 일반을 같은 호출에 실으면 실행당 1회 그대로다. 늘어나는 것은 프롬프트 길이뿐.
+  //
+  // 그 길이도 아낀다: 위 무료 규칙(freeDuplicateOf)이 이미 중복이라고 판정한
+  // 후보는 AI에 물어볼 이유가 없으므로 프롬프트에서 뺀다. 무료로 가릴 수 있는
+  // 것에 토큰을 쓰지 않는다.
   const aiDuplicates = new Map();
-  const dedupTargets = limitedCandidates.filter(candidate => candidate.category === '바둑'
-    && candidate.urlKey && !knownCandidateKeys.has(candidate.urlKey));
+  const candidateDay = candidate => koreaDayKey(
+    Date.parse(parseDate(candidate.item?.pubDate) || '') || 0
+  );
+  const dedupTargets = limitedCandidates.filter(candidate => candidate.urlKey
+    && !knownCandidateKeys.has(candidate.urlKey)
+    && !freeDuplicateOf(cleanTitle(candidate.item?.title || ''), candidateDay(candidate), candidate.category));
   const recentStoryTitles = [...storyTitlesByDay.values()].flat();
   if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
     && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
@@ -918,6 +965,8 @@ async function collect(env, {
       diagnostics.claude_monthly_micro_usd = recorded.spent;
     }
     diagnostics.ai_dedup_checked = dedupTargets.length;
+    diagnostics.ai_dedup_free_skipped = limitedCandidates.filter(candidate => candidate.urlKey
+      && !knownCandidateKeys.has(candidate.urlKey)).length - dedupTargets.length;
     diagnostics.ai_dedup_matched = aiDuplicates.size;
   }
   let inserted = 0;
