@@ -1783,3 +1783,54 @@ test('서로 다른 이슈의 카드는 유사도가 높아도 합치지 않는�
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
   assert.match(articles, /issueOf\.get\(old\.url_key\) === itemIssue\s*\n\s*\? issueFloor\(old\)\s*\n\s*: !issueOf\.get\(old\.url_key\) && similarityJoin\(old\)/);
 });
+
+test('같은 날 같은 사건에 요약을 두 번 사면 건강 점검이 잡아낸다', async () => {
+  // 이 종류의 고장은 지금까지 사람이 화면을 보고 "왜 카드가 두 장이지"라고
+  // 물어야만 드러났다(2026-08-11 노원구 기원 살인). 돈이 새는 쪽이라 자동으로
+  // 잡아야 한다.
+  const makeEnv = titles => ({ DB: {
+    async batch() { return []; },
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async first() {
+          if (sql.includes('FROM news_runs')) return { status: 'ok', finished_at: new Date().toISOString(), message: '' };
+          if (sql.includes('AS baduk')) return { baduk: 4, general: 9 };
+          if (sql.includes("TRIM(published_at)=''")) return { count: 0 };
+          if (sql.includes('f.attempts>=6')) return { count: 0 };
+          return {};
+        },
+        async all() {
+          if (sql.includes('FROM news_state')) return { results: [
+            { key: 'ai_blocked', value: 0 },
+            { key: 'claude_monthly_micro_usd', value: 500000 },
+            { key: 'claude_budget_month', value: new Date().toISOString().slice(0, 7) }
+          ] };
+          if (sql.includes("category<>'바둑'") && sql.includes('SELECT title')) {
+            return { results: titles.map(title => ({ title, day: '2026-08-11' })) };
+          }
+          return { results: [] };
+        }
+      };
+    }
+  } });
+
+  const leaking = await (await getNewsHealth({ env: makeEnv([
+    '서울 노원구 기원서 지인 흉기 살해 60대 구속',
+    '기원서 바둑 두다 말다툼…지인 살해한 60대 현행범 체포',
+    '[단독] 기원에서 말다툼하다 흉기 휘둘러 지인 살해…60대 남성 체포'
+  ]) })).json();
+  assert.equal(leaking.ok, false);
+  assert.ok(leaking.failures.includes('duplicate_paid_summaries_low'), leaking.failures.join(','));
+  assert.ok(leaking.metrics.duplicate_paid_pairs_24h >= 2);
+  assert.ok(leaking.metrics.duplicate_paid_samples.length > 0, '어떤 쌍이 걸렸는지 보여줘야 고칠 수 있다');
+
+  // 서로 무관한 기사끼리는 울리지 않는다.
+  const clean = await (await getNewsHealth({ env: makeEnv([
+    '태풍 돌핀 북상, 제주 항공편 무더기 결항',
+    '국회 본회의서 예산안 처리 무산',
+    '한국은행 기준금리 동결 결정'
+  ]) })).json();
+  assert.equal(clean.ok, true);
+  assert.equal(clean.metrics.duplicate_paid_pairs_24h, 0);
+});

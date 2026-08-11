@@ -1,5 +1,6 @@
 import { json } from '../../_lib/news-db.js';
 import { CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD, dailyAllowanceMicroUsd } from '../../_lib/news-ai-budget.js';
+import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 
 function utcMillis(value) {
   const text = String(value || '');
@@ -10,7 +11,7 @@ function utcMillis(value) {
 export async function onRequestGet({ env }) {
   try {
     const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult, badukStored,
-      badukPortal, recentRuns] = await Promise.all([
+      badukPortal, recentRuns, paidSameDay] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -52,8 +53,32 @@ export async function onRequestGet({ env }) {
       // 전체에 대해 묻기 위해 후보가 어디서 죽었는지를 본다.
       env.DB.prepare(`SELECT message FROM news_runs
         WHERE datetime(started_at)>=datetime('now','-24 hours') AND message LIKE '%diagnostics%'
-        ORDER BY id DESC LIMIT 30`).all()
+        ORDER BY id DESC LIMIT 30`).all(),
+      // 같은 날 같은 사건에 3줄 요약을 두 번 산 흔적. 이건 사람이 화면을 보고
+      // "왜 카드가 두 장이지"라고 물어야만 드러나던 종류의 고장이다(2026-08-11
+      // 노원구 기원 살인). 돈이 새는 쪽이라 조용히 넘어가면 안 된다.
+      env.DB.prepare(`SELECT title,
+          date(datetime(COALESCE(NULLIF(published_at,''),fetched_at),'+9 hours')) AS day
+        FROM news_articles
+        WHERE summary_quality='full' AND category<>'바둑'
+          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')
+        ORDER BY id DESC LIMIT 60`).all()
     ]);
+    // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
+    // 쉽게 3단어를 넘긴다(news-dedup.js의 같은 이유로 수집에서도 안 건다).
+    const paidRows = (paidSameDay?.results || []).filter(row => row.day && row.title);
+    let duplicatePaidPairs = 0;
+    const duplicatePaidSample = [];
+    for (let i = 0; i < paidRows.length; i += 1) {
+      for (let j = i + 1; j < paidRows.length; j += 1) {
+        if (paidRows[i].day !== paidRows[j].day) continue;
+        if (!sharesTitleKeywords(paidRows[i].title, paidRows[j].title)) continue;
+        duplicatePaidPairs += 1;
+        if (duplicatePaidSample.length < 3) {
+          duplicatePaidSample.push(`${paidRows[i].title.slice(0, 26)} / ${paidRows[j].title.slice(0, 26)}`);
+        }
+      }
+    }
     // 바둑 후보를 실제로 처리했는데 본문 단계에서 줄줄이 죽었는지 센다. 발행
     // 건수만으로는 "조용한 날"과 "고장난 날"이 구분되지 않는다 - 한국기원이
     // 2~4일에 한 번 올린다는 이유로 예전 24시간 검사가 삭제된 것도 그래서다.
@@ -113,6 +138,10 @@ export async function onRequestGet({ env }) {
       // body_too_short 12건에 발행 0건이었다. 하나라도 실린 날은 통과시킨다 -
       // 경로가 살아 있다는 뜻이고, 개별 매체 실패까지 알람으로 만들면 또 무시된다.
       baduk_body_fetch_healthy: badukBodyTooShort < 6 || badukPublishedByRuns > 0,
+      // 같은 날 같은 사건에 유료 요약을 두 번 이상 산 흔적. 1쌍은 오판정 여지를
+      // 두고 넘긴다(키워드 3개는 우연히도 걸린다). 2쌍부터는 중복 판정이 실제로
+      // 새고 있다는 뜻이고, 그건 곧바로 돈이다.
+      duplicate_paid_summaries_low: duplicatePaidPairs < 2,
       // 0을 요구하면 발행시각을 아예 안 내는 매체가 한 곳만 걸려도 실패한다.
       // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
       published_time_healthy: Number(missingTime?.count || 0) <= 3,
@@ -142,6 +171,8 @@ export async function onRequestGet({ env }) {
         // 한 건에 가려진다. 나눠서 보여준다.
         baduk_portal_24h: Number(badukPortal?.count || 0),
         baduk_body_too_short_24h: badukBodyTooShort,
+        duplicate_paid_pairs_24h: duplicatePaidPairs,
+        duplicate_paid_samples: duplicatePaidSample,
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
