@@ -14,7 +14,7 @@ import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import { BADUK_SEARCH_QUERIES as BADUK_SEARCHES } from '../../_lib/baduk-queries.js';
 import {
   allowedCandidate, articleSource, classify, cleanTitle, fetchArticleText,
-  parseDate, pressFromTitle, stripHtml, titleIsTruncationOf, titleSimilarity
+  parseDate, pressFromTitle, readableArticleUrl, stripHtml, titleIsTruncationOf, titleSimilarity
 } from '../../_lib/news-extract.js';
 import {
   collectArchivedTop, collectPopularity, googleNewsSearch, kakaoSearch, koreanBadukLatest,
@@ -476,48 +476,42 @@ async function collect(env, {
   // publish goal in every run that measured this; general has been stuck at
   // ~2/10 for days. Skip this baduk-only spend entirely while general is
   // still behind so the budget survives long enough to fetch general bodies.
-  for (const discovery of generalBelowDailyGoal ? [] : googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
-    const discoveredTitle = cleanTitle(discovery?.title || '');
-    if (!discoveredTitle || isRejectedTitle(discoveredTitle)) continue;
-    let resolved = false;
+  // 구글이 주는 링크(news.google.com/rss/articles/...)는 클라이언트 JS로만 풀리는
+  // 껍데기다. 2026-08-11 실측: 그 페이지를 받아보면 578KB짜리 구글 앱 셸이고 안에
+  // 원문 URL이 아예 없다. 그러니 제목을 네이버·카카오에서 다시 찾아 **진짜 기사
+  // 링크로 바꾼 것만** 후보에 넣는다. 못 바꾸면 후보 자체를 버린다.
+  //
+  // 아래 두 호출부(디스커버리 스크립트가 넘겨준 제목, 그리고 워커가 직접 부르는
+  // RSS 폴백)가 같은 판정을 써야 한다. 예전에는 이 해석 로직이 디스커버리
+  // 경로에만 있었고 폴백은 껍데기 URL을 그대로 밀어 넣었다.
+  const headlineMatch = (matches, wanted) => matches.find(item => {
+    const left = cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '');
+    const right = wanted.replace(/[^0-9A-Za-z가-힣]/g, '');
+    return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
+  });
+  const resolveBadukHeadline = async rawTitle => {
+    const discoveredTitle = cleanTitle(rawTitle || '');
+    if (!discoveredTitle || isRejectedTitle(discoveredTitle)) return false;
     try {
-      const matches = await naverSearch(env, `"${discoveredTitle}"`, 1, 3);
-      const match = matches.find(item => {
-        const candidateTitle = cleanTitle(item.title);
-        const left = candidateTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
-        const right = discoveredTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
-        return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
-      });
-      if (match) { candidates.push({ category: '바둑', item: match, source: 'NAVER' }); resolved = true; }
+      const match = headlineMatch(await naverSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
+      if (match) { candidates.push({ category: '바둑', item: match, source: 'NAVER' }); return true; }
     } catch (error) {
       diagnostics.google_resolve_error = String(error?.message || error).slice(0, 120);
     }
-    // discovery.link is a Google News wrapper URL (news.google.com/rss/...)
-    // that only resolves through client-side JS, which a plain fetch can
-    // never follow - it was never actually reaching the real article, just
-    // silently failing as body_too_short on every attempt. Try Kakao's web
-    // search as a second real resolver instead of fetching that dead end.
-    if (!resolved) {
-      try {
-        const matches = await kakaoSearch(env, `"${discoveredTitle}"`, 1, 3);
-        const match = matches.find(item => {
-          const candidateTitle = cleanTitle(item.title);
-          const left = candidateTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
-          const right = discoveredTitle.replace(/[^0-9A-Za-z가-힣]/g, '');
-          return left === right || (Math.min(left.length, right.length) >= 18 && (left.includes(right) || right.includes(left)));
-        });
-        // This is resolving an already-known, specific headline (title
-        // matched, not a broad keyword search), so unlike the generic
-        // KAKAO search loop it doesn't need the daum.net-only allowlist -
-        // just the same spam/UGC blocklist every other source uses. That
-        // allowlist was the reason small/regional outlets (their own
-        // domains, not syndicated to Daum) never made it in even when
-        // Kakao's search found them.
-        if (match) candidates.push({ category: '바둑', item: match, source: 'KAKAO_RESOLVED' });
-      } catch (error) {
-        diagnostics.google_resolve_kakao_error = String(error?.message || error).slice(0, 120);
-      }
+    try {
+      const match = headlineMatch(await kakaoSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
+      // 이미 특정된 헤드라인을 제목으로 맞춰 찾은 것이라(광범위 키워드 검색이
+      // 아니다) 일반 KAKAO 검색 루프와 달리 daum.net 전용 허용목록이 필요 없다.
+      // 다른 소스와 같은 스팸/UGC 차단목록만 거치면 된다. 그 허용목록 때문에
+      // 자체 도메인을 쓰는 지역 매체가 카카오 검색에 잡혀도 못 들어왔다.
+      if (match) { candidates.push({ category: '바둑', item: match, source: 'KAKAO_RESOLVED' }); return true; }
+    } catch (error) {
+      diagnostics.google_resolve_kakao_error = String(error?.message || error).slice(0, 120);
     }
+    return false;
+  };
+  for (const discovery of generalBelowDailyGoal ? [] : googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
+    await resolveBadukHeadline(discovery?.title);
   }
   diagnostics.google_discovered = googleDiscoveries.length;
   if (backfill) {
@@ -540,7 +534,16 @@ async function collect(env, {
   // that Google accepts. Avoid a redundant Worker-origin RSS call, which is
   // frequently rejected with 503 even though discovery already succeeded.
   if (!popularityCandidates.length && !backfill && !googleDiscoveries.length) try {
-    for (const item of (await googleNewsSearch(badukQuery, 30)).slice(0, 3)) candidates.push({ category: '바둑', item, source: 'GOOGLE' });
+    // 예전에는 RSS 항목을 source:'GOOGLE'로 그대로 밀어 넣었다. 그 link는 위에
+    // 적은 껍데기 URL이라 본문 수집에서 100% 죽는다 - 2026-08-11 바둑 전용
+    // 실행에서 body_too_short 8건 중 3건이 정확히 이 경로의
+    // "news.google.com:http_503"이었다. 디스커버리 경로와 똑같이 해석해서
+    // 진짜 기사 링크가 된 것만 넣는다.
+    const headlines = (await googleNewsSearch(badukQuery, 30)).slice(0, 3);
+    let resolvedCount = 0;
+    for (const item of headlines) if (await resolveBadukHeadline(item.title)) resolvedCount += 1;
+    diagnostics.google_fallback_headlines = headlines.length;
+    diagnostics.google_fallback_resolved = resolvedCount;
   } catch (error) {
     diagnostics.google_error = String(error?.message || error).slice(0, 120);
   } else if (!backfill) {
@@ -663,7 +666,7 @@ async function collect(env, {
           await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?').bind(publishedAt, exists.id).run();
         }
         if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime || hasGenericImage) {
-          const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
+          const fetchUrl = readableArticleUrl(url, item.link || '');
           let article = await fetchArticleText(fetchUrl);
           if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
           await env.DB.prepare(`UPDATE news_articles SET
@@ -679,7 +682,7 @@ async function collect(env, {
         }
         return outcome('existing_full');
       }
-      const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
+      const fetchUrl = readableArticleUrl(url, item.link || '');
       let article = await fetchArticleText(fetchUrl);
       if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
         // 이 경로에는 시도 횟수도 간격도 없어서, 후보에 다시 잡히기만 하면
@@ -739,7 +742,7 @@ async function collect(env, {
     }
 
     const rawSummary = stripHtml(item.description);
-    const fetchUrl = /^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(item.link || '') ? item.link : url;
+    const fetchUrl = readableArticleUrl(url, item.link || '');
     let article = await fetchArticleText(fetchUrl);
     if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
     const body = article.body;

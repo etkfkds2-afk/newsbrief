@@ -13,6 +13,16 @@ export const BLOCKED_ARTICLE_HOSTS = [
   'ppomppu.co.kr', 'instiz.net', 'youtube.com', 'namu.wiki'
 ];
 
+// 원문이 아니라 껍데기를 주는 수집기(aggregator). 위 목록과 성격이 다르다 -
+// 스팸이라서가 아니라, 그 URL로는 본문을 영영 못 가져오기 때문에 막는다.
+//
+// news.google.com/rss/articles/... 는 클라이언트 JS로만 풀린다. 2026-08-11에
+// 직접 받아 확인: 578KB짜리 구글 앱 셸이고 안에 원문 URL이 없다. 워커에서
+// 부르면 503까지 돌아온다. 구글 헤드라인은 제목을 네이버·카카오에서 다시 찾아
+// 진짜 기사 링크로 바꿔서만 쓴다(collect.js의 resolveBadukHeadline).
+// 여기 넣는 것은 그 해석을 우회한 후보가 어떤 경로로도 못 들어오게 하는 빗장이다.
+export const UNREADABLE_WRAPPER_HOSTS = ['news.google.com'];
+
 // 수집 단계: 호스트명이 차단 도메인으로 끝나는지 본다. 종전 정규식
 // (/(?:dcinside\.com|...)$/)과 동일한 판정을 유지하려고 단순 끝일치를 쓴다.
 //
@@ -22,7 +32,7 @@ export const BLOCKED_ARTICLE_HOSTS = [
 // 피드에 들어와 문제가 되면 그때 별도로 판단할 일이다.
 export function isBlockedArticleHost(hostname) {
   const host = String(hostname || '').toLowerCase();
-  return BLOCKED_ARTICLE_HOSTS.some(blocked => host.endsWith(blocked));
+  return [...BLOCKED_ARTICLE_HOSTS, ...UNREADABLE_WRAPPER_HOSTS].some(blocked => host.endsWith(blocked));
 }
 
 // 조회 단계: 이미 저장된 행을 SQL에서 거른다. 수집기를 통과했던 시절의 행이

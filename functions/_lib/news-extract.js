@@ -163,6 +163,32 @@ export function articleSource(url, discovery = '', press = '') {
   } catch { return cleanPressName(press) || discovery || '기타'; }
 }
 
+// 본문을 받으러 갈 때 먼저 시도할 주소를 고른다. 호출부는 반드시 이 값이
+// 실패하면 원래 url로 한 번 더 받아야 한다(collect.js의 두 번 fetch 패턴).
+// 그 폴백이 있기 때문에 여기서 고른 주소가 틀려도 기사를 잃지 않는다.
+//
+// 1) 네이버 뉴스: 검색 API가 주는 link(n.news.naver.com)가 원문 사이트보다
+//    본문 추출이 잘 된다. 원래 collect.js 세 곳에 같은 식이 복붙돼 있었다.
+// 2) 네이버 스포츠: sports.naver.com/news?oid=X&aid=Y 형태가 http_404로
+//    떨어진다(2026-08-11 실측 4건). 같은 기사가 일반 뉴스 리더
+//    n.news.naver.com/mnews/article/X/Y 로도 열리므로 그쪽을 먼저 시도한다.
+//    주의: 이 치환은 실제 스포츠 기사로 확인하지 못했다(네이버 스포츠 목록이
+//    전부 JS라 확인용 기사 주소를 못 구했다). 실패하면 위 폴백이 원래 주소로
+//    되돌아가므로 지금보다 나빠질 수는 없고, 진단의 sports.naver.com http_404
+//    건수가 줄어드는지로 판정하면 된다.
+export function readableArticleUrl(url, link = '') {
+  if (/^https?:\/\/(?:n\.)?news\.naver\.com\//i.test(link)) return link;
+  for (const candidate of [link, url]) {
+    const sports = String(candidate || '')
+      .match(/^https?:\/\/(?:m\.|sports\.)?sports\.(?:news\.)?naver\.com\/[^?]*\?(?=.*\boid=(\d{3})\b)(?=.*\baid=(\d{8,10})\b)/i);
+    if (sports) return `https://n.news.naver.com/mnews/article/${sports[1]}/${sports[2]}`;
+    const sportsPath = String(candidate || '')
+      .match(/^https?:\/\/(?:m\.)?sports\.naver\.com\/[a-z]+\/article\/(\d{3})\/(\d{8,10})/i);
+    if (sportsPath) return `https://n.news.naver.com/mnews/article/${sportsPath[1]}/${sportsPath[2]}`;
+  }
+  return url;
+}
+
 export function allowedCandidate(url, discovery) {
   try {
     const host = new URL(url).hostname.toLowerCase();
@@ -224,7 +250,14 @@ export async function fetchArticleText(url) {
     // to most outlets via Naver) and schema.org itemprop="articleBody" sites
     // (e.g. mk.co.kr) don't use any of the id/class keywords below, so check
     // for those separately instead of only id/class name matching.
-    const articleStart = html.search(/<(?:article|div|td)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
+    //
+    // section/main이 태그 목록에 없어서, 바로 위 itemprop="articleBody" 폴백이
+    // 정작 그것을 쓰는 사이트에서 한 번도 발동하지 못했다. 뉴스핌 실측
+    // (2026-08-11): 본문이 <section class="contents" itemprop="articleBody">에
+    // 들어 있는데 태그가 안 맞아 selector_miss로 떨어졌다. id/class 이름이
+    // 아니라 태그 이름 때문에 놓치는 것이므로 목록을 넓히는 편이 맞다.
+    // news-contents는 뉴스핌 바깥 컨테이너 이름이기도 해서 같이 넣는다.
+    const articleStart = html.search(/<(?:article|div|td|section|main)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|news-contents|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
     if (!image) {
       const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';

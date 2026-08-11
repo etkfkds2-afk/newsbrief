@@ -19,6 +19,7 @@ import { onRequestPost as login } from '../functions/api/auth/login.js';
 import { validPassword, validUsername } from '../functions/_lib/news-users.js';
 import { onRequestGet as listUsers, onRequestPost as updateUser } from '../functions/api/admin/users.js';
 import { isBadukDisplayRelevant } from '../functions/_lib/baduk-relevance.js';
+import { allowedCandidate, readableArticleUrl } from '../functions/_lib/news-extract.js';
 
 test('분류 프롬프트는 같은 재해의 2차 피해를 별도 이슈로 쪼개지 않도록 지시한다', async () => {
   const classifier = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
@@ -1549,4 +1550,55 @@ test('바둑 이슈 분류는 겹쳐 싣는 일반 기사도 함께 본다', asy
   assert.match(endpoint, /a\.title LIKE '%기원%' AND a\.summary LIKE '%바둑%'/);
   // 읽기와 분류가 같은 조건이어야 카드와 타일이 어긋나지 않는다.
   assert.match(articles, /a\.title LIKE '%기원%' AND a\.summary LIKE '%바둑%'/);
+});
+
+test('section·main 컨테이너에 담긴 본문도 추출한다', async () => {
+  // 태그 목록에 section이 없어서, itemprop="articleBody" 폴백이 정작 그것을
+  // 쓰는 사이트에서 한 번도 발동하지 못했다. 뉴스핌 실측(2026-08-11): 본문이
+  // <section class="contents" itemprop="articleBody">에 들어 있는데 태그가 안
+  // 맞아 selector_miss로 떨어졌고, 그날 바둑 발행이 0건이 된 원인 중 하나였다.
+  const sentence = '북한이 10일 원산 갈마리조트 선전에 총력을 기울였다고 조선중앙TV가 보도했다. ';
+  const shapes = [
+    `<section class="contents" itemprop="articleBody"><p>${sentence.repeat(6)}</p></section>`,
+    `<main id="news-contents"><p>${sentence.repeat(6)}</p></main>`
+  ];
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const html of shapes) {
+      globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+      const article = await fetchArticleText('https://www.newspim.com/news/view/1');
+      assert.ok(article.body.length >= 180, `본문 추출 실패: ${article.body.length}자, ${article.fetchStatus}`);
+      assert.equal(article.fetchStatus, 'ok');
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('네이버 스포츠 기사는 일반 뉴스 리더 주소로 먼저 시도한다', () => {
+  // sports.naver.com/news?oid=..&aid=.. 는 http_404로 떨어진다(2026-08-11 실측
+  // 4건). 호출부가 실패 시 원래 주소로 한 번 더 받으므로 이 치환은 기사를
+  // 잃게 만들 수 없다.
+  const reader = 'https://n.news.naver.com/mnews/article/311/0001756000';
+  assert.equal(readableArticleUrl('https://sports.naver.com/news?oid=311&aid=0001756000'), reader);
+  assert.equal(readableArticleUrl('https://m.sports.naver.com/news?aid=0001756000&oid=311'), reader);
+  assert.equal(readableArticleUrl('https://m.sports.naver.com/kbaseball/article/311/0001756000'), reader);
+  // 검색 API가 준 n.news.naver.com 링크는 그대로 우선한다(기존 동작).
+  assert.equal(readableArticleUrl('https://www.newspim.com/news/view/1', reader), reader);
+  // 바꿀 근거가 없으면 건드리지 않는다.
+  assert.equal(readableArticleUrl('https://www.newspim.com/news/view/1'), 'https://www.newspim.com/news/view/1');
+  assert.equal(readableArticleUrl('https://sports.naver.com/news?oid=311'), 'https://sports.naver.com/news?oid=311');
+});
+
+test('구글 뉴스 중계 URL은 후보로 받지 않고 제목을 원문으로 해석해서만 쓴다', async () => {
+  // news.google.com/rss/articles/... 는 클라이언트 JS로만 풀리는 껍데기다.
+  // 2026-08-11 실측: 그 페이지는 578KB짜리 구글 앱 셸이고 안에 원문 URL이 없다.
+  // 예전 RSS 폴백은 그 링크를 source:'GOOGLE'로 그대로 밀어 넣어서, 바둑
+  // body_too_short 8건 중 3건이 이 경로의 news.google.com:http_503이었다.
+  assert.equal(allowedCandidate('https://news.google.com/rss/articles/CBMiZ0FV', 'GOOGLE'), false);
+  assert.equal(allowedCandidate('https://www.chosun.com/sports/2026/08/11/ABC/', 'GOOGLE'), true);
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  // 폴백도 디스커버리와 같은 해석기를 거쳐야 한다.
+  assert.match(collector, /resolveBadukHeadline\(item\.title\)/);
+  assert.doesNotMatch(collector, /source: 'GOOGLE' \}\)/);
 });
