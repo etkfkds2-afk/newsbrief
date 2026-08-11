@@ -227,6 +227,19 @@ async function collect(env, {
     }
   }
   const publicationBucket = category => category === '바둑' ? 'baduk' : 'general';
+  // 하루 발행 상한이 남았는지. 예전에는 이 검사가 **신규 기사 삽입 한 곳에만**
+  // 있었다. 그런데 유료 요약을 사고 발행 카운트를 올리는 경로는 셋이다 -
+  // 신규 삽입, 재요약 재시도(retrySummary), 기존 기사 복구. 뒤의 둘에는 상한이
+  // 없어서 12건 상한인데 하루 19건이 실렸다(2026-08-11 실측, 24시간 기준 27건).
+  //
+  // 화면에 보이는 일반 헤드라인은 10개다. 즉 초과분은 돈만 쓰고 사용자에게
+  // 보이지도 않았다. 월 예산 $4.75가 11일 만에 $3.28까지 간 주된 이유다.
+  //
+  // 순서상 재시도가 먼저 돌고 신규가 나중이라, 상한이 찼을 때 굶는 쪽은 신규가
+  // 아니라 그날 이미 여러 번 실패한 기사다. 그게 맞는 우선순위다 - 재시도는
+  // 다음 실행에 또 기회가 있고, 신규는 30일이 지나면 too_old로 사라진다.
+  const hasPublicationCapacity = category => Boolean(popularityTargetStart)
+    || publicationCounts[publicationBucket(category)].daily < DAILY_CATEGORY_PUBLISH_LIMIT;
   const consumePublicationCapacity = category => {
     const bucket = publicationBucket(category);
     const count = publicationCounts[bucket];
@@ -380,6 +393,11 @@ async function collect(env, {
       qualityRepairIds.join(','), forceRetry ? 1 : 0, retryRowLimit).all();
   const retrySummary = async row => {
     if (isRejectedTitle(row.title)) return;
+    // 상한이 찼으면 요약을 아예 사지 않는다. 예전에는 이 경로에 상한이 없었다.
+    if (!hasPublicationCapacity(row.category)) {
+      diagnostics.retry_over_daily_limit = Number(diagnostics.retry_over_daily_limit || 0) + 1;
+      return;
+    }
     const detail = {};
     const repaired = await summarize({ title: row.title, rawSummary: row.raw_summary, body: row.body_text, category: row.category }, detail, 'retry');
     diagnostics.retry_attempted += 1;
@@ -744,9 +762,12 @@ async function collect(env, {
         // attempts=0인 첫 시도는 무조건 통과하므로 신규 유입에는 영향이 없다.
         // 기준(6회, 20시간)은 위 retryRows 쿼리와 일부러 똑같이 맞췄다.
         const lastAttemptAt = Date.parse(String(exists.summary_last_attempt || '').replace(' ', 'T') + 'Z');
-        const mayResummarize = forceRetry
+        // 상한이 찼으면 복구도 요약을 사지 않는다. 이 경로에도 상한이 없어서
+        // 하루 발행이 12건을 넘어갔다(2026-08-11 실측 19건).
+        const withinDailyLimit = hasPublicationCapacity(exists.category || category);
+        const mayResummarize = withinDailyLimit && (forceRetry
           || (Number(exists.summary_attempts || 0) < retryAttemptLimit
-            && !(Number.isFinite(lastAttemptAt) && Date.now() - lastAttemptAt < 20 * 3600000));
+            && !(Number.isFinite(lastAttemptAt) && Date.now() - lastAttemptAt < 20 * 3600000)));
         const retryDetail = {};
         const repaired = mayResummarize
           ? await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry')
@@ -777,12 +798,14 @@ async function collect(env, {
       // 미룬 것과 실제로 실패한 것을 구분해 센다. 둘을 한 이름으로 묶으면
       // 상한 6회가 너무 빡빡한지(미룬 것만 쌓이고 복구가 멈춘다) 판단할 근거가
       // 사라진다.
+      // 상한 때문에 미룬 것과 재시도 정책(6회·20시간) 때문에 미룬 것을 구분한다.
+      // 한 이름으로 묶으면 어느 쪽을 조절해야 하는지 진단에서 알 수 없다.
+      if (!withinDailyLimit) return outcome('existing_repair_over_daily_limit');
       if (!mayResummarize) return outcome('existing_repair_deferred');
       return outcome(valid ? 'existing_repaired' : 'existing_repair_failed');
     }
 
-    const bucket = publicationBucket(category);
-    if (!popularityTargetStart && publicationCounts[bucket].daily >= DAILY_CATEGORY_PUBLISH_LIMIT) {
+    if (!hasPublicationCapacity(category)) {
       return outcome('daily_publish_limit');
     }
 

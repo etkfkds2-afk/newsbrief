@@ -762,7 +762,16 @@ test('바둑과 일반 뉴스는 각각 하루 12개까지 게시한다', async 
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_CATEGORY_PUBLISH_LIMIT = 12/);
   assert.doesNotMatch(collector, /MONTHLY_CATEGORY_PUBLISH_LIMIT/);
-  assert.match(collector, /publicationCounts\[bucket\]\.daily >= DAILY_CATEGORY_PUBLISH_LIMIT/);
+  // 상한 검사는 함수 하나로 모았다. 유료 요약을 사는 경로가 셋인데(신규 삽입,
+  // 재요약 재시도, 기존 복구) 예전에는 신규 삽입에만 검사가 있어서 하루 19건이
+  // 실렸다(2026-08-11 실측). 세 경로가 전부 같은 함수를 지나야 한다.
+  assert.match(collector, /const hasPublicationCapacity = category =>/);
+  assert.match(collector, /publicationCounts\[publicationBucket\(category\)\]\.daily < DAILY_CATEGORY_PUBLISH_LIMIT/);
+  assert.equal((collector.match(/hasPublicationCapacity\(/g) || []).length, 3,
+    '유료 요약을 사는 세 경로가 각각 한 번씩 상한을 물어야 한다');
+  // 어느 경로가 상한에 걸렸는지 진단에서 갈라 볼 수 있어야 한다.
+  assert.match(collector, /retry_over_daily_limit/);
+  assert.match(collector, /existing_repair_over_daily_limit/);
   assert.match(collector, /home_display_limits = \{ baduk: 30, general: 10 \}/);
   assert.match(collector, /consumePublicationCapacity/);
   assert.match(collector, /publish_counts_before/);
@@ -1184,7 +1193,13 @@ test('이미 정상 요약인 기사는 메타데이터만 보강하고 AI 요�
   assert.match(source, /if \(exists\.summary_quality === 'full'\)/);
   assert.match(source, /if \(!exists\.image_url \|\| hasSyntheticTime \|\| hasDateOnly \|\| hasMissingTime \|\| hasGenericImage\)/);
   assert.match(source, /return outcome\('existing_full'\)/);
-  assert.doesNotMatch(source, /hasPublicationCapacity/);
+  // 검사하려는 것은 "이 분기가 유료 요약을 다시 부르지 않는다"이다. 예전에는
+  // 파일 전체에 특정 이름이 없는지로 대신 봤는데, 그 방식은 관계없는 함수가
+  // 생기기만 해도 깨지면서 정작 이 분기는 안 본다. 분기만 잘라서 본다.
+  const fullBranch = source.slice(source.indexOf("if (exists.summary_quality === 'full')"),
+    source.indexOf("return outcome('existing_full')"));
+  assert.doesNotMatch(fullBranch, /summarize\(/);
+  assert.doesNotMatch(fullBranch, /reserveAnthropicCall/);
 });
 
 test('수동 한 달 백필만 대기 중인 요약을 강제 순환한다', async () => {
