@@ -1,4 +1,5 @@
-// 사용자 예산은 월 5달러다. 목표치에서 신규 호출을 끊고, 하드 한도는 예산
+// 사용자 예산은 월 5달러다(특정 달만 다르게 보는 예외는 아래 표에 있다).
+// 목표치에서 신규 호출을 끊고, 하드 한도는 예산
 // 자체에 맞춘다(예전에는 2.50/2.70이라 실제 상한이 2.70달러였다). 목표와
 // 하드 사이의 0.25달러는 마지막 한 건이 추정보다 비싸게 끝날 때를 위한 여유다.
 //
@@ -8,6 +9,27 @@
 export const CLAUDE_MONTHLY_TARGET_MICRO_USD = 4_750_000;
 export const CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 5_000_000;
 export const CLOUDFLARE_DAILY_CALL_LIMIT = 4;
+
+// 특정 달만 예산을 달리 본다. **이 표에 없는 달은 위 기본값을 쓴다** - 한 달만
+// 올리고 다음 달에 되돌리는 것을 잊는 사고를 막으려고 표로 뒀다.
+//
+// 2026-08: 하루 발행 상한이 유료 요약을 사는 세 경로 중 한 곳에만 걸려 있어서
+// (2026-08-11 수정) 월 중반까지 설계값의 두 배를 썼다 - 하루 12건이어야 할 발행이
+// 27건이었고 지출도 정확히 두 배인 $0.298/일이었다. 11일 만에 $3.28을 쓴 상태라,
+// 누수를 고쳐 $0.15/일로 돌아가도 남은 20일에 $3.0이 더 필요해 $4.75로는 8월
+// 21일경 멈춘다. 이번 달만 $7로 보고 끝까지 돌리기로 했다(사용자 결정 2026-08-11).
+// 9월은 이 표에 없으므로 자동으로 $4.75/$5.00로 돌아간다.
+const MONTHLY_BUDGET_OVERRIDES = {
+  '2026-08': { target: 6_750_000, hard: 7_000_000 }
+};
+
+export function claudeMonthlyTargetMicroUsd(date = new Date()) {
+  return MONTHLY_BUDGET_OVERRIDES[monthKey(date)]?.target ?? CLAUDE_MONTHLY_TARGET_MICRO_USD;
+}
+
+export function claudeMonthlyHardLimitMicroUsd(date = new Date()) {
+  return MONTHLY_BUDGET_OVERRIDES[monthKey(date)]?.hard ?? CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD;
+}
 
 const PRICES = {
   'claude-haiku-4-5-20251001': { input: 1, output: 5 },
@@ -34,7 +56,7 @@ function dayKey(date = new Date()) {
 export function dailyAllowanceMicroUsd(spentBeforeToday, date = new Date()) {
   const daysInMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   const daysLeft = Math.max(1, daysInMonth - date.getUTCDate() + 1);
-  const remaining = Math.max(0, CLAUDE_MONTHLY_TARGET_MICRO_USD - Math.max(0, spentBeforeToday));
+  const remaining = Math.max(0, claudeMonthlyTargetMicroUsd(date) - Math.max(0, spentBeforeToday));
   return Math.floor(remaining / daysLeft);
 }
 
@@ -81,8 +103,8 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
   // 하루치 페이싱은 관문에서 뺐다(위 dailyAllowanceMicroUsd 주석 참고).
   // today/allowance는 health가 그대로 보여주되 차단은 하지 않는다.
   return {
-    allowed: spent < CLAUDE_MONTHLY_TARGET_MICRO_USD
-      && spent + Math.max(0, estimatedMicroUsd) <= CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
+    allowed: spent < claudeMonthlyTargetMicroUsd()
+      && spent + Math.max(0, estimatedMicroUsd) <= claudeMonthlyHardLimitMicroUsd(),
     spent,
     today,
     allowance

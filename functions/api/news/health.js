@@ -1,5 +1,5 @@
 import { json } from '../../_lib/news-db.js';
-import { CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD, dailyAllowanceMicroUsd } from '../../_lib/news-ai-budget.js';
+import { claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd } from '../../_lib/news-ai-budget.js';
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 
 function utcMillis(value) {
@@ -146,7 +146,7 @@ export async function onRequestGet({ env }) {
       // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
       published_time_healthy: Number(missingTime?.count || 0) <= 3,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
-      claude_under_hard_limit: monthlySpend < CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD,
+      claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd(now),
       // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
       summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 15,
       database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
@@ -178,6 +178,9 @@ export async function onRequestGet({ env }) {
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
         claude_budget_month: String(state.claude_budget_month || ''),
+        // 이 달에 적용 중인 예산. 한 달만 올려둔 것을 나중에 잊지 않도록 드러낸다.
+        claude_monthly_target_micro_usd: claudeMonthlyTargetMicroUsd(now),
+        claude_monthly_hard_limit_micro_usd: claudeMonthlyHardLimitMicroUsd(now),
         claude_daily_micro_usd: dailySpend,
         claude_daily_allowance_micro_usd: dailyAllowance,
         summary_exhausted: Number(exhausted?.count || 0),

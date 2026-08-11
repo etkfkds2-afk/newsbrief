@@ -677,11 +677,15 @@ test('하루치 예산 페이스는 표시용이고 Claude 호출을 막지 않�
   assert.doesNotMatch(budgetSource, /today < allowance/);
 
   // 값 자체는 health가 지출 속도를 보여주는 데 계속 쓴다.
-  const { CLAUDE_MONTHLY_TARGET_MICRO_USD, dailyAllowanceMicroUsd } =
+  // 기준 달은 예외 표(MONTHLY_BUDGET_OVERRIDES)에 없는 달로 잡는다. 예외 달을
+  // 쓰면 이 검사가 "월 목표 ÷ 남은 날"이 아니라 예외 값을 따라가 의미가 흐려진다.
+  const { claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd } =
     await import('../functions/_lib/news-ai-budget.js');
-  const first = dailyAllowanceMicroUsd(0, new Date('2026-08-01T00:00:00Z'));
-  assert.equal(first, Math.floor(CLAUDE_MONTHLY_TARGET_MICRO_USD / 31));
-  const overspent = dailyAllowanceMicroUsd(1_709_224, new Date('2026-08-07T00:00:00Z'));
+  const plainMonth = new Date('2026-10-01T00:00:00Z');
+  const first = dailyAllowanceMicroUsd(0, plainMonth);
+  assert.equal(first, Math.floor(claudeMonthlyTargetMicroUsd(plainMonth) / 31));
+  // 같은 이유로 예외 없는 달을 쓴다. 10월도 31일이라 기대값은 그대로다.
+  const overspent = dailyAllowanceMicroUsd(1_709_224, new Date('2026-10-07T00:00:00Z'));
   assert.equal(overspent, 121_631);
   assert.ok(overspent < first, `${overspent} < ${first}`);
 
@@ -1848,4 +1852,31 @@ test('같은 날 같은 사건에 요약을 두 번 사면 건강 점검이 잡�
   ]) })).json();
   assert.equal(clean.ok, true);
   assert.equal(clean.metrics.duplicate_paid_pairs_24h, 0);
+});
+
+test('월 예산은 지정한 달만 예외를 두고 다음 달에 자동으로 되돌아간다', async () => {
+  // 한 달만 올리고 되돌리는 것을 잊는 사고를 막으려고 표로 뒀다. 표에 없는 달은
+  // 기본값을 쓰므로, 9월이 오면 사람이 아무것도 안 해도 $4.75로 돌아간다.
+  const budget = await import('../functions/_lib/news-ai-budget.js');
+  const at = value => new Date(`${value}T00:00:00Z`);
+  // 2026-08만 예외다. 하루 발행 상한 누수로 월 중반까지 설계값의 두 배를 썼고,
+  // 누수를 고쳐도 남은 날이 $4.75로는 모자란다(사용자 결정 2026-08-11).
+  assert.equal(budget.claudeMonthlyTargetMicroUsd(at('2026-08-11')), 6_750_000);
+  assert.equal(budget.claudeMonthlyHardLimitMicroUsd(at('2026-08-11')), 7_000_000);
+  // 앞뒤 달과 내년 같은 달은 기본값이다.
+  for (const day of ['2026-07-31', '2026-09-01', '2026-12-25', '2027-08-05']) {
+    assert.equal(budget.claudeMonthlyTargetMicroUsd(at(day)), budget.CLAUDE_MONTHLY_TARGET_MICRO_USD, day);
+    assert.equal(budget.claudeMonthlyHardLimitMicroUsd(at(day)), budget.CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD, day);
+  }
+  // 하루치 페이스도 그 달의 예산을 따라야 한다. 안 그러면 계기판만 옛 숫자를 본다.
+  assert.equal(budget.dailyAllowanceMicroUsd(0, at('2026-08-01')), Math.floor(6_750_000 / 31));
+  assert.equal(budget.dailyAllowanceMicroUsd(0, at('2026-09-01')), Math.floor(4_750_000 / 30));
+});
+
+test('건강 점검은 이 달에 적용 중인 예산을 함께 보여준다', async () => {
+  // 한 달만 올려둔 것을 나중에 잊지 않으려면 계기판에 드러나야 한다.
+  const health = await readFile(new URL('../functions/api/news/health.js', import.meta.url), 'utf8');
+  assert.match(health, /claude_monthly_target_micro_usd: claudeMonthlyTargetMicroUsd\(now\)/);
+  assert.match(health, /claude_monthly_hard_limit_micro_usd: claudeMonthlyHardLimitMicroUsd\(now\)/);
+  assert.match(health, /claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd\(now\)/);
 });
