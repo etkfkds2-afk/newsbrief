@@ -1880,3 +1880,22 @@ test('건강 점검은 이 달에 적용 중인 예산을 함께 보여준다', 
   assert.match(health, /claude_monthly_hard_limit_micro_usd: claudeMonthlyHardLimitMicroUsd\(now\)/);
   assert.match(health, /claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd\(now\)/);
 });
+
+test('건강 경고는 실패 목록이 바뀔 때만 알리고 회복되면 이슈를 닫는다', async () => {
+  // 실측 2026-08-11: 경고 이슈 #3이 7월 30일부터 열린 채 댓글 177개가 쌓여
+  // 있었다. 3시간마다 한 통씩 12일간 같은 제목의 메일이 갔다는 뜻이다. 그러면
+  // 사람이 알람을 통째로 무시하게 되고, 정작 새로 생긴 고장은 사용자가 화면을
+  // 보고 발견하게 된다. 코드 곳곳에 "그래서 사람이 손으로 무시하게 됐다"는
+  // 주석이 있는데 알람 시스템 자신이 그 상태였다.
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  // 실패 목록을 서명으로 남기고, 직전 알림과 같으면 조용히 둔다.
+  assert.match(workflow, /failures-signature: \$\{signature\}/);
+  assert.match(workflow, /if \[ "\$signature" = "\$previous" \]; then/);
+  // 회복 시 닫는 단계가 있어야 한다. 예전에는 닫는 로직이 아예 없어서 고쳐도
+  // 경고가 열린 채 남았고, 그 상태가 길어지면 "원래 켜져 있는 것"이 된다.
+  assert.match(workflow, /Close health alert issue on recovery/);
+  assert.match(workflow, /steps\.health\.outputs\.unhealthy == 'false'/);
+  assert.match(workflow, /gh issue close "\$issue"/);
+  // 이슈를 만들거나 새 실패를 알릴 때만 job을 실패로 남긴다.
+  assert.doesNotMatch(workflow, /gh issue comment "\$issue" --repo "\$GITHUB_REPOSITORY" --body "\$body"\n\s+fi\n\s+exit 1/);
+});
