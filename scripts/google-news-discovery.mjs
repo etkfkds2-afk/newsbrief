@@ -61,12 +61,37 @@ collectUrl.searchParams.set('source', process.env.NEWSBRIEF_RUN_SOURCE || 'sched
 if (full) collectUrl.searchParams.set('backfill', '1');
 if (generalBoost) collectUrl.searchParams.set('general_boost', '1');
 const endpoint = collectUrl.toString();
+const discoveries = [...found.values()];
 const response = await fetchWithRetry(endpoint, {
   method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  body: JSON.stringify({ googleDiscoveries: [...found.values()] })
+  body: JSON.stringify({ googleDiscoveries: discoveries })
 }, { attempts: 3, timeout: 180000 });
 const result = await response.text();
 console.log(`Google discoveries=${found.size} collector=${response.status} ${result}`);
+
+// 바둑 전용 호출에도 같은 헤드라인을 넘긴다. 예전에는 이 스크립트가 위 한 곳에만
+// POST했고, deploy.yml의 baduk_only curl은 본문 없이 호출돼서 디스커버리를
+// 하나도 못 받았다. 바둑에 자기 subrequest 예산을 주려고 따로 만든 호출인데
+// 정작 가장 좋은 후보 목록이 그 호출에는 안 갔던 것이다. 그래서 그 호출은
+// 자체 RSS 폴백 3건에만 의존했다.
+//
+// 이 POST는 위 호출과 같은 헤드라인을 보내지만, url_key가 같은 기사는 D1에서
+// 이미 발행된 것으로 걸러지므로 중복 처리가 아니라 못 다룬 나머지를 훑는 셈이다.
+// 실패해도 위 수집은 이미 끝났으므로 경고만 남기고 성공으로 둔다.
+if (!full && discoveries.length) {
+  const badukUrl = new URL('https://newsbrief-etkfkds2.pages.dev/api/news/collect');
+  badukUrl.searchParams.set('source', process.env.NEWSBRIEF_RUN_SOURCE || 'scheduled');
+  badukUrl.searchParams.set('baduk_only', '1');
+  try {
+    const badukResponse = await fetchWithRetry(badukUrl.toString(), {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ googleDiscoveries: discoveries })
+    }, { attempts: 2, timeout: 180000 });
+    console.log(`Baduk-only collector=${badukResponse.status} ${await badukResponse.text()}`);
+  } catch (error) {
+    console.warn(`::warning::Baduk-only collection failed: ${error?.message || error}`);
+  }
+}
 if (!response.ok) {
   process.exitCode = 1;
 } else {

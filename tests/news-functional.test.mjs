@@ -532,7 +532,24 @@ test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 �
   assert.match(collector, /!backfill && !googleDiscoveries\.length/);
   assert.match(collector, /google_fallback_skipped = true/);
   assert.match(collector, /SCHEDULED_GOOGLE_DISCOVERIES = 6/);
-  assert.match(collector, /backfill \? 20 : SCHEDULED_GOOGLE_DISCOVERIES/);
+  assert.match(collector, /backfill \? 20 : \(badukOnly \? BADUK_ONLY_GOOGLE_DISCOVERIES : SCHEDULED_GOOGLE_DISCOVERIES\)/);
+  // 상한에 걸려 버린 건수를 진단에 남긴다. 안 남기면 "다 봤다"로 읽힌다.
+  assert.match(collector, /google_discoveries_dropped/);
+});
+
+test('바둑 전용 호출은 디스커버리 헤드라인을 넘겨받아 더 많이 해석한다', async () => {
+  // 바둑에 자기 subrequest 예산을 주려고 따로 만든 호출인데, 정작 가장 좋은
+  // 후보 목록(디스커버리 40건)이 그 호출에는 안 갔다. deploy.yml의 baduk_only
+  // curl은 본문 없이 호출되므로 googleDiscoveries가 늘 빈 배열이었고, 그래서
+  // 자체 RSS 폴백 3건에만 의존했다. 2026-08-11 실측: google_discovered=40인데
+  // 바둑 전용 실행은 그 40건을 한 건도 못 봤다.
+  const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
+  const discovery = await readFile(new URL('../scripts/google-news-discovery.mjs', import.meta.url), 'utf8');
+  assert.match(collector, /const BADUK_ONLY_GOOGLE_DISCOVERIES = 10/);
+  assert.match(discovery, /baduk_only', '1'/);
+  assert.match(discovery, /googleDiscoveries: discoveries/);
+  // 바둑 전용 POST가 실패해도 앞선 수집은 이미 끝났으므로 워크플로를 세우지 않는다.
+  assert.match(discovery, /::warning::Baduk-only collection failed/);
 });
 
 test('Google 바둑 발견은 한 검색어가 전체 후보를 독점하지 않는다', async () => {

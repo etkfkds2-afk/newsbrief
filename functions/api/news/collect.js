@@ -63,6 +63,15 @@ const SCHEDULED_BADUK_CANDIDATES = 20;
 // new baduk/general articles with "body_too_short" that was really
 // "Too many subrequests by single Worker invocation".
 const SCHEDULED_GOOGLE_DISCOVERIES = 6;
+// 바둑 전용 호출은 일반 후보도, 인기 랭킹 해석도 돌리지 않는다. 그 몫의
+// subrequest가 통째로 남으므로 디스커버리를 더 많이 해석할 수 있다. 6은 일반과
+// 예산을 다투던 시절의 값이다 - 디스커버리가 40건을 찾아 보내는데 6건만 쓰고
+// 34건을 버리고 있었다(2026-08-11 실측 google_discovered=40).
+// 10인 이유: 해석 1건당 보통 subrequest 1회(네이버 성공 시), 실패해야 2회다.
+// 여기에 본문 fetch 20건과 기본 검색 3회가 더해지므로 무료 플랜 상한 50에
+// 여유를 남긴다. 남는지는 진단의 body_too_short 사유로 확인할 수 있다 -
+// 예산이 바닥나면 "Too many subrequests"가 error_ 로 찍힌다.
+const BADUK_ONLY_GOOGLE_DISCOVERIES = 10;
 const DAILY_CATEGORY_PUBLISH_LIMIT = 12;
 const MAINTENANCE_BATCH_SIZE = 40;
 const POPULARITY_REPAIR_BATCH_SIZE = 4;
@@ -441,12 +450,18 @@ async function collect(env, {
       } catch (error) {
         diagnostics.naver_error = String(error?.message || error).slice(0, 120);
       }
-      const naverTake = category === '바둑' ? (backfill ? 6 : 10) : (backfill ? 2 : 2);
+      // 받아온 것을 버리지 않는다. 검색 API 호출 하나가 곧 subrequest 하나이고
+      // 그 값은 이미 치렀는데, 바둑은 20건을 받아 10건만, 카카오는 10건을 받아
+      // **1건만** 쓰고 나머지를 버리고 있었다. 더 쓰는 데는 추가 subrequest가
+      // 들지 않는다. 후보가 늘어도 처리량은 아래 20슬롯 상한이 그대로 묶으므로
+      // 늘어나는 것은 처리량이 아니라 그 20칸에 들어올 후보의 다양성이다.
+      // 2026-08-11 실측: 20칸 중 8칸이 이미 아는 기사(existing_*)에 돌아갔다.
+      const naverTake = category === '바둑' ? (backfill ? 6 : 20) : (backfill ? 2 : 2);
       for (const item of items.slice(0, naverTake)) candidates.push({ category, item, source: 'NAVER' });
       try {
         const page = category === '바둑' ? pageBand + 1 : (backfill ? (slot % 10) * 5 + 1 : 1);
         const kakaoItems = await kakaoSearch(env, effectiveQuery, page, category === '바둑' ? 10 : (backfill ? 10 : 3));
-        const kakaoTake = category === '바둑' ? (backfill ? 3 : 1) : (backfill ? 2 : 1);
+        const kakaoTake = category === '바둑' ? (backfill ? 3 : 5) : (backfill ? 2 : 1);
         for (const item of kakaoItems.slice(0, kakaoTake)) candidates.push({ category, item, source: 'KAKAO' });
       } catch (error) {
         diagnostics.kakao_error = String(error?.message || error).slice(0, 120);
@@ -510,10 +525,17 @@ async function collect(env, {
     }
     return false;
   };
-  for (const discovery of generalBelowDailyGoal ? [] : googleDiscoveries.slice(0, backfill ? 20 : SCHEDULED_GOOGLE_DISCOVERIES)) {
-    await resolveBadukHeadline(discovery?.title);
+  const discoveryLimit = backfill ? 20 : (badukOnly ? BADUK_ONLY_GOOGLE_DISCOVERIES : SCHEDULED_GOOGLE_DISCOVERIES);
+  const usedDiscoveries = generalBelowDailyGoal ? [] : googleDiscoveries.slice(0, discoveryLimit);
+  let discoveriesResolved = 0;
+  for (const discovery of usedDiscoveries) {
+    if (await resolveBadukHeadline(discovery?.title)) discoveriesResolved += 1;
   }
   diagnostics.google_discovered = googleDiscoveries.length;
+  // 상한 때문에 버린 건수를 남긴다. 안 적으면 "40건 다 봤다"로 읽힌다.
+  diagnostics.google_discoveries_used = usedDiscoveries.length;
+  diagnostics.google_discoveries_dropped = Math.max(0, googleDiscoveries.length - usedDiscoveries.length);
+  diagnostics.google_discoveries_resolved = discoveriesResolved;
   if (backfill) {
     try {
       const archived = await collectArchivedTop(slot);

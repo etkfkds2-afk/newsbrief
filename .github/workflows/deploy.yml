@@ -283,6 +283,14 @@ jobs:
           # 일반은 발행 가능한 후보가 22건 남아돌았다). 순서를 되돌리면 이번엔
           # 일반이 굶으므로 - 지금 순서가 그래서 생겼다 - 바둑에 자기 호출을 준다.
           # 호출마다 subrequest 예산이 새로 주어지는 것이 이 방식이 통하는 이유다.
+          #
+          # 이 curl은 두 번째 패스다. 첫 패스는 google-news-discovery.mjs가
+          # 디스커버리 헤드라인을 실어 직접 POST한다 - 이 curl은 본문을 못 실어서
+          # googleDiscoveries가 늘 빈 배열이었고, 그래서 가장 좋은 후보 목록이
+          # 정작 바둑 전용 호출에는 한 번도 가지 않았다(2026-08-11 실측).
+          # 둘 다 남겨 둔다: 수집 커서(rotation_cursor)가 호출마다 올라가므로 두
+          # 패스는 서로 다른 회전 검색어를 쓰고, url_key가 같은 기사는 D1에서
+          # 즉시 걸러지므로 겹치는 비용은 거의 없다.
           if [ "${{ inputs.backfill }}" != "true" ]; then
             curl --fail-with-body --retry 3 --max-time 240 \
               -X POST \
