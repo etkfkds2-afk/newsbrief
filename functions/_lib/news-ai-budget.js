@@ -38,12 +38,31 @@ const PRICES = {
   'claude-sonnet-5': { input: 3, output: 15 }
 };
 
+// 날짜 경계는 전부 한국시간으로 센다. 예전에는 toISOString()의 UTC 날짜를 썼는데,
+// UTC 자정은 한국시간 오전 9시다. 그래서 하루 호출 카운터가 아침 9시에 리셋됐고,
+// 새벽 수집(KST 00:17/03:17/06:17)은 언제나 "어제 UTC 하루"의 꼬리에 걸려 이미
+// 60/60으로 소진된 카운터를 봤다. 실측 2026-08-12 07:08 KST 자동 실행:
+// anthropic_calls_today 60/60, anthropic_budget_exhausted=true, 바둑 발행 0건.
+//
+// 발행 상한은 이미 KST 기준이었다(collect.js의 dayStart). 한쪽은 "오늘 아직 0건
+// 실었으니 채워라"라고 하고 다른 쪽은 "오늘 예산 다 썼다"라고 하는 어긋남이
+// 매일 아침 재현되던 고장의 정체다. 두 경계를 같은 하루로 맞춘다.
+const KST_OFFSET_MS = 9 * 3600000;
+
+export function koreaDayKey(date = new Date()) {
+  return new Date(date.valueOf() + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export function koreaMonthKey(date = new Date()) {
+  return new Date(date.valueOf() + KST_OFFSET_MS).toISOString().slice(0, 7);
+}
+
 function monthKey(date = new Date()) {
-  return date.toISOString().slice(0, 7);
+  return koreaMonthKey(date);
 }
 
 function dayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+  return koreaDayKey(date);
 }
 
 // 월 예산을 남은 날짜로 나눈 하루치 페이스. 2026-08-09부터 이 값은 **표시

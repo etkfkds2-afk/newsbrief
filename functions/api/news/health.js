@@ -1,5 +1,7 @@
 import { json } from '../../_lib/news-db.js';
-import { claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd } from '../../_lib/news-ai-budget.js';
+import {
+  claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd, koreaDayKey
+} from '../../_lib/news-ai-budget.js';
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 
 function utcMillis(value) {
@@ -10,7 +12,7 @@ function utcMillis(value) {
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, automaticRun, counts, missingTime, stateRows, exhausted, storageResult, badukStored,
+    const [run, automaticRun, counts, missingTime, futureTime, stateRows, exhausted, storageResult, badukStored,
       badukPortal, recentRuns, paidSameDay] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
@@ -26,6 +28,15 @@ export async function onRequestGet({ env }) {
       // 본다. 옛 행은 창을 벗어나 사라지고, 진짜 회귀는 하루 안에 다시 뜬다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
         WHERE summary_quality='full' AND TRIM(published_at)=''
+          AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
+      // 발행시각이 **미래**인 행. 시각을 못 읽는 고장은 위에서 잡히지만, 잘못 읽는
+      // 고장은 아무 데도 안 잡혔다. 2026-08-12: 타임존 없는 시각을 UTC로 읽어 +9시간
+      // 미래가 된 기사가 목록 맨 위에 하루 종일 박혀 있었는데 health는 ok였다.
+      // 사람이 "미래에서 왔냐"고 물어야 드러나는 종류라 반드시 기계가 먼저 잡아야 한다.
+      // 2시간 여유는 서버 시계 오차용이고, 진짜 회귀는 9시간이라 이 창에 안 숨는다.
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+        WHERE TRIM(published_at)<>''
+          AND datetime(published_at)>datetime('now','+2 hours')
           AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
       env.DB.prepare(`SELECT key,value FROM news_state WHERE key IN
         ('ai_blocked','claude_monthly_micro_usd','claude_budget_month',
@@ -85,11 +96,23 @@ export async function onRequestGet({ env }) {
     // 시도 자체가 없었으면 이 값들이 0이라 아래 검사가 울리지 않는다.
     let badukBodyTooShort = 0;
     let badukPublishedByRuns = 0;
+    // 바둑이 "요약을 살 돈이 없어서" 굶은 실행 수. 본문을 못 긁은 것도, 소스가
+    // 조용한 것도 아니고 호출 몫에 막힌 경우다. 2026-08-12 아침의 고장이 정확히
+    // 이것이었는데 그때 health는 전 항목 통과였다 - 어느 검사도 예산 관문이 바둑을
+    // 끊고 있는지를 묻지 않았기 때문이다.
+    let badukQuotaBlockedRuns = 0;
     for (const row of recentRuns?.results || []) {
-      let outcomes = null;
+      let diagnostics = null;
       try {
-        outcomes = JSON.parse(String(row.message || '') || '{}')?.diagnostics?.candidate_outcomes_by_category?.baduk;
+        diagnostics = JSON.parse(String(row.message || '') || '{}')?.diagnostics;
       } catch { continue; }
+      if (!diagnostics) continue;
+      const reason = String(diagnostics.anthropic_exhausted_reason || '');
+      // 바둑 후보를 실제로 처리한 실행만 센다. 바둑을 아예 안 돌린 일반 실행이
+      // 총량에 걸린 것은 바둑의 굶주림이 아니다.
+      if ((reason === 'bucket_baduk' || reason === 'daily_total')
+        && Number(diagnostics.processed_by_category?.baduk || 0) > 0) badukQuotaBlockedRuns += 1;
+      const outcomes = diagnostics.candidate_outcomes_by_category?.baduk;
       if (!outcomes) continue;
       badukBodyTooShort += Number(outcomes.body_too_short || 0);
       badukPublishedByRuns += Number(outcomes.inserted_publishable || 0)
@@ -98,7 +121,11 @@ export async function onRequestGet({ env }) {
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const now = new Date();
     const monthlySpend = Number(state.claude_monthly_micro_usd || 0);
-    const dailySpend = String(state.claude_spend_day || '') === now.toISOString().slice(0, 10)
+    // 저장 쪽이 한국시간 날짜로 적으므로 비교도 한국시간으로 한다. UTC 날짜로
+    // 견주던 동안, 한국시간 오전 9시가 지나면 "오늘 지출"이 0으로 초기화돼 보였다
+    // (2026-08-12 10:19 KST 실측: 월 $3.34인데 오늘 $0). 실제로는 돈이 나갔는데
+    // 계기판만 0을 가리키니 "왜 돈이 안 나가지"를 사람이 물어야 했다.
+    const dailySpend = String(state.claude_spend_day || '') === koreaDayKey(now)
       ? Number(state.claude_daily_micro_usd || 0) : 0;
     // 하루치 페이스는 계속 보여주되 실패 조건에서는 뺐다. 이 값이 호출을
     // 막던 동안 요약이 낮에 끊겨 바둑 발행이 0이 됐다. 지출 속도를 눈으로
@@ -145,6 +172,12 @@ export async function onRequestGet({ env }) {
       // 0을 요구하면 발행시각을 아예 안 내는 매체가 한 곳만 걸려도 실패한다.
       // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
       published_time_healthy: Number(missingTime?.count || 0) <= 3,
+      // 미래 시각은 0을 요구한다. 발행시각을 안 내는 매체는 있어도 아직 오지 않은
+      // 시각을 내는 매체는 없다 - 하나라도 있으면 우리 파싱이 틀린 것이다.
+      published_time_not_future: Number(futureTime?.count || 0) === 0,
+      // 바둑 몫이 막혀 굶은 실행이 하루에 셋 이상이면 몫 배분이 틀어진 것이다.
+      // 한두 번은 총량을 다 쓴 바쁜 날일 수 있어 넘긴다.
+      baduk_ai_quota_available: badukQuotaBlockedRuns < 3,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd(now),
       // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
@@ -175,6 +208,8 @@ export async function onRequestGet({ env }) {
         duplicate_paid_samples: duplicatePaidSample,
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
+        future_published_time: Number(futureTime?.count || 0),
+        baduk_quota_blocked_runs_24h: badukQuotaBlockedRuns,
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
         claude_budget_month: String(state.claude_budget_month || ''),

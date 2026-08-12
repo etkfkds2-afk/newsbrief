@@ -166,8 +166,12 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
   const cursor = Number(cursorRow?.value || 0);
   const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
-    WHERE id>? AND category<>'바둑' AND summary_quality='full'
-      AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
+    WHERE id>? AND summary_quality='full'
+      -- 빈 값/날짜만 있는 행은 예전대로 일반만 손본다(바둑은 collect.js가 따로 고친다).
+      -- 미래 시각은 카테고리를 가리지 않고 고친다 - 잘못 읽은 시각은 어느 쪽에서든
+      -- 목록 맨 위를 차지해 그날 기사를 통째로 가린다.
+      AND ((category<>'바둑' AND (TRIM(published_at)='' OR published_at GLOB '????-??-??'))
+        OR datetime(published_at)>datetime('now','+2 hours'))
       AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
     ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];

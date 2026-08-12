@@ -711,7 +711,9 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 60/);
-  assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT \+ 24/);
+  // 총 60은 그대로, 몫만 나눈다(일반 40 하드 상한 → 바둑에 최소 20 보장).
+  assert.match(collector, /BADUK_RESERVED_ANTHROPIC_CALLS = 20/);
+  assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = GENERAL_DAILY_ANTHROPIC_CALL_LIMIT \+ 24/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);
   assert.match(collector, /canUseClaude/);
@@ -1535,7 +1537,7 @@ test('요약을 사기 전에 AI에게 이미 다룬 이야기인지 한 번 묻
   const classify = await readFile(new URL('../functions/_lib/news-issue-classify.js', import.meta.url), 'utf8');
   assert.match(collector, /findDuplicateStories/);
   // 판정도 유료 호출이므로 하루 상한·월 예산 관문을 함께 지나야 한다.
-  assert.match(collector, /reserveAnthropicCall\(env, diagnostics, forceRetry, generalBoost\)\) \{/);
+  assert.match(collector, /reserveAnthropicCall\(env, diagnostics, forceRetry, generalBoost, badukOnly \? 'baduk' : 'general'\)\) \{/);
   assert.match(collector, /recordClaudeUsage\(env, judged\.model, judged\.usage\)/);
   // 판정 결과는 무료 요약 경로로 이어져야 의미가 있다.
   assert.match(collector, /aiDuplicates\.get\(knownUrlKey\)/);

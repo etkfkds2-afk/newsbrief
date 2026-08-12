@@ -110,13 +110,34 @@ export function cleanPressName(value) {
     .slice(0, 40);
 }
 
+// 타임존이 안 붙은 시각은 전부 한국시간으로 읽는다. 국내 매체가 메타태그에 적는
+// 시각에 오프셋이 없으면 그건 한국 벽시계 시각이지 UTC가 아니다.
+//
+// 예전에는 'YYYY-MM-DD HH:MM(:SS)' 딱 한 표기만 +09:00으로 봤다. 밀리초가 붙거나
+// 구분자가 점·슬래시면 이 정규식에 안 걸려 new Date()로 흘러갔고, Workers 런타임의
+// 로컬 타임존이 UTC라 한국 시각이 UTC로 해석됐다. 그 결과가 화면에서 정확히 +9시간
+// 미래다 - 2026-08-12 실측: 실제 오전 5시 10분 기사가 오후 2시 10분으로 떴고,
+// 목록이 발행시각 내림차순이라 그 기사가 하루 종일 맨 위에 박혀 있었다.
+//
+// 걸러야 할 표기를 하나씩 늘리는 대신 방향을 뒤집었다: 오프셋이 있으면 그대로 믿고,
+// 없으면 한국시간으로 본다. 새 매체가 또 다른 표기를 들고 와도 같은 규칙에 걸린다.
+const NAIVE_DATETIME = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T]+(?:(오전|오후)\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)$/u;
+
 export function parseDate(value) {
   const text = String(value || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)
-    ? `${text.replace(' ', 'T')}+09:00`
-    : text;
-  const date = new Date(normalized);
+  const naive = text.match(NAIVE_DATETIME);
+  if (naive) {
+    const [, year, month, day, meridiem, rawHour, minute, second] = naive;
+    let hour = Number(rawHour);
+    if (meridiem === '오후' && hour < 12) hour += 12;
+    if (meridiem === '오전' && hour === 12) hour = 0;
+    const pad = number => String(number).padStart(2, '0');
+    if (hour > 23 || Number(minute) > 59) return '';
+    const date = new Date(`${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${minute}:${second || '00'}+09:00`);
+    return Number.isNaN(date.valueOf()) ? '' : date.toISOString();
+  }
+  const date = new Date(text);
   return Number.isNaN(date.valueOf()) ? '' : date.toISOString();
 }
 

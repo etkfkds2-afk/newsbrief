@@ -6,7 +6,7 @@ import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
 import {
-  blockCloudflareForToday, canUseClaude, recordClaudeUsage, reserveCloudflareCall
+  blockCloudflareForToday, canUseClaude, koreaDayKey as budgetDayKey, recordClaudeUsage, reserveCloudflareCall
 } from '../../_lib/news-ai-budget.js';
 import { createStoryIndex, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
@@ -45,9 +45,23 @@ const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 �
 // 한도뿐이다. 이 값을 예산에 맞춰 더 낮추지는 않는다 - 같은 것을 두 군데서
 // 막으면 어느 쪽이 기사를 끊었는지 진단에서 구분되지 않는다.
 const DAILY_ANTHROPIC_CALL_LIMIT = 60;
+// 바둑이 이 서비스의 메인이다. 그런데 카운터 하나를 일반과 나눠 쓰면서 한도만
+// 달랐다(일반 84, 바둑 60). 일반이 먼저 처리되고 바둑 전용 호출은 매 사이클
+// 맨 마지막이라, 일반이 60을 넘겨 쓰는 순간 바둑은 그날 내내 한 건도 못 산다.
+//
+// 그래서 총량은 그대로 60에 두고 몫만 나눈다.
+// - 일반: 40이 하드 상한. 이 위로는 바둑 몫이라 못 넘본다.
+// - 바둑: 따로 상한을 두지 않는다(총량까지). 최소 20은 일반이 절대 못 건드리고,
+//   일반이 40을 다 안 쓴 날은 남는 것까지 바둑이 가져간다.
+// 하루 최대 지출은 예전과 같다 - 총량 60이 유일한 뚜껑이기 때문이다.
+const BADUK_RESERVED_ANTHROPIC_CALLS = 20;
+const GENERAL_DAILY_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT - BADUK_RESERVED_ANTHROPIC_CALLS;
 // A boost adds 24 calls to the normal allowance. Keeping this below the
 // normal limit made the old "boost" disable Claude once 24 calls were used.
-const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT + 24;
+// 부스트는 사람이 손으로 누르는 버튼이라 총량도 같이 올린다 - 일반 몫만 올리고
+// 총량을 60에 두면 부스트가 바둑 예약분을 먹는다.
+const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = GENERAL_DAILY_ANTHROPIC_CALL_LIMIT + 24;
+const GENERAL_BOOST_DAILY_CEILING = DAILY_ANTHROPIC_CALL_LIMIT + 24;
 const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
 const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 // Popular pages frequently contain blocked/short-body articles. Process more
@@ -98,31 +112,66 @@ async function reserveAiCall(env, diagnostics) {
   return true;
 }
 
-async function reserveAnthropicCall(env, diagnostics, forceRetry = false, generalBoost = false) {
-  const day = new Date().toISOString().slice(0, 10);
+// 하루 경계는 한국시간이다(news-ai-budget.js의 koreaDayKey 주석 참고). 이 함수가
+// UTC 날짜를 쓰던 동안, 카운터는 아침 9시에 리셋되는데 수집은 새벽 0시·3시·6시에
+// 돌아서 새벽 실행이 통째로 "어제치 소진분"을 물려받았다.
+async function reserveAnthropicCall(env, diagnostics, forceRetry = false, generalBoost = false, bucket = 'general') {
+  // collect() 안에는 타임스탬프를 받는 동명의 지역 함수가 따로 있어 별칭으로 들여온다.
+  const day = budgetDayKey();
   const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_budget_day'").first();
   if (String(dayRow?.value || '') !== day) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0")
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today_baduk',0) ON CONFLICT(key) DO UPDATE SET value=0"),
+      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today_general',0) ON CONFLICT(key) DO UPDATE SET value=0")
     ]);
   }
-  const dailyRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first();
-  const daily = Number(dailyRow?.value || 0);
-  const dailyLimit = forceRetry
+  const bucketKey = bucket === 'baduk' ? 'anthropic_calls_today_baduk' : 'anthropic_calls_today_general';
+  const [totalRow, bucketRow] = await Promise.all([
+    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first(),
+    env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(bucketKey).first()
+  ]);
+  const daily = Number(totalRow?.value || 0);
+  const bucketUsed = Number(bucketRow?.value || 0);
+  const totalLimit = forceRetry
     ? BACKFILL_ANTHROPIC_CALL_LIMIT
-    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : DAILY_ANTHROPIC_CALL_LIMIT);
+    : (generalBoost ? GENERAL_BOOST_DAILY_CEILING : DAILY_ANTHROPIC_CALL_LIMIT);
+  // 바둑은 자기 상한이 없다. 총량이 유일한 뚜껑이고, 일반이 40에서 멈추므로
+  // 최소 20은 언제나 바둑에게 남는다.
+  const bucketLimit = forceRetry || bucket === 'baduk'
+    ? totalLimit
+    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : GENERAL_DAILY_ANTHROPIC_CALL_LIMIT);
   const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
-  if (daily >= dailyLimit || !budget.allowed) {
-    diagnostics.anthropic_budget_exhausted = true;
+  const recordCounts = () => {
     diagnostics.anthropic_calls_today = daily;
-    diagnostics.anthropic_daily_limit = dailyLimit;
+    diagnostics.anthropic_daily_limit = totalLimit;
+    diagnostics.anthropic_calls_by_bucket = {
+      ...(diagnostics.anthropic_calls_by_bucket || {}),
+      [bucket]: bucketUsed
+    };
+    diagnostics.anthropic_bucket_limit = {
+      ...(diagnostics.anthropic_bucket_limit || {}),
+      [bucket]: bucketLimit
+    };
+  };
+  if (daily >= totalLimit || bucketUsed >= bucketLimit || !budget.allowed) {
+    recordCounts();
+    diagnostics.anthropic_budget_exhausted = true;
+    // 어느 쪽 뚜껑에 걸렸는지 남긴다. 총량인지, 자기 몫인지, 월 예산인지가
+    // 구분되지 않으면 다음에 또 원인을 처음부터 찾게 된다.
+    diagnostics.anthropic_exhausted_reason = !budget.allowed ? 'monthly_budget'
+      : (daily >= totalLimit ? 'daily_total' : `bucket_${bucket}`);
     diagnostics.claude_monthly_micro_usd = budget.spent;
     return false;
   }
-  await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1").run();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1"),
+    env.DB.prepare('INSERT INTO news_state(key,value) VALUES(?,1) ON CONFLICT(key) DO UPDATE SET value=value+1').bind(bucketKey)
+  ]);
+  recordCounts();
   diagnostics.anthropic_calls_today = daily + 1;
-  diagnostics.anthropic_daily_limit = dailyLimit;
+  diagnostics.anthropic_calls_by_bucket[bucket] = bucketUsed + 1;
   return true;
 }
 
@@ -252,6 +301,9 @@ async function collect(env, {
   if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
   const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
     const trace = detail || {};
+    // 어느 몫에서 돈을 빼는지. payload.category가 비면 일반으로 본다 - 바둑 몫을
+    // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
+    const bucket = publicationBucket(payload.category);
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
     // freeOnly: 이미 같은 이야기를 요약해 둔 기사다. 카드로 세워질 일이 없으므로
     // 무료 추출 요약이면 충분하다. 호출부는 이 결과가 검증을 통과하지 못하면
@@ -276,7 +328,7 @@ async function collect(env, {
       await blockAiForToday(env, diagnostics);
     }
 
-    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
+    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost, bucket)) {
       const anthropicTrace = {};
       const anthropicSummary = await makeBestSummary({
         ...env,
@@ -976,8 +1028,10 @@ async function collect(env, {
     && !knownCandidateKeys.has(candidate.urlKey)
     && !freeDuplicateOf(cleanTitle(candidate.item?.title || ''), candidateDay(candidate), candidate.category));
   const recentStoryTitles = [...storyTitlesByDay.values()].flat();
+  // 중복 판정은 실행당 1회이고 후보가 섞여 있다. 바둑 전용 실행이면 바둑 몫에서,
+  // 아니면 일반 몫에서 뺀다 - 바둑 예약분이 일반 실행의 판정 비용에 쓰이지 않게.
   if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
-    && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost)) {
+    && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost, badukOnly ? 'baduk' : 'general')) {
     const judged = await findDuplicateStories(env,
       dedupTargets.map(candidate => ({ title: cleanTitle(candidate.item?.title || '') })), recentStoryTitles);
     for (const [index, sameTitle] of judged.duplicates) {
