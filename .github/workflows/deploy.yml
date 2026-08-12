@@ -448,9 +448,16 @@ jobs:
               "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=popular&exclude_baduk=1&hours=168&issues=1" || true)
             monthly_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-monthly-check.json -w '%{http_code}' \
               "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=150&view=popular&exclude_baduk=1&hours=720&issues=1" || true)
-            if [ "$weekly_status" = "200" ] && [ "$monthly_status" = "200" ] \
+            # 바둑 탭도 확인한다. 예전에는 일반 탭 두 개만 봤다 - 바둑이 이
+            # 서비스의 메인인데 그 화면이 깨져도 알림이 안 갔다. 건수는 묻지
+            # 않는다(한국기원이 2~4일에 한 번 올려 조용한 날이 정상이다).
+            # 화면이 실제로 쓰는 조건 그대로 부른다.
+            baduk_status=$(curl -sS --max-time 30 -b /tmp/newsbrief-health-cookie -o /tmp/newsbrief-baduk-check.json -w '%{http_code}' \
+              "https://newsbrief-etkfkds2.pages.dev/api/news/articles?limit=120&view=latest&category=%EB%B0%94%EB%91%91&hours=24" || true)
+            if [ "$weekly_status" = "200" ] && [ "$monthly_status" = "200" ] && [ "$baduk_status" = "200" ] \
               && jq -e '.ok == true' /tmp/newsbrief-weekly-check.json >/dev/null \
-              && jq -e '.ok == true' /tmp/newsbrief-monthly-check.json >/dev/null; then
+              && jq -e '.ok == true' /tmp/newsbrief-monthly-check.json >/dev/null \
+              && jq -e '.ok == true' /tmp/newsbrief-baduk-check.json >/dev/null; then
               feed_ok=true
             fi
           fi

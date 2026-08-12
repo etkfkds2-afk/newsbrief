@@ -394,13 +394,23 @@ async function collect(env, {
     // 하루가 지나면 한 번 통과시켜 본다(탐침). 실패하면 at이 갱신돼 또 하루 쉰다.
     return Date.now() - lastAttempt < QUARANTINE_HOURS * 3600000;
   };
-  const recordHostResult = (value, ok) => {
+  // 매체 탓인 실패만 장부에 적는다. 본문 실패는 원인이 뒤섞여 들어온다 - 우리가
+  // 그 실행의 subrequest를 다 써서 못 가져온 것(error_...)도, 그 기사 한 건이
+  // 지워진 것(http_404·dead_page)도 같은 자리로 떨어진다. 그것까지 세면 우리
+  // 쪽 사정으로 멀쩡한 매체가 24시간 차단되고, 바둑처럼 매체 수가 적은 쪽은
+  // 그대로 기사가 끊긴다. 고치려던 것보다 큰 고장을 만드는 길이다.
+  //
+  // 그래서 "몇 번을 다시 불러도 결과가 같은" 것만 센다: 차단(403·429), 서버가
+  // 계속 죽어 있는 것(5xx), HTML이 아닌 것, 구조가 안 맞는 것(selector_miss).
+  const HOST_ATTRIBUTABLE_FAILURE = /^(?:selector_miss|non_html|http_(?:403|429|5\d\d))$/;
+  const recordHostResult = (value, ok, fetchStatus = '') => {
     const host = candidateHost(value);
     if (!host || NEVER_QUARANTINE.test(host)) return;
     if (ok) {
       if (hostHealth[host]) { delete hostHealth[host]; hostHealthChanged = true; }
       return;
     }
+    if (!HOST_ATTRIBUTABLE_FAILURE.test(String(fetchStatus || ''))) return;
     hostHealth[host] = { fail: Number(hostHealth[host]?.fail || 0) + 1, at: new Date().toISOString() };
     hostHealthChanged = true;
   };
@@ -415,8 +425,12 @@ async function collect(env, {
   // 않고, 읽기 경로는 전부 COALESCE(NULLIF(published_at,''),fetched_at)이라 수집
   // 시각으로 물러선다. 진짜 시각 복구는 나중에 복구 경로가 이어서 하면 된다.
   // 2시간 여유는 서버 시계 오차용이다(진짜 고장은 9시간이라 여기 안 숨는다).
+  // 최근에 들어온 것만 본다. 조건이 published_at 함수라 인덱스를 못 타므로 창을
+  // 안 두면 매 실행이 기사 전체를 훑는다. 미래 시각은 방금 들어온 행에서 생기고,
+  // 옛 행은 이미 이 정리를 지났다.
   const neutralizedFutureTimes = await env.DB.prepare(`UPDATE news_articles SET published_at=''
-    WHERE TRIM(published_at)<>'' AND datetime(published_at)>datetime('now','+2 hours')`).run();
+    WHERE TRIM(published_at)<>'' AND datetime(published_at)>datetime('now','+2 hours')
+      AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const neutralizedCount = Number(neutralizedFutureTimes?.meta?.changes || 0);
   if (neutralizedCount) diagnostics.future_published_time_cleared = neutralizedCount;
   // Maintenance is deliberately bounded. Scanning and updating the complete
@@ -950,7 +964,7 @@ async function collect(env, {
       // 장부는 기사 원주소(url)로 적는다. 실제로 받으러 간 주소(fetchUrl)는 네이버
       // 미러일 수 있는데, 후보를 거를 때 보는 것은 원주소다. 둘을 섞어 적으면
       // 장부의 열쇠와 거르는 열쇠가 달라 격리가 영영 발동하지 않는다.
-      recordHostResult(url, false);
+      recordHostResult(url, false, article.fetchStatus);
       return outcome('body_too_short');
     }
     // 본문을 제대로 받아왔다. 이전 실패 기록이 있으면 지운다 - 매체가 차단을

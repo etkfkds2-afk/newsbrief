@@ -73,8 +73,12 @@ function dayKey(date = new Date()) {
 // 사용자 판단: 월 예산을 넘기더라도 기사가 끊기지 않는 쪽을 택한다. 월
 // 목표/하드 한도는 그대로 남아 있으므로 지출이 무한정 늘지는 않는다.
 export function dailyAllowanceMicroUsd(spentBeforeToday, date = new Date()) {
-  const daysInMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
-  const daysLeft = Math.max(1, daysInMonth - date.getUTCDate() + 1);
+  // 달력도 한국시간으로 센다. 하루·한 달 경계를 KST로 옮겼는데 여기만 UTC를 보면
+  // 매달 1일 오전 9시 이전에 "남은 날"이 하루 더 많게 나온다. 표시 전용 값이지만
+  // 계기판이 어긋나는 것을 보고 또 원인을 찾게 된다.
+  const korea = new Date(date.valueOf() + KST_OFFSET_MS);
+  const daysInMonth = new Date(Date.UTC(korea.getUTCFullYear(), korea.getUTCMonth() + 1, 0)).getUTCDate();
+  const daysLeft = Math.max(1, daysInMonth - korea.getUTCDate() + 1);
   const remaining = Math.max(0, claudeMonthlyTargetMicroUsd(date) - Math.max(0, spentBeforeToday));
   return Math.floor(remaining / daysLeft);
 }
