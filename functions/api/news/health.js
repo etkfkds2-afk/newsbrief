@@ -3,6 +3,7 @@ import {
   claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd, koreaDayKey
 } from '../../_lib/news-ai-budget.js';
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
+import { BADUK_PROMO_TITLE_PATTERNS } from '../../_lib/news-blocklist.js';
 
 function utcMillis(value) {
   const text = String(value || '');
@@ -13,7 +14,7 @@ function utcMillis(value) {
 export async function onRequestGet({ env }) {
   try {
     const [run, automaticRun, counts, missingTime, futureTime, stateRows, exhausted, storageResult, badukStored,
-      badukPortal, recentRuns, paidSameDay] = await Promise.all([
+      badukPortal, recentRuns, paidSameDay, badukTitles] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -73,6 +74,15 @@ export async function onRequestGet({ env }) {
         FROM news_articles
         WHERE summary_quality='full' AND category<>'바둑'
           AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')
+        ORDER BY id DESC LIMIT 60`).all(),
+      // 저장은 됐는데 화면 규칙이 버리는 바둑 기사. 지금까지 어느 검사도 저장과
+      // 화면을 견주지 않았다 - health는 DB 건수만 세고, 화면 필터는 읽을 때만
+      // 돌기 때문이다. 그래서 사람이 목록을 직접 세어 봐야만 드러났다
+      // (2026-08-12: DB 6건인데 화면 1건, 원인은 '바둑이' 정규식이 주격 조사가
+      // 붙은 정상 제목까지 막던 것).
+      env.DB.prepare(`SELECT title FROM news_articles
+        WHERE category='바둑' AND summary_quality='full'
+          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')
         ORDER BY id DESC LIMIT 60`).all()
     ]);
     // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
@@ -118,6 +128,12 @@ export async function onRequestGet({ env }) {
       badukPublishedByRuns += Number(outcomes.inserted_publishable || 0)
         + Number(outcomes.inserted_duplicate || 0) + Number(outcomes.existing_repaired || 0);
     }
+    // 저장된 바둑 기사 중 화면 규칙(홍보·도박 제목)이 버리는 건수. 수집기의
+    // isRejectedTitle을 이미 통과해 요약까지 붙은 기사이므로, 여기서 버려지는
+    // 것은 대개 규칙이 과하게 넓다는 뜻이다.
+    const badukHiddenTitles = (badukTitles?.results || [])
+      .map(row => String(row.title || ''))
+      .filter(title => title && BADUK_PROMO_TITLE_PATTERNS.some(pattern => pattern.test(title)));
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const now = new Date();
     const monthlySpend = Number(state.claude_monthly_micro_usd || 0);
@@ -186,6 +202,10 @@ export async function onRequestGet({ env }) {
       // 바둑 몫이 막혀 굶은 실행이 하루에 셋 이상이면 몫 배분이 틀어진 것이다.
       // 한두 번은 총량을 다 쓴 바쁜 날일 수 있어 넘긴다.
       baduk_ai_quota_available: badukQuotaBlockedRuns < 3,
+      // 저장은 됐는데 화면에서 버려지는 바둑 기사. 1건은 진짜 스팸이 요약까지
+      // 받았을 여지를 두고 넘기고, 2건부터는 규칙이 과하게 넓다고 본다.
+      // "있는데 안 나오는" 것은 사람이 세어 보기 전에는 어디에도 안 드러났다.
+      baduk_display_not_over_filtered: badukHiddenTitles.length < 2,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd(now),
       // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
@@ -217,6 +237,8 @@ export async function onRequestGet({ env }) {
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
         future_published_time: Number(futureTime?.count || 0),
+        baduk_hidden_by_display_filters: badukHiddenTitles.length,
+        baduk_hidden_samples: badukHiddenTitles.slice(0, 3).map(title => title.slice(0, 40)),
         baduk_quota_blocked_runs_24h: badukQuotaBlockedRuns,
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
