@@ -181,11 +181,31 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
     return { attempted: 0, repaired: 0, done: true };
   }
   let repaired = 0;
+  // 2시간 여유는 서버 시계 오차용이다. 진짜 고장은 9시간이라 여기 안 숨는다.
+  const futureCutoff = Date.now() + 2 * 3600000;
+  const storedMillis = value => {
+    const text = String(value || '');
+    const parsed = Date.parse(/Z$|[+-]\d\d:\d\d$/.test(text) ? text : `${text.replace(' ', 'T')}Z`);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
   for (const row of candidates) {
     const article = await fetchArticleText(row.url);
-    if (!article.publishedAt || /^\d{4}-\d{2}-\d{2}$/.test(article.publishedAt)) continue;
+    const fetched = article.publishedAt;
+    const usable = fetched && !/^\d{4}-\d{2}-\d{2}$/.test(fetched) && storedMillis(fetched) <= futureCutoff;
+    if (!usable) {
+      // 원문에서 쓸 만한 시각을 못 얻었는데 저장된 값이 미래라면, 그 값은 틀린
+      // 것이 확실하다. 틀린 채로 두면 목록이 발행시각 내림차순이라 그 기사가
+      // 맨 위에 박혀 그날 기사를 통째로 가린다. 비워 두면 읽기 경로가 전부
+      // fetched_at으로 대체한다(articles.js의 COALESCE, 정렬·필터·화면 모두).
+      // 모르는 시각을 지어내는 것보다 수집 시각으로 물러서는 편이 정직하다.
+      if (storedMillis(row.published_at) > futureCutoff) {
+        await env.DB.prepare("UPDATE news_articles SET published_at='' WHERE id=?").bind(row.id).run();
+        repaired += 1;
+      }
+      continue;
+    }
     await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?')
-      .bind(article.publishedAt, row.id).run();
+      .bind(fetched, row.id).run();
     repaired += 1;
   }
   const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
