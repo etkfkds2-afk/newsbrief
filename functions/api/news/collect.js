@@ -358,6 +358,47 @@ async function collect(env, {
     if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
     return extractive;
   };
+  // 본문을 못 주는 매체를 스스로 기억하고 스스로 풀어준다.
+  //
+  // 사람이 차단 목록을 손으로 관리하면, 새로 막힌 매체가 생길 때마다 누군가
+  // 진단을 읽고 목록에 적어야 한다. 그 사이 그 매체는 매 실행 슬롯과
+  // subrequest를 가져간다(2026-08-12 실측: 바둑 20칸 중 6칸이 body_too_short).
+  //
+  // 연속 실패가 기준을 넘으면 하루 동안 후보에서 뺀다. 하루가 지나면 자동으로
+  // 한 번 다시 시도하고, 그때 성공하면 기록이 지워진다. 매체가 차단을 풀거나
+  // 페이지 구조를 바꾸면 사람이 아무것도 안 해도 돌아온다.
+  //
+  // 핵심 소스는 격리하지 않는다. 한국기원이 잠깐 흔들렸다고 바둑의 원천을
+  // 하루 동안 끊으면, 고치려던 것보다 큰 구멍이 난다.
+  const QUARANTINE_FAIL_THRESHOLD = 5;
+  const QUARANTINE_HOURS = 24;
+  const NEVER_QUARANTINE = /(?:baduk\.or\.kr|naver\.com|daum\.net)$/i;
+  const hostHealthRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='article_host_health'").first();
+  let hostHealth = {};
+  try { hostHealth = JSON.parse(String(hostHealthRow?.value || '{}')) || {}; } catch { hostHealth = {}; }
+  let hostHealthChanged = false;
+  const candidateHost = value => {
+    try { return new URL(value).hostname.toLowerCase(); } catch { return ''; }
+  };
+  const quarantinedHost = value => {
+    const host = candidateHost(value);
+    if (!host || NEVER_QUARANTINE.test(host)) return false;
+    const record = hostHealth[host];
+    if (!record || Number(record.fail || 0) < QUARANTINE_FAIL_THRESHOLD) return false;
+    const lastAttempt = Date.parse(String(record.at || '')) || 0;
+    // 하루가 지나면 한 번 통과시켜 본다(탐침). 실패하면 at이 갱신돼 또 하루 쉰다.
+    return Date.now() - lastAttempt < QUARANTINE_HOURS * 3600000;
+  };
+  const recordHostResult = (value, ok) => {
+    const host = candidateHost(value);
+    if (!host || NEVER_QUARANTINE.test(host)) return;
+    if (ok) {
+      if (hostHealth[host]) { delete hostHealth[host]; hostHealthChanged = true; }
+      return;
+    }
+    hostHealth[host] = { fail: Number(hostHealth[host]?.fail || 0) + 1, at: new Date().toISOString() };
+    hostHealthChanged = true;
+  };
   // 미래로 저장된 발행시각은 매 실행이 스스로 무력화한다. 시각을 잘못 읽는 고장은
   // 목록이 발행시각 내림차순이라 그 기사가 맨 위에 박혀 그날 기사를 통째로 가린다.
   //
@@ -901,8 +942,15 @@ async function collect(env, {
         const key = `${category === '바둑' ? 'baduk' : 'general'}:${host}:${article.fetchStatus || 'unknown'}`;
         diagnostics.body_too_short_hosts[key] = Number(diagnostics.body_too_short_hosts[key] || 0) + 1;
       } catch {}
+      // 장부는 기사 원주소(url)로 적는다. 실제로 받으러 간 주소(fetchUrl)는 네이버
+      // 미러일 수 있는데, 후보를 거를 때 보는 것은 원주소다. 둘을 섞어 적으면
+      // 장부의 열쇠와 거르는 열쇠가 달라 격리가 영영 발동하지 않는다.
+      recordHostResult(url, false);
       return outcome('body_too_short');
     }
+    // 본문을 제대로 받아왔다. 이전 실패 기록이 있으면 지운다 - 매체가 차단을
+    // 풀거나 구조를 되돌리면 사람 손 없이 바로 복귀해야 한다.
+    recordHostResult(url, true);
     const finalCategory = category === '바둑'
       ? classify(category, title, body || rawSummary)
       : (article.sectionCategory || classify(category, title, body || rawSummary));
@@ -960,6 +1008,7 @@ async function collect(env, {
   const uniqueCandidates = [];
   const candidateUrls = new Set();
   let disallowedBeforeBatch = 0;
+  let quarantineSkipped = 0;
   for (const candidate of candidates) {
     const key = candidateUrl(candidate);
     if (!key || candidateUrls.has(key)) continue;
@@ -970,6 +1019,12 @@ async function collect(env, {
     // disallowed_url로 날아갔다 - 카카오 광범위 검색은 daum.net만 허용되는데
     // 그 판정이 슬롯을 배정한 다음에야 돌았기 때문이다.
     if (!allowedCandidate(key, candidate.source)) { disallowedBeforeBatch += 1; continue; }
+    // 계속 실패하는 매체는 슬롯을 배정하기 전에 뺀다. 본문을 영영 못 주는 곳이
+    // 매 실행 20칸 중 몇 칸씩 가져가고 subrequest까지 쓰는 동안, 정작 가져올 수
+    // 있는 기사가 밀렸다. 실측 2026-08-12: kukinews는 브라우저 UA로도 403,
+    // esquirekorea는 JS로만 그려 2KB 껍데기만 온다 - 둘 다 몇 번을 다시 불러도
+    // 결과가 같은데 매 실행 다시 불렀다.
+    if (quarantinedHost(key)) { quarantineSkipped += 1; continue; }
     uniqueCandidates.push({ ...candidate, urlKey: await sha256(key) });
   }
   // 버린 건수는 남긴다. 안 남기면 후보가 왜 적은지 진단에서 사라진다.
@@ -1085,6 +1140,22 @@ async function collect(env, {
   }
   for (const row of badukRetries) await retrySummary(row);
   for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
+  // 격리 장부는 실행당 한 번만 쓴다. 후보마다 쓰면 D1 쓰기가 후보 수만큼 늘고,
+  // 어차피 다음 실행 전에는 아무도 읽지 않는다.
+  if (hostHealthChanged) {
+    // 오래된 기록은 버린다. 안 그러면 장부가 한없이 자라 매 실행 읽고 쓰는 값이
+    // 커진다. 격리는 24시간이므로 이틀 넘게 조용한 매체는 기억할 이유가 없다.
+    const staleBefore = Date.now() - 2 * QUARANTINE_HOURS * 3600000;
+    const trimmed = Object.fromEntries(Object.entries(hostHealth)
+      .filter(([, record]) => (Date.parse(String(record?.at || '')) || 0) >= staleBefore));
+    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES('article_host_health',?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(JSON.stringify(trimmed)).run();
+  }
+  const quarantinedNow = Object.entries(hostHealth)
+    .filter(([, record]) => Number(record?.fail || 0) >= QUARANTINE_FAIL_THRESHOLD)
+    .map(([host, record]) => `${host}:${record.fail}`);
+  if (quarantineSkipped) diagnostics.host_quarantine_skipped = quarantineSkipped;
+  if (quarantinedNow.length) diagnostics.host_quarantined = quarantinedNow.slice(0, 8);
   diagnostics.baduk_only = badukOnly;
   diagnostics.publish_counts_after = publicationCounts;
   if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;

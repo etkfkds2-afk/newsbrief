@@ -126,6 +126,15 @@ const NAIVE_DATETIME = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T]+(?:(오전|�
 export function parseDate(value) {
   const text = String(value || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // 점·슬래시로 쓴 날짜도 날짜만 남긴다. 시각을 모르는 값을 타임스탬프로 바꾸면
+  // 자정(=한국시간 오전 9시)이라는 없는 시각이 생기고, 화면은 날짜만 보여주면 될
+  // 자리에 "오전 9:00"을 적는다. 날짜만 있는 값을 그대로 두는 규칙은 이미
+  // 위 한 줄에 있었는데 대시 표기에만 걸려 있었다.
+  const dateOnly = text.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$/);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
   const naive = text.match(NAIVE_DATETIME);
   if (naive) {
     const [, year, month, day, meridiem, rawHour, minute, second] = naive;
@@ -256,6 +265,12 @@ export async function fetchArticleText(url) {
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:published_time|og:article:published_time)["']/i)?.[1]
       || html.match(/["']datePublished["']\s*:\s*["']([^"']+)/i)?.[1]
       || html.match(/data-date-time=["']([^"']+)/i)?.[1]
+      // 위 지역지 CMS는 메타태그에 시각을 안 넣고 화면에만 "승인 2026.08.11"로
+      // 적는다(2026-08-12 실측 paxetv). 그러면 발행시각이 비어 fetched_at으로
+      // 물러서는데, 며칠 지난 기사가 수집일로 찍혀 목록 위쪽에 섞인다.
+      // 날짜만이라도 원문 것을 쓰는 편이 낫다. parseDate가 점 구분자와 시각
+      // 유무를 모두 읽으므로 붙어 있으면 시각까지 살린다.
+      || stripHtml(html).match(/(?:입력|승인|등록)\s*[:：]?\s*(\d{4}[-./]\d{1,2}[-./]\d{1,2}(?:[ T]+\d{1,2}:\d{2}(?::\d{2})?)?)/u)?.[1]
       || ''
     );
     const sectionCategory = naverSectionCategory(html) || articleSectionCategory(html);
@@ -278,7 +293,14 @@ export async function fetchArticleText(url) {
     // 들어 있는데 태그가 안 맞아 selector_miss로 떨어졌다. id/class 이름이
     // 아니라 태그 이름 때문에 놓치는 것이므로 목록을 넓히는 편이 맞다.
     // news-contents는 뉴스핌 바깥 컨테이너 이름이기도 해서 같이 넣는다.
-    const articleStart = html.search(/<(?:article|div|td|section|main)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|newsct_article|article_body|articleBody|news_body|news-contents|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
+    // article-veiw-body / article-view-content-div 는 국내 지역지 수백 곳이 쓰는
+    // 같은 CMS(주소가 articleView.html?idxno=)의 본문 컨테이너다. 오타(veiw)까지
+    // 그 CMS의 표준이라 그대로 적는다. 이 하나가 빠져 있어서 지역지 바둑 기사가
+    // 통째로 selector_miss로 떨어지고 있었다 - 2026-08-12 실측: 파이낸스투데이
+    // (paxetv) 기사가 <article class="article-veiw-body view-page">인데 목록에
+    // 없어 본문 0자. 바둑은 지역지 비중이 커서 이 한 줄이 24시간 body_too_short
+    // 95건의 상당 부분이다.
+    const articleStart = html.search(/<(?:article|div|td|section|main)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|article-veiw-body|article-view-content|newsct_article|article_body|articleBody|news_body|news-contents|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
     const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
     if (!image) {
       const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
