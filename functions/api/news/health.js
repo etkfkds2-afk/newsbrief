@@ -132,6 +132,7 @@ export async function onRequestGet({ env }) {
     // 보는 용도로만 남긴다 - 차단은 월 목표/하드 한도가 한다.
     const dailyAllowance = dailyAllowanceMicroUsd(monthlySpend - dailySpend, now);
     const finishedAgeHours = run?.finished_at ? (Date.now() - utcMillis(run.finished_at)) / 3600000 : Infinity;
+    const startedAgeHours = run?.started_at ? (Date.now() - utcMillis(run.started_at)) / 3600000 : Infinity;
     const automaticAgeHours = automaticRun?.finished_at ? (Date.now() - utcMillis(automaticRun.finished_at)) / 3600000 : Infinity;
     const databaseBytes = Number(storageResult.meta?.size_after || 0);
     const databaseStoragePercent = databaseBytes > 0 ? databaseBytes / (500 * 1024 * 1024) * 100 : null;
@@ -143,8 +144,15 @@ export async function onRequestGet({ env }) {
     const checks = {
       // A degraded run means an optional provider failed, not that the feed or
       // database is unavailable. Freshness checks below still catch real loss.
-      last_run_ok: run?.status === 'ok' || run?.status === 'degraded',
-      last_run_within_6h: finishedAgeHours <= 6,
+      // 실행 중인 것은 실패가 아니다. 수집은 1분 안팎 걸리는데 그 사이에 health를
+      // 보면 status가 'running'이고 finished_at이 없어서 두 검사가 동시에 빨갛게
+      // 떴다. 워치독이 매시 health를 읽고 알림도 거기서 나가므로, 이건 하루에도
+      // 몇 번씩 울릴 수 있는 가짜 경보다 - 그렇게 무시하게 된 알람이 이미 한 번
+      // 있었다. 15분을 넘겨도 안 끝난 실행은 진짜 멈춘 것이므로 그때는 울린다.
+      last_run_ok: run?.status === 'ok' || run?.status === 'degraded'
+        || (run?.status === 'running' && startedAgeHours <= 0.25),
+      last_run_within_6h: finishedAgeHours <= 6
+        || (run?.status === 'running' && startedAgeHours <= 0.25),
       automatic_run_within_4h: automaticAgeHours <= 4,
       general_has_recent_news: Number(counts?.general || 0) > 0,
       // 예전 이름은 baduk_has_recent_news 였고 baduk_24h > 0 을 요구했다. 바둑
