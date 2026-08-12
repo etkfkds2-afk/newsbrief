@@ -370,9 +370,14 @@ async function collect(env, {
   //
   // 핵심 소스는 격리하지 않는다. 한국기원이 잠깐 흔들렸다고 바둑의 원천을
   // 하루 동안 끊으면, 고치려던 것보다 큰 구멍이 난다.
+  //
+  // 다만 예외는 **본문을 실제로 주는 뉴스 호스트**로 좁힌다. naver.com 전체를
+  // 열어 두면 entertain.naver.com처럼 JS로만 그리는 페이지가 영원히 재시도된다
+  // (2026-08-12 실측: 홈·랭킹·기사 모두 2KB 껍데기, 매 실행 selector_miss 2건).
+  // 격리 예외는 "믿는 곳"이 아니라 "본문이 오는 곳"이어야 한다.
   const QUARANTINE_FAIL_THRESHOLD = 5;
   const QUARANTINE_HOURS = 24;
-  const NEVER_QUARANTINE = /(?:baduk\.or\.kr|naver\.com|daum\.net)$/i;
+  const NEVER_QUARANTINE = /(?:^|\.)(?:baduk\.or\.kr|news\.naver\.com|v\.daum\.net|news\.daum\.net)$/i;
   const hostHealthRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='article_host_health'").first();
   let hostHealth = {};
   try { hostHealth = JSON.parse(String(hostHealthRow?.value || '{}')) || {}; } catch { hostHealth = {}; }
