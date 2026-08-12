@@ -458,6 +458,14 @@ test('건강 점검 API는 콘텐츠 경고를 서버 장애 응답과 분리한
             { key: 'claude_monthly_micro_usd', value: 500000 },
             { key: 'claude_budget_month', value: new Date().toISOString().slice(0, 7) }
           ] };
+          // 저장/화면 대조 검사가 보는 상세 목록. 위 baduk 집계(4건)와 같은 수를
+          // 돌려줘야 "저장은 됐는데 화면까지 못 간 기사"가 0으로 나온다.
+          if (sql.includes("a.category='바둑'")) return { results: [
+            { title: '신진서, 여섯번째 최고기사에 올랐다', summary: '신진서 9단이 최고기사에 올랐다.' },
+            { title: '박정환, 명인전 8강 진출', summary: '박정환 9단이 8강에 올랐다.' },
+            { title: '김은지, 여자기성전 우승', summary: '김은지 9단이 우승했다.' },
+            { title: '변상일, 국수산맥 4강행', summary: '변상일 9단이 4강에 진출했다.' }
+          ] };
           return { results: [] };
         }
       };
@@ -1830,6 +1838,14 @@ test('같은 날 같은 사건에 요약을 두 번 사면 건강 점검이 잡�
           if (sql.includes("category<>'바둑'") && sql.includes('SELECT title')) {
             return { results: titles.map(title => ({ title, day: '2026-08-11' })) };
           }
+          // 저장/화면 대조 검사가 보는 목록. 위 baduk 집계(4건)와 수를 맞춰
+          // 이 시험의 관심사(중복 유료 요약)만 실패하도록 둔다.
+          if (sql.includes("a.category='바둑'")) return { results: [
+            { title: '신진서, 여섯번째 최고기사에 올랐다', summary: '신진서 9단이 최고기사에 올랐다.' },
+            { title: '박정환, 명인전 8강 진출', summary: '박정환 9단이 8강에 올랐다.' },
+            { title: '김은지, 여자기성전 우승', summary: '김은지 9단이 우승했다.' },
+            { title: '변상일, 국수산맥 4강행', summary: '변상일 9단이 4강에 진출했다.' }
+          ] };
           return { results: [] };
         }
       };

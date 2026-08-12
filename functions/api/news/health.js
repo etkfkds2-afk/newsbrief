@@ -4,6 +4,8 @@ import {
 } from '../../_lib/news-ai-budget.js';
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { BADUK_PROMO_TITLE_PATTERNS } from '../../_lib/news-blocklist.js';
+import { CONTENT_QUALITY_FILTERS } from './articles.js';
+import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
 
 function utcMillis(value) {
   const text = String(value || '');
@@ -80,10 +82,14 @@ export async function onRequestGet({ env }) {
       // 돌기 때문이다. 그래서 사람이 목록을 직접 세어 봐야만 드러났다
       // (2026-08-12: DB 6건인데 화면 1건, 원인은 '바둑이' 정규식이 주격 조사가
       // 붙은 정상 제목까지 막던 것).
-      env.DB.prepare(`SELECT title FROM news_articles
-        WHERE category='바둑' AND summary_quality='full'
-          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')
-        ORDER BY id DESC LIMIT 60`).all()
+      // 화면이 거는 조건을 그대로 얹어 읽는다. 여기 통과한 뒤에도 JS 단계(바둑
+      // 관련성·홍보 제목)가 더 있으므로 아래에서 단계별로 세어 어디서 줄어드는지
+      // 드러낸다.
+      env.DB.prepare(`SELECT a.title, a.summary FROM news_articles a
+        WHERE a.category='바둑' AND a.summary_quality='full'
+          AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')
+          AND ${CONTENT_QUALITY_FILTERS.join(' AND ')}
+        ORDER BY a.id DESC LIMIT 60`).all()
     ]);
     // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
     // 쉽게 3단어를 넘긴다(news-dedup.js의 같은 이유로 수집에서도 안 건다).
@@ -131,9 +137,38 @@ export async function onRequestGet({ env }) {
     // 저장된 바둑 기사 중 화면 규칙(홍보·도박 제목)이 버리는 건수. 수집기의
     // isRejectedTitle을 이미 통과해 요약까지 붙은 기사이므로, 여기서 버려지는
     // 것은 대개 규칙이 과하게 넓다는 뜻이다.
-    const badukHiddenTitles = (badukTitles?.results || [])
-      .map(row => String(row.title || ''))
+    //
+    // 저장 → 화면 사이의 단계를 그대로 다시 밟아 각 단계에서 몇 건이 남는지 센다.
+    // 지금까지 health는 DB 건수만 봤고 화면 필터는 읽을 때만 돌아서, 중간에서
+    // 조용히 사라지는 기사를 아무도 세지 않았다. 2026-08-12: DB 6건인데 화면
+    // 1장이었고, 어느 단계가 먹었는지 코드를 읽어 추측하는 수밖에 없었다.
+    const badukDisplayRows = (badukTitles?.results || [])
+      .map(row => ({ title: String(row.title || ''), summary: String(row.summary || '') }));
+    // 화면은 본문이 아니라 3줄 요약으로 바둑 관련성을 다시 판정한다(articles.js).
+    // 수집은 본문 800자로 판정했으므로 같은 함수라도 답이 달라질 수 있다.
+    const badukAfterRelevance = badukDisplayRows
+      .filter(row => isBadukDisplayRelevant(row.title, row.summary));
+    const badukHiddenTitles = badukAfterRelevance
+      .map(row => row.title)
       .filter(title => title && BADUK_PROMO_TITLE_PATTERNS.some(pattern => pattern.test(title)));
+    const badukStoredCount = Number(counts?.baduk || 0);
+    // 아래 상세 조회는 60건에서 끊긴다. 저장 건수와 그대로 빼면 60을 넘는 날마다
+    // 사라진 것처럼 보이므로, 두 수를 견주는 것은 60 이하일 때만 한다.
+    const badukDetailTruncated = badukStoredCount > 60;
+    const badukDisplayStages = {
+      stored: badukStoredCount,
+      after_sql_quality: badukDisplayRows.length,
+      after_relevance: badukAfterRelevance.length,
+      after_promo: badukAfterRelevance.length - badukHiddenTitles.length,
+      detail_truncated: badukDetailTruncated
+    };
+    // JS 단계(관련성·홍보)에서 버려진 건수는 조회 한계와 무관하게 정확하다.
+    const badukDroppedByJs = badukDisplayRows.length - badukDisplayStages.after_promo;
+    const badukDroppedBySql = badukDetailTruncated ? 0 : badukStoredCount - badukDisplayRows.length;
+    const badukDroppedBeforeScreen = badukDroppedByJs + badukDroppedBySql;
+    const badukRelevanceDropped = badukDisplayRows
+      .filter(row => !isBadukDisplayRelevant(row.title, row.summary))
+      .map(row => row.title.slice(0, 40));
     const state = Object.fromEntries((stateRows.results || []).map(row => [row.key, row.value]));
     const now = new Date();
     const monthlySpend = Number(state.claude_monthly_micro_usd || 0);
@@ -202,10 +237,11 @@ export async function onRequestGet({ env }) {
       // 바둑 몫이 막혀 굶은 실행이 하루에 셋 이상이면 몫 배분이 틀어진 것이다.
       // 한두 번은 총량을 다 쓴 바쁜 날일 수 있어 넘긴다.
       baduk_ai_quota_available: badukQuotaBlockedRuns < 3,
-      // 저장은 됐는데 화면에서 버려지는 바둑 기사. 1건은 진짜 스팸이 요약까지
-      // 받았을 여지를 두고 넘기고, 2건부터는 규칙이 과하게 넓다고 본다.
+      // 저장은 됐는데 화면까지 못 가는 바둑 기사. 홍보 규칙만이 아니라 SQL 품질
+      // 조건과 바둑 관련성 재판정까지 합쳐서 본다. 1건은 진짜 스팸이 요약까지
+      // 받았을 여지를 두고 넘기고, 2건부터는 어딘가 과하게 넓다고 본다.
       // "있는데 안 나오는" 것은 사람이 세어 보기 전에는 어디에도 안 드러났다.
-      baduk_display_not_over_filtered: badukHiddenTitles.length < 2,
+      baduk_display_not_over_filtered: badukDroppedBeforeScreen < 2,
       cloudflare_not_provider_blocked: Number(state.ai_blocked || 0) === 0,
       claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd(now),
       // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
@@ -237,8 +273,11 @@ export async function onRequestGet({ env }) {
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
         future_published_time: Number(futureTime?.count || 0),
-        baduk_hidden_by_display_filters: badukHiddenTitles.length,
-        baduk_hidden_samples: badukHiddenTitles.slice(0, 3).map(title => title.slice(0, 40)),
+        // 저장 → 화면 각 단계에 몇 건이 남는지. 줄어드는 자리가 원인 자리다.
+        baduk_display_stages: badukDisplayStages,
+        baduk_hidden_by_display_filters: badukDroppedBeforeScreen,
+        baduk_hidden_by_promo_samples: badukHiddenTitles.slice(0, 3).map(title => title.slice(0, 40)),
+        baduk_hidden_by_relevance_samples: badukRelevanceDropped.slice(0, 3),
         baduk_quota_blocked_runs_24h: badukQuotaBlockedRuns,
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
