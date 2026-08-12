@@ -13,10 +13,16 @@ function utcMillis(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// 조건별 탈락 건수를 세는 SELECT 열. 중첩 템플릿 리터럴 안에서 만들면 정적
+// 참조 검사기가 SQL의 SUM/NOT을 자바스크립트 호출로 읽는다 - 밖에서 문자열로 잇는다.
+const filterHitColumns = CONTENT_QUALITY_FILTERS
+  .map((filter, index) => 'SUM(CASE WHEN NOT (' + filter + ') THEN 1 ELSE 0 END) AS f' + index)
+  .join(', ');
+
 export async function onRequestGet({ env }) {
   try {
     const [run, automaticRun, counts, missingTime, futureTime, stateRows, exhausted, storageResult, badukStored,
-      badukPortal, recentRuns, paidSameDay, badukTitles] = await Promise.all([
+      badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -89,7 +95,14 @@ export async function onRequestGet({ env }) {
         WHERE a.category='바둑' AND a.summary_quality='full'
           AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')
           AND ${CONTENT_QUALITY_FILTERS.join(' AND ')}
-        ORDER BY a.id DESC LIMIT 60`).all()
+        ORDER BY a.id DESC LIMIT 60`).all(),
+      // 화면 조건 하나하나가 몇 건을 떨어뜨리는지. 단계별 수만으로는 "SQL에서
+      // 5건이 죽었다"까지만 알 수 있고 어느 조건인지는 또 코드를 읽어야 했다.
+      // 조건별로 세어 두면 다음에는 숫자만 보고 바로 그 줄로 간다.
+      env.DB.prepare(`SELECT ${filterHitColumns}
+        FROM news_articles a
+        WHERE a.category='바둑' AND a.summary_quality='full'
+          AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')`).first()
     ]);
     // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
     // 쉽게 3단어를 넘긴다(news-dedup.js의 같은 이유로 수집에서도 안 건다).
@@ -278,6 +291,11 @@ export async function onRequestGet({ env }) {
         baduk_hidden_by_display_filters: badukDroppedBeforeScreen,
         baduk_hidden_by_promo_samples: badukHiddenTitles.slice(0, 3).map(title => title.slice(0, 40)),
         baduk_hidden_by_relevance_samples: badukRelevanceDropped.slice(0, 3),
+        // 어느 화면 조건이 몇 건을 떨어뜨렸는지. 조건식을 그대로 열쇠로 쓴다 -
+        // 번호만 남기면 다음에 또 코드를 세어 맞춰봐야 한다.
+        baduk_dropped_by_rule: Object.fromEntries(CONTENT_QUALITY_FILTERS
+          .map((filter, index) => [filter.slice(0, 70), Number(badukFilterHits?.[`f${index}`] || 0)])
+          .filter(([, hits]) => hits > 0)),
         baduk_quota_blocked_runs_24h: badukQuotaBlockedRuns,
         cloudflare_provider_blocked: Number(state.ai_blocked || 0),
         claude_monthly_micro_usd: monthlySpend,
