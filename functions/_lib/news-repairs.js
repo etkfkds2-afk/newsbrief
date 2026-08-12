@@ -166,13 +166,16 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
   const cursor = Number(cursorRow?.value || 0);
   const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
-    WHERE id>? AND summary_quality='full'
-      -- 빈 값/날짜만 있는 행은 예전대로 일반만 손본다(바둑은 collect.js가 따로 고친다).
-      -- 미래 시각은 카테고리를 가리지 않고 고친다 - 잘못 읽은 시각은 어느 쪽에서든
-      -- 목록 맨 위를 차지해 그날 기사를 통째로 가린다.
-      AND ((category<>'바둑' AND (TRIM(published_at)='' OR published_at GLOB '????-??-??'))
+    WHERE datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+      -- 빈 값/날짜만 있는 행은 예전대로 일반만, 커서로 조금씩 훑는다(수가 많다).
+      -- 미래 시각은 커서·카테고리·요약품질을 가리지 않고 매번 전부 잡는다. 커서를
+      -- 태우면 커서가 이미 지나간 행은 한 바퀴를 다 돌 때까지 안 고쳐지는데,
+      -- 미래 시각은 목록 맨 위에 박혀 그날 기사를 가리므로 그때까지 둘 수 없다.
+      -- 실측 2026-08-12: 남은 1건이 커서 뒤에 있어 복구를 두 번 돌려도 그대로였다.
+      -- 미래 행은 보통 0~2건이라 매번 훑어도 비용이 없다.
+      AND ((id>? AND summary_quality='full' AND category<>'바둑'
+          AND (TRIM(published_at)='' OR published_at GLOB '????-??-??'))
         OR datetime(published_at)>datetime('now','+2 hours'))
-      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
     ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];
   if (!candidates.length) {
@@ -208,7 +211,8 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
       .bind(fetched, row.id).run();
     repaired += 1;
   }
-  const nextCursor = Math.max(...candidates.map(row => Number(row.id || 0)));
+  // 커서 뒤에 있는 미래 행이 배치에 섞이므로 커서가 뒤로 밀리지 않게 한다.
+  const nextCursor = Math.max(cursor, ...candidates.map(row => Number(row.id || 0)));
   await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
     ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
   return { attempted: candidates.length, repaired, done: candidates.length < 10 };
