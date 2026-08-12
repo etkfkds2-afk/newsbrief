@@ -5,6 +5,8 @@ import {
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { BADUK_PROMO_TITLE_PATTERNS } from '../../_lib/news-blocklist.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
+// 바둑 예약분. 굶주림 판정이 수집 쪽 상수와 어긋나면 그 알람은 거짓말이 된다.
+import { BADUK_RESERVED_ANTHROPIC_CALLS } from './collect.js';
 import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
 
 function utcMillis(value) {
@@ -139,8 +141,16 @@ export async function onRequestGet({ env }) {
       const reason = String(diagnostics.anthropic_exhausted_reason || '');
       // 바둑 후보를 실제로 처리한 실행만 센다. 바둑을 아예 안 돌린 일반 실행이
       // 총량에 걸린 것은 바둑의 굶주림이 아니다.
+      //
+      // 그리고 **하루 총량을 다 쓰는 것 자체는 정상이다.** 예약분(20)을 이미 받고
+      // 나서 상한에 닿은 것까지 세면, 설계대로 돈 날마다 알람이 울린다. 그렇게
+      // 울리는 알람은 곧 무시된다 - 이 저장소에 그 전례가 이미 있다.
+      // 물어야 할 것은 "바둑이 제 몫을 받았는가"다. 예약분에 못 미친 채로 관문에
+      // 막힌 실행만 굶주림으로 센다.
+      const badukCallsUsed = Number(diagnostics.anthropic_calls_by_bucket?.baduk || 0);
       if ((reason === 'bucket_baduk' || reason === 'daily_total')
-        && Number(diagnostics.processed_by_category?.baduk || 0) > 0) badukQuotaBlockedRuns += 1;
+        && Number(diagnostics.processed_by_category?.baduk || 0) > 0
+        && badukCallsUsed < BADUK_RESERVED_ANTHROPIC_CALLS) badukQuotaBlockedRuns += 1;
       const outcomes = diagnostics.candidate_outcomes_by_category?.baduk;
       if (!outcomes) continue;
       badukBodyTooShort += Number(outcomes.body_too_short || 0);

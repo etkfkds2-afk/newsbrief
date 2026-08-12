@@ -54,7 +54,7 @@ const DAILY_ANTHROPIC_CALL_LIMIT = 60;
 // - 바둑: 따로 상한을 두지 않는다(총량까지). 최소 20은 일반이 절대 못 건드리고,
 //   일반이 40을 다 안 쓴 날은 남는 것까지 바둑이 가져간다.
 // 하루 최대 지출은 예전과 같다 - 총량 60이 유일한 뚜껑이기 때문이다.
-const BADUK_RESERVED_ANTHROPIC_CALLS = 20;
+export const BADUK_RESERVED_ANTHROPIC_CALLS = 20;
 const GENERAL_DAILY_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT - BADUK_RESERVED_ANTHROPIC_CALLS;
 // A boost adds 24 calls to the normal allowance. Keeping this below the
 // normal limit made the old "boost" disable Claude once 24 calls were used.
