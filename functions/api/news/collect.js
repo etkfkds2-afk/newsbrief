@@ -358,6 +358,21 @@ async function collect(env, {
     if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
     return extractive;
   };
+  // 미래로 저장된 발행시각은 매 실행이 스스로 무력화한다. 시각을 잘못 읽는 고장은
+  // 목록이 발행시각 내림차순이라 그 기사가 맨 위에 박혀 그날 기사를 통째로 가린다.
+  //
+  // 원문을 다시 긁어 진짜 시각을 되찾는 복구(repairGeneralArticleTimes)는 사람이
+  // 버튼을 눌러야 돈다. 그것만 두면 새 표기를 쓰는 매체가 하나 들어올 때마다
+  // 사람이 화면을 보고 "미래에서 왔냐"고 물어야 고쳐진다 - 그건 고친 게 아니다.
+  //
+  // 여기서는 fetch 없이 SQL 한 줄로 값을 비우기만 한다. 서브리퀘스트도 돈도 들지
+  // 않고, 읽기 경로는 전부 COALESCE(NULLIF(published_at,''),fetched_at)이라 수집
+  // 시각으로 물러선다. 진짜 시각 복구는 나중에 복구 경로가 이어서 하면 된다.
+  // 2시간 여유는 서버 시계 오차용이다(진짜 고장은 9시간이라 여기 안 숨는다).
+  const neutralizedFutureTimes = await env.DB.prepare(`UPDATE news_articles SET published_at=''
+    WHERE TRIM(published_at)<>'' AND datetime(published_at)>datetime('now','+2 hours')`).run();
+  const neutralizedCount = Number(neutralizedFutureTimes?.meta?.changes || 0);
+  if (neutralizedCount) diagnostics.future_published_time_cleared = neutralizedCount;
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.
   if (!popularityCandidates.length) {
