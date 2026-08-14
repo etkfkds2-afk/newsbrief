@@ -6,9 +6,8 @@ import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
-import {
-  blockCloudflareForToday, canUseClaude, koreaDayKey as budgetDayKey, recordClaudeUsage, reserveCloudflareCall
-} from '../../_lib/news-ai-budget.js';
+import { recordClaudeUsage } from '../../_lib/news-ai-budget.js';
+import { createCallBudget, SUBREQUESTS_PER_CANDIDATE } from '../../_lib/news-call-budget.js';
 import { createStoryIndex, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
@@ -41,47 +40,10 @@ const SEARCHES = [
 ];
 
 const GENERIC_TITLES = new Set(['이 시각 주요 뉴스', '오늘의 주요 뉴스', '주요 뉴스', '뉴스 브리핑']);
-// 하루 호출 상한은 폭주 방지용 거친 뚜껑이다. 2026-08-09에 canUseClaude의
-// 하루 예산 게이트를 걷어냈으므로 이제 지출을 실제로 묶는 것은 월 목표/하드
-// 한도뿐이다. 이 값을 예산에 맞춰 더 낮추지는 않는다 - 같은 것을 두 군데서
-// 막으면 어느 쪽이 기사를 끊었는지 진단에서 구분되지 않는다.
-const DAILY_ANTHROPIC_CALL_LIMIT = 60;
-// 바둑이 이 서비스의 메인이다. 그런데 카운터 하나를 일반과 나눠 쓰면서 한도만
-// 달랐다(일반 84, 바둑 60). 일반이 먼저 처리되고 바둑 전용 호출은 매 사이클
-// 맨 마지막이라, 일반이 60을 넘겨 쓰는 순간 바둑은 그날 내내 한 건도 못 산다.
-//
-// 그래서 총량은 그대로 60에 두고 몫만 나눈다.
-// - 일반: 24가 하드 상한. 이 위로는 바둑 몫이라 못 넘본다.
-// - 바둑: 따로 상한을 두지 않는다(총량까지). 최소 36은 일반이 절대 못 건드리고,
-//   일반이 24를 다 안 쓴 날은 남는 것까지 바둑이 가져간다.
-// 하루 최대 지출은 예전과 같다 - 총량 60이 유일한 뚜껑이기 때문이다.
-//
-// 예약분을 20에서 36으로 올린 이유. "바둑 쓰고 남은 걸 일반에 쓴다"가 요구사항인데
-// 20/40은 그 반대였다 - 2026-08-14 실측: 60건 중 일반이 39건을 먼저 써서 오전
-// 11시에 총량이 바닥났고, 그 뒤 바둑 요약이 기준 미달로 내려갔을 때 다시 살 호출이
-// 없었다. 그날 바둑 화면은 0건이었다. 바둑 실사용은 하루 21~28건이라 36이면 굶지
-// 않는다. 일반은 24로도 하루 목표 10건을 채운다(최근 12건 발행에 39호출을 썼는데,
-// 그 대부분이 이미 요약이 있는 기사의 재시도였다).
-export const BADUK_RESERVED_ANTHROPIC_CALLS = 36;
-const GENERAL_DAILY_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT - BADUK_RESERVED_ANTHROPIC_CALLS;
-// 바둑의 하루가 사실상 끝난 뒤에는 남은 예약분을 일반이 쓴다. "바둑 쓰고 남은 걸
-// 일반에"를 글자 그대로 지키려면, 아침에 미리 떼어 둔 몫을 밤까지 놀리면 안 된다.
-// 한국시간 21시를 기준으로 삼는다 - 그 시각이면 그날 바둑 실행이 다 지났다.
-const GENERAL_MAY_USE_BADUK_RESERVE_AFTER_KST_HOUR = 21;
-const generalLimitForNow = (date = new Date()) => {
-  const koreaHour = new Date(date.valueOf() + 9 * 3600000).getUTCHours();
-  return koreaHour >= GENERAL_MAY_USE_BADUK_RESERVE_AFTER_KST_HOUR
-    ? DAILY_ANTHROPIC_CALL_LIMIT
-    : GENERAL_DAILY_ANTHROPIC_CALL_LIMIT;
-};
-// A boost adds 24 calls to the normal allowance. Keeping this below the
-// normal limit made the old "boost" disable Claude once 24 calls were used.
-// 부스트는 사람이 손으로 누르는 버튼이라 총량도 같이 올린다 - 일반 몫만 올리고
-// 총량을 60에 두면 부스트가 바둑 예약분을 먹는다.
-const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = GENERAL_DAILY_ANTHROPIC_CALL_LIMIT + 24;
-const GENERAL_BOOST_DAILY_CEILING = DAILY_ANTHROPIC_CALL_LIMIT + 24;
-const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
-const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
+// AI 호출 몫과 외부 요청 예산은 news-call-budget.js가 전부 들고 있다. 여기에
+// 같은 상수를 두면 두 곳이 어긋나고, 그러면 health의 굶주림 판정이 거짓말을 한다.
+// health가 예약분을 읽어야 하므로 이름만 다시 내보낸다.
+export { BADUK_RESERVED_ANTHROPIC_CALLS } from '../../_lib/news-call-budget.js';
 // Popular pages frequently contain blocked/short-body articles. Process more
 // than the ten-card home target so those failures do not collapse the feed.
 const SCHEDULED_GENERAL_CANDIDATES = 12;
@@ -135,86 +97,8 @@ const recordSummaryRejection = (diagnostics, summary, title, category) => {
   return false;
 };
 
-async function reserveAiCall(env, diagnostics) {
-  const reservation = await reserveCloudflareCall(env);
-  if (!reservation.allowed) {
-    diagnostics.ai_budget_exhausted = true;
-    diagnostics.ai_calls_today = reservation.used;
-    return false;
-  }
-  diagnostics.ai_calls_today = reservation.used;
-  return true;
-}
 
-// 하루 경계는 한국시간이다(news-ai-budget.js의 koreaDayKey 주석 참고). 이 함수가
-// UTC 날짜를 쓰던 동안, 카운터는 아침 9시에 리셋되는데 수집은 새벽 0시·3시·6시에
-// 돌아서 새벽 실행이 통째로 "어제치 소진분"을 물려받았다.
-async function reserveAnthropicCall(env, diagnostics, forceRetry = false, generalBoost = false, bucket = 'general') {
-  // collect() 안에는 타임스탬프를 받는 동명의 지역 함수가 따로 있어 별칭으로 들여온다.
-  const day = budgetDayKey();
-  const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_budget_day'").first();
-  if (String(dayRow?.value || '') !== day) {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_budget_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(day),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',0) ON CONFLICT(key) DO UPDATE SET value=0"),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today_baduk',0) ON CONFLICT(key) DO UPDATE SET value=0"),
-      env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today_general',0) ON CONFLICT(key) DO UPDATE SET value=0")
-    ]);
-  }
-  const bucketKey = bucket === 'baduk' ? 'anthropic_calls_today_baduk' : 'anthropic_calls_today_general';
-  const [totalRow, bucketRow] = await Promise.all([
-    env.DB.prepare("SELECT value FROM news_state WHERE key='anthropic_calls_today'").first(),
-    env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(bucketKey).first()
-  ]);
-  const daily = Number(totalRow?.value || 0);
-  const bucketUsed = Number(bucketRow?.value || 0);
-  const totalLimit = forceRetry
-    ? BACKFILL_ANTHROPIC_CALL_LIMIT
-    : (generalBoost ? GENERAL_BOOST_DAILY_CEILING : DAILY_ANTHROPIC_CALL_LIMIT);
-  // 바둑은 자기 상한이 없다. 총량이 유일한 뚜껑이고, 일반이 24에서 멈추므로
-  // 최소 36은 언제나 바둑에게 남는다. 밤 9시(한국시간)를 넘기면 그날 바둑
-  // 실행이 다 지났으므로 남은 예약분을 일반이 가져다 쓴다.
-  const bucketLimit = forceRetry || bucket === 'baduk'
-    ? totalLimit
-    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : generalLimitForNow());
-  const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
-  const recordCounts = () => {
-    diagnostics.anthropic_calls_today = daily;
-    diagnostics.anthropic_daily_limit = totalLimit;
-    diagnostics.anthropic_calls_by_bucket = {
-      ...(diagnostics.anthropic_calls_by_bucket || {}),
-      [bucket]: bucketUsed
-    };
-    diagnostics.anthropic_bucket_limit = {
-      ...(diagnostics.anthropic_bucket_limit || {}),
-      [bucket]: bucketLimit
-    };
-  };
-  if (daily >= totalLimit || bucketUsed >= bucketLimit || !budget.allowed) {
-    recordCounts();
-    diagnostics.anthropic_budget_exhausted = true;
-    // 어느 쪽 뚜껑에 걸렸는지 남긴다. 총량인지, 자기 몫인지, 월 예산인지가
-    // 구분되지 않으면 다음에 또 원인을 처음부터 찾게 된다.
-    diagnostics.anthropic_exhausted_reason = !budget.allowed ? 'monthly_budget'
-      : (daily >= totalLimit ? 'daily_total' : `bucket_${bucket}`);
-    diagnostics.claude_monthly_micro_usd = budget.spent;
-    return false;
-  }
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO news_state(key,value) VALUES('anthropic_calls_today',1) ON CONFLICT(key) DO UPDATE SET value=value+1"),
-    env.DB.prepare('INSERT INTO news_state(key,value) VALUES(?,1) ON CONFLICT(key) DO UPDATE SET value=value+1').bind(bucketKey)
-  ]);
-  recordCounts();
-  diagnostics.anthropic_calls_today = daily + 1;
-  diagnostics.anthropic_calls_by_bucket[bucket] = bucketUsed + 1;
-  return true;
-}
 
-async function blockAiForToday(env, diagnostics) {
-  await blockCloudflareForToday(env);
-  diagnostics.ai_budget_exhausted = true;
-  diagnostics.ai_provider_limited = true;
-}
 
 async function collect(env, {
   backfill = false, repair = false, forceRetry = false, generalBoost = false,
@@ -334,41 +218,23 @@ async function collect(env, {
   diagnostics.home_display_limits = { baduk: 30, general: 10 };
   diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
   if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
-  // Worker 한 번 호출이 쓸 수 있는 외부 요청은 50개다. 지금까지는 배치 크기
-  // 상수를 조절해 그 아래를 맞추려 했는데, 경로가 하나 늘 때마다 다시 넘었다.
-  // 2026-08-14 실측: 24시간에 7건이 "Too many subrequests by single Worker
-  // invocation"으로 죽었고, 그 실패가 매체 탓으로 기록됐다 - 멀쩡한 기사가
-  // body_too_short로 세어지고, 어제까지는 그 매체가 격리까지 됐다. 우리 쪽
-  // 한도를 매체 고장으로 오진하는 구조였다.
-  //
-  // 상수로 맞추는 대신 센다. 후보마다 드는 비용이 다르므로(이미 아는 기사는
-  // 본문만, 새 기사는 본문 2회 + 요약 1회) 세는 편이 항상 맞다. 남은 예산이
-  // 없으면 후보를 **시작하지 않고** 진단에 남긴다 - 실패로 남기는 것보다
-  // 안 하는 편이 낫고, 다음 실행이 그 후보를 그대로 이어받는다.
-  const SUBREQUEST_BUDGET = 44;
-  let subrequestsUsed = 0;
-  const countedFetchArticle = async value => {
-    subrequestsUsed += 1;
-    return fetchArticleText(value);
-  };
-  const subrequestsLeft = () => SUBREQUEST_BUDGET - subrequestsUsed;
-  // 검색·순위 수집도 같은 예산에서 나간다. 본문만 세면 후보를 처리하기도 전에
-  // 예산의 절반이 이미 사라진 상태를 모른 채 시작하게 된다. 순위·아카이브 수집은
-  // 안에서 여러 번 부르므로 넉넉히 잡는다 - 적게 잡아 넘기는 쪽이 더 나쁘다.
-  const counted = (fn, cost = 1) => (...args) => { subrequestsUsed += cost; return fn(...args); };
-  const countedNaverSearch = counted(naverSearch);
-  const countedKakaoSearch = counted(kakaoSearch);
-  const countedBadukLatest = counted(koreanBadukLatest);
-  const countedGoogleNews = counted(googleNewsSearch, 2);
-  const countedPopularity = counted(collectPopularity, 3);
-  const countedArchivedTop = counted(collectArchivedTop, 3);
+  // 이 실행이 밖으로 나가는 모든 호출은 budget을 지난다. 세는 자리를 하나로
+  // 모아 둔 이유는 news-call-budget.js 첫머리 주석에 있다 - 2026-08-14에 세는
+  // 자리가 흩어져 있어서 같은 종류의 고장이 하루에 세 번 났다.
+  const budget = createCallBudget(env, diagnostics, { forceRetry, generalBoost });
+  const countedFetchArticle = budget.counted(fetchArticleText);
+  const countedNaverSearch = budget.counted(naverSearch);
+  const countedKakaoSearch = budget.counted(kakaoSearch);
+  const countedBadukLatest = budget.counted(koreanBadukLatest);
+  const countedGoogleNews = budget.counted(googleNewsSearch, 2);
+  const countedPopularity = budget.counted(collectPopularity, 3);
+  const countedArchivedTop = budget.counted(collectArchivedTop, 3);
   const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
     const trace = detail || {};
     // 요약 한 번이 외부 요청 한 번이 아니다. Anthropic이 실패하면 Cloudflare AI로
-    // 한 번 더 나간다. 1로 세다가 실제로는 2가 나가서, 예산을 센 뒤에도 한도를
-    // 넘긴 실행이 남았다(2026-08-14 실측: subrequest_overflow_failures 2건).
-    // 적게 세는 쪽이 더 나쁘다 - 넘기면 후보가 죽고 그게 매체 탓으로 기록된다.
-    subrequestsUsed += 2;
+    // 한 번 더 나간다. 적게 세는 쪽이 더 나쁘다 - 넘기면 후보가 죽고 그게 매체
+    // 탓으로 기록된다.
+    budget.spend(2);
     // 어느 몫에서 돈을 빼는지. payload.category가 비면 일반으로 본다 - 바둑 몫을
     // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
     const bucket = publicationBucket(payload.category);
@@ -389,7 +255,7 @@ async function collect(env, {
     }
 
     let cloudflareReserved = Boolean(env.AI);
-    if (cloudflareReserved) cloudflareReserved = await reserveAiCall(env, diagnostics);
+    if (cloudflareReserved) cloudflareReserved = await budget.reserveCloudflare();
 
     let summary = '';
     if (cloudflareReserved) {
@@ -399,10 +265,10 @@ async function collect(env, {
       if (cloudflareValid) return summary;
     }
     if (cloudflareReserved && /(?:daily free allocation|Account limited|3036|4006)/i.test(String(trace.ai_error || ''))) {
-      await blockAiForToday(env, diagnostics);
+      await budget.blockCloudflareForToday();
     }
 
-    if (env.ANTHROPIC_API_KEY && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost, bucket)) {
+    if (env.ANTHROPIC_API_KEY && await budget.reserveAnthropic(bucket)) {
       const anthropicTrace = {};
       const anthropicSummary = await makeBestSummary({
         ...env,
@@ -971,7 +837,7 @@ async function collect(env, {
   // 드는 값은 검색 1회 + 본문 1회이고, 예산이 모자라면 시도하지 않는다.
   const recoverViaPortalMirror = async (article, title, fetchUrl, url) => {
     const blockedByHost = /^(?:non_html|http_(?:403|429|5\d\d))$/.test(String(article.fetchStatus || ''));
-    if (article.body.length >= 180 || !blockedByHost || subrequestsLeft() < 2) return article;
+    if (article.body.length >= 180 || !blockedByHost || budget.remaining() < 2) return article;
     try {
       const mirrors = await countedNaverSearch(env, `"${title}"`, 1, 3);
       const mirror = mirrors.find(found => titleIsTruncationOf(title, cleanTitle(found.title))
@@ -1007,7 +873,7 @@ async function collect(env, {
     // 후보 하나가 최악의 경우 쓰는 양: 본문 2회 + 요약 2회. 그만큼 안 남았으면
     // 시작하지 않는다. 도중에 한도를 넘으면 그 후보는 error_로 죽으면서 멀쩡한
     // 매체의 실패로 기록되는데, 그건 진단을 오염시키고 예전에는 격리까지 불렀다.
-    if (subrequestsLeft() < 4) {
+    if (!budget.canStartCandidate()) {
       diagnostics.subrequest_budget_stopped = Number(diagnostics.subrequest_budget_stopped || 0) + 1;
       return outcome('subrequest_budget');
     }
@@ -1343,9 +1209,8 @@ async function collect(env, {
   // 중복 판정은 실행당 1회이고 후보가 섞여 있다. 바둑 전용 실행이면 바둑 몫에서,
   // 아니면 일반 몫에서 뺀다 - 바둑 예약분이 일반 실행의 판정 비용에 쓰이지 않게.
   if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
-    && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost, badukOnly ? 'baduk' : 'general')) {
-    // 이 판정도 외부 요청이다. 계수기를 안 지나고 있었다.
-    subrequestsUsed += 1;
+    && await budget.reserveAnthropic(badukOnly ? 'baduk' : 'general')) {
+    budget.spend(1);
     const judged = await findDuplicateStories(env,
       dedupTargets.map(candidate => ({ title: cleanTitle(candidate.item?.title || '') })), recentStoryTitles);
     for (const [index, sameTitle] of judged.duplicates) {
@@ -1407,7 +1272,7 @@ async function collect(env, {
   diagnostics.baduk_only = badukOnly;
   // 이번 실행이 외부 요청을 얼마나 썼는지. 44에 붙어 있으면 배치가 한 번에
   // 소화할 수 있는 양을 넘었다는 뜻이고, 그건 상수를 조절할 근거가 된다.
-  diagnostics.subrequests_used = subrequestsUsed;
+  diagnostics.subrequests_used = budget.used();
   diagnostics.publish_counts_after = publicationCounts;
   if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;
   return { inserted, diagnostics };
