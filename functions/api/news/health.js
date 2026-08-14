@@ -50,10 +50,17 @@ export async function onRequestGet({ env }) {
       // 한국기원(baduk.or.kr)은 뺀다. 그쪽은 목록에 날짜만 싣고 시각을 아예
       // 내지 않으므로 날짜만 남는 것이 **정상**이다(사용자 확인 2026-08-14).
       // 넣어 두면 조용한 날마다 울리고, 그렇게 울린 알람은 곧 무시된다.
-      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
-        WHERE summary_quality='full' AND published_at GLOB '????-??-??'
-          AND url NOT LIKE '%baduk.or.kr%'
-          AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
+      // 원문을 확인해 본 행은 뺀다. 날짜만 싣는 매체가 있는 것은 고장이 아니라
+      // 사실이고, 그걸 계속 세면 이 검사는 영영 안 꺼지는 알람이 된다. 안 꺼지는
+      // 알람은 곧 무시되고 그러면 진짜 고장도 같이 묻힌다(177통 전례).
+      // 남는 것은 "날짜만 있는데 아직 확인도 못 한" 행이고, 복구가 매 실행
+      // 조금씩 확인하므로 정상이면 0으로 수렴한다. 추출이 망가지면 새로 들어온
+      // 행이 확인 전 상태로 쌓이므로 이 값이 다시 뛴다.
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles a
+        WHERE a.summary_quality='full' AND a.published_at GLOB '????-??-??'
+          AND a.url NOT LIKE '%baduk.or.kr%'
+          AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=a.url_key)
+          AND datetime(a.fetched_at)>=datetime('now','-3 days')`).first(),
       // 발행시각이 **미래**인 행. 시각을 못 읽는 고장은 위에서 잡히지만, 잘못 읽는
       // 고장은 아무 데도 안 잡혔다. 2026-08-12: 타임존 없는 시각을 UTC로 읽어 +9시간
       // 미래가 된 기사가 목록 맨 위에 하루 종일 박혀 있었는데 health는 ok였다.

@@ -178,8 +178,10 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const cursorKey = 'general_time_repair_cursor';
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
   const cursor = Number(cursorRow?.value || 0);
-  const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
+  const rows = await env.DB.prepare(`SELECT id,url_key,url,published_at FROM news_articles
     WHERE datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+      -- 이미 원문을 확인해 본 행은 다시 긁지 않는다. 날짜만 싣는 매체의 기사는
+      -- 몇 번을 다시 불러도 결과가 같은데, 그 사이 subrequest만 나간다.
       -- 빈 값/날짜만 있는 행은 커서로 조금씩 훑는다(수가 많다).
       -- 카테고리로 가르지 않고 **한국기원(baduk.or.kr)만** 뺀다. 예전에는
       -- category<>'바둑'이라 바둑 기사는 시각을 영영 못 되찾았는데, 시각을 정말로
@@ -194,7 +196,8 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
       -- 실측 2026-08-12: 남은 1건이 커서 뒤에 있어 복구를 두 번 돌려도 그대로였다.
       -- 미래 행은 보통 0~2건이라 매번 훑어도 비용이 없다.
       AND ((id>? AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
-          AND (TRIM(published_at)='' OR published_at GLOB '????-??-??'))
+          AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
+          AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=news_articles.url_key))
         OR datetime(published_at)>datetime('now','+2 hours'))
     ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];
@@ -211,10 +214,20 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
     const parsed = Date.parse(/Z$|[+-]\d\d:\d\d$/.test(text) ? text : `${text.replace(' ', 'T')}Z`);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  let noClock = 0;
   for (const row of candidates) {
     const article = await fetchArticleText(row.url);
     const fetched = article.publishedAt;
     const usable = fetched && !/^\d{4}-\d{2}-\d{2}$/.test(fetched) && storedMillis(fetched) <= futureCutoff;
+    // 확인했다는 사실을 남긴다. 성공이든 실패든 같은 기사를 매 실행 다시 긁지
+    // 않고, health도 "아직 확인 안 한 것"만 세게 된다.
+    if (row.url_key) {
+      await env.DB.prepare(`INSERT INTO news_time_checks(url_key,checked_at,found_clock)
+        VALUES(?,CURRENT_TIMESTAMP,?) ON CONFLICT(url_key) DO UPDATE SET
+        checked_at=CURRENT_TIMESTAMP,found_clock=excluded.found_clock`)
+        .bind(row.url_key, usable ? 1 : 0).run();
+      if (!usable) noClock += 1;
+    }
     if (!usable) {
       // 원문에서 쓸 만한 시각을 못 얻었는데 저장된 값이 미래라면, 그 값은 틀린
       // 것이 확실하다. 틀린 채로 두면 목록이 발행시각 내림차순이라 그 기사가
@@ -235,7 +248,9 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const nextCursor = Math.max(cursor, ...candidates.map(row => Number(row.id || 0)));
   await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,?)
     ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(cursorKey, nextCursor).run();
-  return { attempted: candidates.length, repaired, done: candidates.length < 10 };
+  // no_clock은 "원문이 정말로 시각을 안 싣는다"고 확인한 건수다. 실패가 아니라
+  // 확정이므로 이 값이 크다고 해서 고장은 아니다 - 진단에서 갈라 보이게 남긴다.
+  return { attempted: candidates.length, repaired, no_clock: noClock, done: candidates.length < 10 };
 }
 
 export async function backfillPopularityDate(env, ymd) {

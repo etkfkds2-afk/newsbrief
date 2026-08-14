@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS news_category_checks (
   url_key TEXT PRIMARY KEY,
   checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   detected_category TEXT NOT NULL DEFAULT ''
+);
+-- 발행시각을 원문에서 되찾아 봤는지. 되찾지 못한 행(원문이 날짜만 싣는 매체)을
+-- 기억해 두지 않으면 두 가지가 같이 망가진다: 복구가 매 실행 같은 기사를 다시
+-- 긁어 subrequest를 태우고, health의 "날짜만 남은 행" 검사가 영영 안 꺼지는
+-- 알람이 된다. 안 꺼지는 알람은 곧 무시되고, 그러면 진짜 고장도 같이 묻힌다
+-- (이 저장소의 177통 전례).
+CREATE TABLE IF NOT EXISTS news_time_checks (
+  url_key TEXT PRIMARY KEY,
+  checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  found_clock INTEGER NOT NULL DEFAULT 0
 );`;
 
 // news_runs.message에 넣을 진단 JSON을 길이 한도 안에서 만든다.
