@@ -1,5 +1,5 @@
 import {
-  isRejectedTitle, normalizeText, reorderGeneralSummary, summaryMentionsTitle,
+  isRejectedTitle, normalizeText, publishableSummary, reorderGeneralSummary,
   validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
@@ -22,7 +22,7 @@ import {
   naverSearch
 } from '../../_lib/news-sources.js';
 import {
-  backfillPopularityDate, quarantineWeakGeneralSummaries, repairGeneralArticleTimes,
+  backfillPopularityDate, quarantineWeakSummaries, repairGeneralArticleTimes,
   repairGeneralCategories, repairTitleByQuery, repairTruncatedTitles
 } from '../../_lib/news-repairs.js';
 export { isBadukRelevant } from '../../_lib/baduk-relevance.js';
@@ -97,13 +97,10 @@ const STORY_INDEX_WINDOW_DAYS = 7;
 
 const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북|전남|경북|경남|강원|제주|부산|울산|경기|인천).*(?:뉴스|일보|신문|투데이)|(?:중부|제주|경인|영남|호남)(?:매일|일보|신문)/i;
 
-function validPublishedSummary(summary, title, category) {
-  return validateThreeLineSummary(summary, title)
-    // 제목과 아무 상관 없는 요약은 어느 카테고리든 안 내보낸다. 모양 검사를 모두
-    // 통과하는 쓰레기가 실제로 화면까지 갔다(2026-08-14 네이버 섹션 안내문).
-    && summaryMentionsTitle(summary, title)
-    && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
-}
+// 판정은 news-summary.js의 publishableSummary 하나만 쓴다. 여기 조합을 따로
+// 들고 있으면 사후 복구(news-repairs.js)와 어긋나고, 어긋나는 순간 "새로는 안
+// 실리는데 이미 실린 것은 안 내려가는" 상태가 된다.
+const validPublishedSummary = publishableSummary;
 
 async function reserveAiCall(env, diagnostics) {
   const reservation = await reserveCloudflareCall(env);
@@ -484,6 +481,24 @@ async function collect(env, {
       AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const neutralizedCount = Number(neutralizedFutureTimes?.meta?.changes || 0);
   if (neutralizedCount) diagnostics.future_published_time_cleared = neutralizedCount;
+  // 이미 실려 있는 요약이 오늘의 기준을 여전히 통과하는지 매 실행이 다시 묻는다.
+  //
+  // 예전에는 이 검사가 workflow_dispatch 입력(repair_general_quality)으로만 돌았다.
+  // 즉 **사람이 버튼을 눌러야** 나쁜 요약이 내려갔다. 그래서 검사를 아무리 촘촘히
+  // 해도 이미 화면에 있는 것은 그대로였고, 사람이 보고 알려 줘야 사라졌다.
+  // 2026-08-14: 신진서 기사의 "그가 인간 바둑 에서도 …"가 그렇게 떠 있었다.
+  //
+  // 외부 요청이 없어 subrequest 예산과 무관하고, 최근 사흘 120건만 본다 - 새로
+  // 들어온 것과 방금 기준을 올린 것이 여기에 다 들어온다. 30일 전체 훑기는
+  // 지금도 repair_general_quality로 따로 부를 수 있다.
+  if (!popularityCandidates.length && !backfill) {
+    const freshQualitySweep = await quarantineWeakSummaries(env, { limit: 120, days: 3 });
+    if (freshQualitySweep.quarantined) {
+      diagnostics.weak_summary_quarantined = freshQualitySweep.quarantined;
+      diagnostics.weak_summary_samples = freshQualitySweep.samples;
+    }
+    diagnostics.weak_summary_checked = freshQualitySweep.checked;
+  }
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.
   if (!popularityCandidates.length) {
@@ -1335,7 +1350,7 @@ export async function onRequestPost({ request, env }) {
       return json({ ok: true, category_repair: categoryRepair });
     }
     if (repairGeneralQuality) {
-      const qualityRepair = await quarantineWeakGeneralSummaries(env);
+      const qualityRepair = await quarantineWeakSummaries(env);
       const result = await collect(env, {
         repair: true, forceRetry: true, generalBoost: true, generalOnly: true,
         qualityRepairIds: qualityRepair.ids

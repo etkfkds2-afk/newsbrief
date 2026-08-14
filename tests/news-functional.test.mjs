@@ -420,7 +420,7 @@ test('일반 카테고리 복구는 최근 미검사 네이버 기사부터 공�
 test('일반 저품질 요약은 문제 기사만 격리해 AI 재요약한다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
-  assert.match(collector, /quarantineWeakGeneralSummaries/);
+  assert.match(collector, /quarantineWeakSummaries/);
   assert.match(collector, /qualityRepairIds/);
   assert.match(collector, /repair_general_quality/);
   assert.match(workflow, /repair_general_quality:/);

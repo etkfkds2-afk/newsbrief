@@ -6,7 +6,7 @@
 // 것들은 전부 수동/일회성 복구 모드다. collect.js에 섞여 있을 때는 onRequestPost
 // 하나가 일곱 갈래로 분기하면서 어디까지가 정기 수집인지 알아보기 어려웠다.
 import { canonicalUrl, sha256 } from './news-db.js';
-import { validateGeneralEditorialSummary } from './news-summary.js';
+import { publishableSummary } from './news-summary.js';
 import {
   classify, cleanTitle, DEAD_PAGE, fetchArticleText, titleIsTruncationOf
 } from './news-extract.js';
@@ -58,13 +58,23 @@ export async function repairGeneralCategories(env, limit = 10, reset = false) {
   return { attempted: candidates.length, repaired, done: candidates.length < 10 };
 }
 
-export async function quarantineWeakGeneralSummaries(env) {
-  const rows = await env.DB.prepare(`SELECT id,title,summary FROM news_articles
-    WHERE category<>'바둑' AND summary_quality='full'
-      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+// 이미 실려 있는 요약이 **오늘의 기준**을 여전히 통과하는지 다시 묻는다.
+//
+// 두 가지가 바뀌었다. 첫째, 바둑도 검사한다. 예전에는 category<>'바둑'이라
+// 바둑 요약은 어떤 사후 검사도 받지 않았다 - 2026-08-14 실측: "그가 인간 바둑
+// 에서도 전대미문의 역사를 써 내려가고 있다"가 화면에 그대로 떠 있었다.
+// 둘째, 판정을 publishableSummary 하나로 통일했다. 발행할 때와 다른 기준으로
+// 재검사하면, 기준을 올려도 이미 떠 있는 것은 안 내려간다.
+//
+// 기준을 한 번 올리면 옛 행까지 다음 실행이 알아서 정리한다. 사람이 화면을 보고
+// 알려 줄 필요가 없다 - 그게 이 함수가 있는 이유다.
+export async function quarantineWeakSummaries(env, { limit = WEAK_SUMMARY_SCAN_LIMIT, days = 30 } = {}) {
+  const rows = await env.DB.prepare(`SELECT id,title,summary,category FROM news_articles
+    WHERE summary_quality='full'
+      AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now',?)
     ORDER BY datetime(COALESCE(NULLIF(published_at,''),fetched_at)) DESC, id DESC
-    LIMIT ?`).bind(WEAK_SUMMARY_SCAN_LIMIT).all();
-  const weak = (rows.results || []).filter(row => !validateGeneralEditorialSummary(row.summary, row.title));
+    LIMIT ?`).bind(`-${days} days`, limit).all();
+  const weak = (rows.results || []).filter(row => !publishableSummary(row.summary, row.title, row.category));
   for (let index = 0; index < weak.length; index += 50) {
     await env.DB.batch(weak.slice(index, index + 50).map(row =>
       env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id)));
@@ -73,7 +83,10 @@ export async function quarantineWeakGeneralSummaries(env) {
   return {
     checked,
     quarantined: weak.length,
-    scan_limit_reached: checked >= WEAK_SUMMARY_SCAN_LIMIT,
+    scan_limit_reached: checked >= limit,
+    // 무엇이 왜 내려갔는지 남긴다. "안 나온 건 기록에 남긴다"는 것이 요구사항이고,
+    // 이 목록이 없으면 검사를 너무 조인 것과 실제로 요약이 나쁜 것을 구분할 수 없다.
+    samples: weak.slice(0, 5).map(row => `${row.category}|${String(row.title).slice(0, 30)}`),
     ids: weak.map(row => row.id)
   };
 }

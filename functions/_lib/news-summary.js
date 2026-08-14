@@ -222,10 +222,26 @@ export function summaryMentionsTitle(summary, title = '') {
   return words.some(word => text.includes(word) || (word.length >= 3 && text.includes(word.slice(0, -1))));
 }
 
+// 첫 줄이 앞 문장에 기대는 말로 시작하면 그건 본문에서 떼어 온 조각이지 요약의
+// 첫 문장이 아니다. 읽는 사람은 '그가'가 누구인지 알 수 없다. 이 검사는 예전에
+// 일반 기사에만 걸려 있었고 바둑 요약은 통째로 건너뛰었다 - 2026-08-14 실측:
+// "1) 그가 인간 바둑 에서도 전대미문의 역사를 써 내려가고 있다."(신진서 기사)
+const DEPENDENT_FIRST_LINE = /^(?:그(?:가|는|를|에게|와|의)?\s|이(?:로써|에|를|러한)\s|거치며\s|이어\s|이후\s|둘째[,，]\s*|한편\s|그러면서\s|그리고\s|또한\s|아울러\s|현재는\s|당시\s|결국\s)/u;
+
+// 앞말에 붙어야 할 조사가 떨어져 홀로 선 것. 본문에서 조각을 이어 붙이면 이렇게
+// 된다("인간 바둑 에서도"). 정상 한국어 문장에서는 나오지 않는다. 낱말로도 쓰일
+// 수 있는 조사(이·그·도·만·와)는 일부러 뺐다 - "이 대회", "도 관계자"처럼 멀쩡한
+// 문장을 버리게 된다. 홀로 설 수 없는 것만 센다.
+const DETACHED_PARTICLE = /(?:^|\s)(?:에서도|에서는|에서|에게서|에게|이라고|이라는|으로서|으로써|로서|로써|까지|부터|처럼|만큼|조차|을|를)(?=\s|$)/u;
+
 export function validateThreeLineSummary(summary, title = '') {
   if (isRejectedTitle(title)) return false;
   const lines = normalizeText(summary).split('\n').map(stripNumbering).filter(Boolean);
   if (lines.length !== 3) return false;
+  // 카테고리를 가리지 않는다. 무료 추출 요약은 예산이 떨어진 날에만 쓰이는데,
+  // 하필 그 날 품질 검사가 가장 헐거우면 사람이 보는 것은 늘 조각난 요약이다.
+  if (DEPENDENT_FIRST_LINE.test(lines[0])) return false;
+  if (lines.some(line => DETACHED_PARTICLE.test(line))) return false;
   const titleKey = comparisonKey(title);
   for (const line of lines) {
     if (line.length < LINE_MIN_LENGTH || line.length > LINE_MAX_LENGTH) return false;
@@ -280,6 +296,19 @@ export function reorderGeneralSummary(summary, title = '') {
   if (bestIndex <= 0 || (!dependentFirst && !(scores[0] === 0 && bestScore >= 2))) return summary;
   const reordered = [rawLines[bestIndex], ...rawLines.filter((_, index) => index !== bestIndex)];
   return reordered.map((line, index) => `${index + 1}) ${stripNumbering(line)}`).join('\n');
+}
+
+// 화면에 실릴 자격. **한 곳에서만 판정한다.** 예전에는 수집(collect.js)이 이
+// 조합을 직접 들고 있었고, 이미 저장된 행을 다시 보는 복구(news-repairs.js)는
+// 그보다 헐거운 검사를 썼다. 그래서 기준을 올려도 이미 떠 있는 요약은 옛 기준
+// 그대로 남았다 - 사람이 화면에서 보고 말해 줘야만 사라졌다.
+//
+// 이 함수가 유일한 기준이다. 새로 실을 때와 계속 실어 둘 때가 같은 것을 물으면,
+// 기준을 한 번 올리는 것만으로 옛 행까지 자동으로 정리된다.
+export function publishableSummary(summary, title, category) {
+  return validateThreeLineSummary(summary, title)
+    && summaryMentionsTitle(summary, title)
+    && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
 }
 
 export function validateGeneralEditorialSummary(summary, title = '') {
