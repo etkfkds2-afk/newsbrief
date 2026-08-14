@@ -11,6 +11,25 @@ import {
 import { hasLegalCaseConflict, isStandaloneEventArticle, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
+
+// 바둑 탭이 기사를 고르는 조건. **health가 같은 것을 세야 한다.**
+//
+// 기원에서 벌어진 사건처럼 분류는 사회인데 바둑 독자에게는 소식인 기사가 있다.
+// 그런 기사는 일반 탭이 인기순만 쓰므로 인기에 못 들면 어디에도 안 뜬다(실측
+// 2026-08-10: 노원구 기원 살인 보도 4건 모두 미노출). 분류를 바꾸는 대신 바둑
+// 탭에서만 함께 읽는다.
+//
+// 규칙을 제목 위주로 좁게 잡은 근거(최근 30일 일반 209건 실측): 요약까지 보면
+// '바둑'을 스치는 기사가 16건 걸리는데 그중 10건이 노이즈였다. 알파고를 언급한
+// 구글 AI 조직 개편 기사, 뉴스 모음, 노숙인 르포 등이다. 아래 규칙이면 그 10건
+// 중 9건이 빠지고 원하는 6건은 모두 남는다.
+//
+// 여기 상수로 뺀 이유: health가 `category='바둑'`만 세고 있었다. 그래서 분류가
+// 사회·생활/문화로 저장된 바둑 기사는 화면에 떠 있는데 health는 못 봤고,
+// "24시간 바둑 1건"이라는 틀린 진단이 나왔다(2026-08-14). health가 화면과 다른
+// 것을 세면 그 숫자로 내리는 판단이 전부 틀어진다.
+export const BADUK_TAB_FILTER = `(a.category='바둑' OR a.title LIKE '%바둑%'
+  OR (a.title LIKE '%기원%' AND a.summary LIKE '%바둑%'))`;
 // 'duplicate'는 같은 날 이미 다룬 이야기라 요약을 사지 않은 행이다. 카드로
 // 세우지 않고 대표 기사의 관련 보도로만 붙인다(아래 accepted 루프). 관련 보도에는
 // 제목·언론사·링크만 쓰이므로 요약이 없어도 된다.
@@ -343,9 +362,7 @@ export async function onRequestGet({ request, env }) {
       // 보면 '바둑'을 스치는 기사가 16건 걸리는데 그중 10건이 노이즈였다.
       // 알파고를 언급한 구글 AI 조직 개편 기사, 뉴스 모음, 노숙인 르포 등이다.
       // 아래 규칙이면 그 10건 중 9건이 빠지고 원하는 6건은 모두 남는다.
-      where.push(`(a.category = ? OR a.title LIKE '%바둑%'
-        OR (a.title LIKE '%기원%' AND a.summary LIKE '%바둑%'))`);
-      bindings.push(category);
+      where.push(BADUK_TAB_FILTER);
     } else if (category && CATEGORIES.has(category)) {
       where.push('a.category = ?');
       bindings.push(category);

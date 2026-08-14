@@ -4,7 +4,7 @@ import {
 } from '../../_lib/news-ai-budget.js';
 import { sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { BADUK_PROMO_TITLE_PATTERNS } from '../../_lib/news-blocklist.js';
-import { CONTENT_QUALITY_FILTERS } from './articles.js';
+import { BADUK_TAB_FILTER, CONTENT_QUALITY_FILTERS } from './articles.js';
 // 바둑 예약분. 굶주림 판정이 수집 쪽 상수와 어긋나면 그 알람은 거짓말이 된다.
 import { BADUK_RESERVED_ANTHROPIC_CALLS } from './collect.js';
 import { isBadukDisplayRelevant } from '../../_lib/baduk-relevance.js';
@@ -29,11 +29,16 @@ export async function onRequestGet({ env }) {
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
         ORDER BY id DESC LIMIT 1`).first(),
+      // 바둑/일반을 가르는 기준은 **화면과 같아야 한다.** 예전에는 category='바둑'
+      // 만 셌는데, 바둑 탭은 제목에 '바둑'이 든 다른 분류 기사도 함께 싣는다.
+      // 그래서 화면에는 여러 장이 떠 있는데 health는 "24시간 바둑 1건"이라고
+      // 보고했다(2026-08-14). 진단이 화면과 다른 것을 세면 그 숫자로 내리는
+      // 판단이 전부 틀어진다.
       env.DB.prepare(`SELECT
-        SUM(CASE WHEN category='바둑' THEN 1 ELSE 0 END) AS baduk,
-        SUM(CASE WHEN category<>'바둑' THEN 1 ELSE 0 END) AS general
-        FROM news_articles WHERE summary_quality='full'
-          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first(),
+        SUM(CASE WHEN ${BADUK_TAB_FILTER} THEN 1 ELSE 0 END) AS baduk,
+        SUM(CASE WHEN a.category<>'바둑' THEN 1 ELSE 0 END) AS general
+        FROM news_articles a WHERE a.summary_quality='full'
+          AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')`).first(),
       // 30일 창은 오래전에 한 번 잘못 저장된 행 두 개 때문에 매일 실패했다.
       // 물어야 할 것은 "지금 들어오는 기사에 발행시각이 붙나"이므로 최근 것만
       // 본다. 옛 행은 창을 벗어나 사라지고, 진짜 회귀는 하루 안에 다시 뜬다.
@@ -115,7 +120,7 @@ export async function onRequestGet({ env }) {
       // 관련성·홍보 제목)가 더 있으므로 아래에서 단계별로 세어 어디서 줄어드는지
       // 드러낸다.
       env.DB.prepare(`SELECT a.title, a.summary FROM news_articles a
-        WHERE a.category='바둑' AND a.summary_quality='full'
+        WHERE ${BADUK_TAB_FILTER} AND a.summary_quality='full'
           AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')
           AND ${CONTENT_QUALITY_FILTERS.join(' AND ')}
         ORDER BY a.id DESC LIMIT 60`).all(),
