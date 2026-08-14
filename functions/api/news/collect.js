@@ -574,8 +574,12 @@ async function collect(env, {
   // 외부 요청이 없어 subrequest 예산과 무관하고, 최근 사흘 120건만 본다 - 새로
   // 들어온 것과 방금 기준을 올린 것이 여기에 다 들어온다. 30일 전체 훑기는
   // 지금도 repair_general_quality로 따로 부를 수 있다.
-  if (!popularityCandidates.length && !backfill) {
-    const freshQualitySweep = await quarantineWeakSummaries(env, { limit: 120, days: 3 });
+  // 재시도 실행(forceRetry)에서는 건너뛴다. 그 실행은 이미 밀린 요약을 몰아서
+  // 다시 사느라 CPU를 많이 쓰는데, 여기에 재검사까지 얹으면 Worker CPU 한도를
+  // 넘겨 실행 전체가 죽는다(2026-08-14 실측: error code 1102로 3패스 모두 503).
+  // 재검사는 정기 실행이 매번 하므로 한 번 걸러도 잃는 것이 없다.
+  if (!popularityCandidates.length && !backfill && !forceRetry) {
+    const freshQualitySweep = await quarantineWeakSummaries(env, { limit: 60, days: 3 });
     if (freshQualitySweep.quarantined) {
       diagnostics.weak_summary_quarantined = freshQualitySweep.quarantined;
       diagnostics.weak_summary_samples = freshQualitySweep.samples;
