@@ -4,9 +4,20 @@ function numbers(value) {
   return new Set((String(value || '').match(/\d+(?:[.,]\d+)*(?:%|원|명|건|년|월|일|시|분)?/g) || []).map(v => v.replace(/,/g, '')));
 }
 
+// 요약에 원문에 없는 숫자가 섞였는지 본다. 반드시 **번호 매김을 뗀 뒤에** 세야
+// 한다. 예전에는 "1) …\n2) …\n3) …" 전체를 그대로 넣어서 줄 번호 1·2·3이 기사
+// 숫자로 세어졌다. 원문에 2나 3이 안 나오는 기사면 아무리 정확한 요약이라도
+// 무조건 탈락한다 - 짧은 기사일수록 그렇다.
+//
+// 2026-08-14 실측으로 이것 때문에 버려진 요약들:
+//   "1) 신진서 9단이 8월 한국 바둑랭킹에서 1위를 차지하며 80개월 연속으로 정상의
+//    자리를 지켰다."            (원문 숫자: 11일 6 9 14일 8월 1 80 - 2와 3이 없다)
+//   "1) GS칼텍스배 프로기전에서 김정현 9단이 신민준 9단을 꺾고 4강에 진출했다."
+// 전부 정확한 요약인데 줄 번호 때문에 죽었다. 그날 24시간 바둑 화면이 0건이었다.
 function numbersGrounded(summary, source) {
   const allowed = numbers(source);
-  return [...numbers(summary)].every(value => allowed.has(value));
+  const body = String(summary || '').split('\n').map(stripNumbering).join('\n');
+  return [...numbers(body)].every(value => allowed.has(value));
 }
 
 function normalizeAiAnswer(value) {
