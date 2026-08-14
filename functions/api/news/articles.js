@@ -37,6 +37,13 @@ export const CONTENT_QUALITY_FILTERS = [
   "a.summary NOT LIKE '%글자크기%'",
   "a.summary NOT LIKE '%글자 크기%'",
   "a.summary NOT LIKE '%본문 내용은%'",
+  // 기사가 아니라 포털 페이지 안내문을 요약한 행. 수집 쪽은 고쳤지만(본문을
+  // 닫는 태그까지만 자르고, news-summary.js가 이 문구를 거부한다) 이미 저장된
+  // 행은 그대로 남아 화면에 뜬다. 다음 수집을 기다리지 않고 지금 숨긴다 -
+  // 2026-08-14 실측: 트럼프 드론 관세 [속보]의 3줄이 통째로 이 안내문이었다.
+  "a.summary NOT LIKE '%섹션으로 분류했습니다%'",
+  "a.summary NOT LIKE '%섹션 정보는%'",
+  "a.summary NOT LIKE '%중복 분류할 수 있%'",
   "a.title NOT LIKE '%시세 조회로%'",
   "a.title NOT LIKE '%현명한 투자하세요%'",
   "a.title NOT LIKE '%숙소 환급 상세 안내%'",

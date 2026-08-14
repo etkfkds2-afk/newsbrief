@@ -15,7 +15,40 @@ const NAVER_SECTION_CATEGORIES = {
 
 export const DEAD_PAGE = /(?:존재하지\s*않는\s*페이지|요청하신\s*페이지를\s*찾을\s*수\s*없|삭제된\s*기사|기사가\s*존재하지\s*않|page\s*not\s*found|\b404\b)/i;
 
-const BODY_JUNK = /(?:무단전재|재배포\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\s*본\s*뉴스|기사제공|기자\s*[A-Z0-9._%+-]+@|기사의?\s*본문\s*내용|글자\s*크기|인쇄하기|공유하기)/i;
+// 포털·CMS가 본문 밖에 붙이는 안내문. 이건 기사 내용이 아니라 페이지 장식인데
+// 문장 모양을 하고 있어서 길이나 어미로는 안 걸러진다. 2026-08-14 실측: 트럼프
+// 드론 관세 [속보]의 3줄 요약이 통째로 네이버의 "이 기사는 언론사에서 세계
+// 섹션으로 분류했습니다 / 기사의 섹션 정보는 …"이었다.
+const PORTAL_BOILERPLATE = /(?:섹션으로\s*분류했습니다|섹션\s*정보는|중복\s*분류할\s*수\s*있|언론사(?:가|의)\s*분류|기사\s*섹션\s*분류|본문\s*듣기를\s*시작합니다|글자\s*크기\s*(?:변경|조절)|SNS\s*보내기|기사\s*공유하기|댓글\s*정책|이\s*기사\s*어때요)/;
+
+const BODY_JUNK = new RegExp(
+  '(?:무단전재|재배포\\s*금지|저작권자|구독|로그인|회원가입|제보|관련기사|추천뉴스|많이\\s*본\\s*뉴스'
+  + '|기사제공|기자\\s*[A-Z0-9._%+-]+@|기사의?\\s*본문\\s*내용|글자\\s*크기|인쇄하기|공유하기)'
+  + '|' + PORTAL_BOILERPLATE.source, 'i');
+
+// 본문 컨테이너가 **어디서 끝나는지**까지 찾아서 그 안만 쓴다. 예전에는 시작
+// 지점부터 180KB를 그냥 잘랐다. 그러면 본문이 끝난 뒤에 오는 페이지 꼬리 -
+// 섹션 분류 안내, 관련기사 목록, 구독 안내, 다른 기사 제목들 - 이 전부 요약
+// 재료로 들어간다. 본문이 긴 기사는 분량에 묻혀 티가 안 났고, [속보]처럼 본문이
+// 두세 문장이면 꼬리가 이겨서 요약이 통째로 안내문이 됐다.
+//
+// 여는 태그와 같은 이름의 태그를 세면서 짝이 맞는 닫는 태그를 찾는다. HTML이
+// 깨져 짝을 못 찾으면 예전 방식으로 물러선다 - 본문을 통째로 잃는 것보다는
+// 꼬리가 섞이는 편이 낫고, 그 경우는 위 BODY_JUNK가 한 겹 더 거른다.
+function sliceElement(html, startIndex) {
+  const fallback = () => html.slice(startIndex, Math.min(html.length, startIndex + 180000));
+  const tagName = html.slice(startIndex, startIndex + 20).match(/^<([a-z0-9]+)/i)?.[1];
+  if (!tagName) return fallback();
+  const scanner = new RegExp(`<(/?)${tagName}\\b[^>]*>`, 'gi');
+  scanner.lastIndex = startIndex;
+  let depth = 0;
+  for (let match = scanner.exec(html); match; match = scanner.exec(html)) {
+    if (scanner.lastIndex - startIndex > 400000) break;
+    depth += match[1] ? -1 : 1;
+    if (depth === 0) return html.slice(startIndex, scanner.lastIndex);
+  }
+  return fallback();
+}
 
 export function classify(category, title, body = '') {
   const titleText = String(title || '');
@@ -301,7 +334,7 @@ export async function fetchArticleText(url) {
     // 없어 본문 0자. 바둑은 지역지 비중이 커서 이 한 줄이 24시간 body_too_short
     // 95건의 상당 부분이다.
     const articleStart = html.search(/<(?:article|div|td|section|main)[^>]+(?:(?:id|class)=["'][^"']*(?:dic_area|article_view|article-body|article-veiw-body|article-view-content|newsct_article|article_body|articleBody|news_body|news-contents|view_cont|newsViewBody|story-news)[^"']*["']|itemprop=["']articleBody["'])[^>]*>/i);
-    const article = articleStart >= 0 ? html.slice(articleStart, Math.min(html.length, articleStart + 180000)) : '';
+    const article = articleStart >= 0 ? sliceElement(html, articleStart) : '';
     if (!image) {
       const bodyImageSrc = article.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
       if (bodyImageSrc) {

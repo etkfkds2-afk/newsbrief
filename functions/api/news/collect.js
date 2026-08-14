@@ -1,5 +1,6 @@
 import {
-  isRejectedTitle, normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
+  isRejectedTitle, normalizeText, reorderGeneralSummary, summaryMentionsTitle,
+  validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
@@ -98,6 +99,9 @@ const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북
 
 function validPublishedSummary(summary, title, category) {
   return validateThreeLineSummary(summary, title)
+    // 제목과 아무 상관 없는 요약은 어느 카테고리든 안 내보낸다. 모양 검사를 모두
+    // 통과하는 쓰레기가 실제로 화면까지 갔다(2026-08-14 네이버 섹션 안내문).
+    && summaryMentionsTitle(summary, title)
     && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
 }
 
@@ -378,10 +382,20 @@ async function collect(env, {
   const QUARANTINE_FAIL_THRESHOLD = 5;
   const QUARANTINE_HOURS = 24;
   const NEVER_QUARANTINE = /(?:^|\.)(?:baduk\.or\.kr|news\.naver\.com|v\.daum\.net|news\.daum\.net)$/i;
+  // 판정 규칙을 바꾸면 옛 규칙으로 쌓인 장부는 버린다. 규칙만 고치고 장부를
+  // 두면, 이제는 격리하지 않기로 한 사유로 이미 5회가 쌓인 매체가 그대로 갇혀
+  // 있다 - 고쳤는데 아무것도 안 달라지는 상태가 24시간 이어진다. 이 값을 올리는
+  // 것이 곧 "옛 판정으로 갇힌 곳을 전부 풀어준다"는 뜻이다.
+  const QUARANTINE_RULE_VERSION = '2';
   const hostHealthRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='article_host_health'").first();
   let hostHealth = {};
   try { hostHealth = JSON.parse(String(hostHealthRow?.value || '{}')) || {}; } catch { hostHealth = {}; }
   let hostHealthChanged = false;
+  if (String(hostHealth.__rule || '') !== QUARANTINE_RULE_VERSION) {
+    diagnostics.host_quarantine_reset = Object.keys(hostHealth).filter(key => key !== '__rule').length;
+    hostHealth = { __rule: QUARANTINE_RULE_VERSION };
+    hostHealthChanged = true;
+  }
   const candidateHost = value => {
     try { return new URL(value).hostname.toLowerCase(); } catch { return ''; }
   };
@@ -401,8 +415,16 @@ async function collect(env, {
   // 그대로 기사가 끊긴다. 고치려던 것보다 큰 고장을 만드는 길이다.
   //
   // 그래서 "몇 번을 다시 불러도 결과가 같은" 것만 센다: 차단(403·429), 서버가
-  // 계속 죽어 있는 것(5xx), HTML이 아닌 것, 구조가 안 맞는 것(selector_miss).
-  const HOST_ATTRIBUTABLE_FAILURE = /^(?:selector_miss|non_html|http_(?:403|429|5\d\d))$/;
+  // 계속 죽어 있는 것(5xx), HTML이 아닌 것.
+  //
+  // selector_miss는 뺀다. 그건 매체가 우리를 막은 게 아니라 **우리가 그 CMS의
+  // 본문 자리를 모르는 것**이고, 고칠 수 있는 유일한 종류다. 격리해 버리면 두
+  // 가지를 동시에 잃는다: 그 매체의 기사 전부, 그리고 body_too_short_hosts에서
+  // 사라져 무엇을 고쳐야 하는지 알 단서까지. 2026-08-14 실측: 하루 만에 8개
+  // 호스트가 격리됐고(gamefocus·game.donga는 selector_miss만으로) 그 사이 24시간
+  // 바둑 발행이 0건이 됐다. 선택자를 넓히는 일은 사람이 해야 하므로, 계속 눈에
+  // 띄게 두는 편이 맞다 - 조용히 감추면 영영 안 고친다.
+  const HOST_ATTRIBUTABLE_FAILURE = /^(?:non_html|http_(?:403|429|5\d\d))$/;
   const recordHostResult = (value, ok, fetchStatus = '') => {
     const host = candidateHost(value);
     if (!host || NEVER_QUARANTINE.test(host)) return;
@@ -1043,7 +1065,15 @@ async function collect(env, {
     // 있는 기사가 밀렸다. 실측 2026-08-12: kukinews는 브라우저 UA로도 403,
     // esquirekorea는 JS로만 그려 2KB 껍데기만 온다 - 둘 다 몇 번을 다시 불러도
     // 결과가 같은데 매 실행 다시 불렀다.
-    if (quarantinedHost(key)) { quarantineSkipped += 1; continue; }
+    //
+    // 다만 **버리는 것은 기사가 아니라 그 주소**여야 한다. 격리 판정을 원문
+    // 주소에 걸었더니, 포털에 그대로 미러돼 있어 얼마든지 읽을 수 있는 기사까지
+    // 통째로 사라졌다 - 2026-08-14 실측: 8/13 "최정, 김은지 꺾고 여자 최고기사
+    // 결정전 우승"을 쿠키뉴스가 썼는데 그 호스트가 403으로 격리돼 있어서 24시간
+    // 바둑이 0건이 됐다. 실제로 받으러 갈 주소(readableArticleUrl)가 격리 대상이
+    // 아니면 통과시킨다. 이 값이 곧 fetchArticleText가 먼저 부르는 주소다.
+    const fetchTarget = readableArticleUrl(key, candidate.item?.link || '');
+    if (quarantinedHost(fetchTarget) && quarantinedHost(key)) { quarantineSkipped += 1; continue; }
     uniqueCandidates.push({ ...candidate, urlKey: await sha256(key) });
   }
   // 버린 건수는 남긴다. 안 남기면 후보가 왜 적은지 진단에서 사라진다.
@@ -1166,7 +1196,11 @@ async function collect(env, {
     // 커진다. 격리는 24시간이므로 이틀 넘게 조용한 매체는 기억할 이유가 없다.
     const staleBefore = Date.now() - 2 * QUARANTINE_HOURS * 3600000;
     const trimmed = Object.fromEntries(Object.entries(hostHealth)
-      .filter(([, record]) => (Date.parse(String(record?.at || '')) || 0) >= staleBefore));
+      // 규칙 표시(__rule)는 호스트가 아니므로 시각이 없다. 같이 지우면 다음
+      // 실행이 "규칙이 바뀌었다"고 오인해 장부를 매번 비운다 - 격리가 영영 발동
+      // 안 하게 된다.
+      .filter(([host, record]) => host === '__rule'
+        || (Date.parse(String(record?.at || '')) || 0) >= staleBefore));
     await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES('article_host_health',?)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(JSON.stringify(trimmed)).run();
   }

@@ -132,6 +132,11 @@ export async function onRequestGet({ env }) {
     // 이것이었는데 그때 health는 전 항목 통과였다 - 어느 검사도 예산 관문이 바둑을
     // 끊고 있는지를 묻지 않았기 때문이다.
     let badukQuotaBlockedRuns = 0;
+    // 하루 동안 바둑 후보를 몇 건이나 실제로 붙잡아 봤는지. "없어서 안 나온 것"과
+    // "있는데 못 가져온 것"을 가르는 값이다 - 이게 0이면 조용한 날이니 울리지
+    // 않고, 0이 아닌데 화면이 비어 있으면 그건 고장이다.
+    let badukCandidatesSeen = 0;
+    const badukFailureHosts = {};
     for (const row of recentRuns?.results || []) {
       let diagnostics = null;
       try {
@@ -151,11 +156,22 @@ export async function onRequestGet({ env }) {
       if ((reason === 'bucket_baduk' || reason === 'daily_total')
         && Number(diagnostics.processed_by_category?.baduk || 0) > 0
         && badukCallsUsed < BADUK_RESERVED_ANTHROPIC_CALLS) badukQuotaBlockedRuns += 1;
+      badukCandidatesSeen += Number(diagnostics.processed_by_category?.baduk || 0);
+      // 어느 매체의 어느 실패인지. 이 값이 없어서 "본문 23건 실패"까지만 알고
+      // 무엇을 고쳐야 하는지는 매번 실행 기록을 손으로 파야 했다.
+      for (const [key, count] of Object.entries(diagnostics.body_too_short_hosts || {})) {
+        if (!key.startsWith('baduk:')) continue;
+        badukFailureHosts[key] = Number(badukFailureHosts[key] || 0) + Number(count || 0);
+      }
       const outcomes = diagnostics.candidate_outcomes_by_category?.baduk;
       if (!outcomes) continue;
       badukBodyTooShort += Number(outcomes.body_too_short || 0);
+      // inserted_duplicate는 뺀다. 그건 이미 있는 기사에 묶인 것이라 화면에 새
+      // 카드가 생기지 않는다. 이걸 "발행"으로 세는 바람에 아래 본문 검사가
+      // 빠져나갔다 - 2026-08-14 실측: 본문 실패 23건에 화면 0건인데 이 값이
+      // 20이라 baduk_body_fetch_healthy가 통과했고 health는 ok를 반환했다.
       badukPublishedByRuns += Number(outcomes.inserted_publishable || 0)
-        + Number(outcomes.inserted_duplicate || 0) + Number(outcomes.existing_repaired || 0);
+        + Number(outcomes.existing_repaired || 0);
     }
     // 저장된 바둑 기사 중 화면 규칙(홍보·도박 제목)이 버리는 건수. 수집기의
     // isRejectedTitle을 이미 통과해 요약까지 붙은 기사이므로, 여기서 버려지는
@@ -247,6 +263,16 @@ export async function onRequestGet({ env }) {
       // body_too_short 12건에 발행 0건이었다. 하나라도 실린 날은 통과시킨다 -
       // 경로가 살아 있다는 뜻이고, 개별 매체 실패까지 알람으로 만들면 또 무시된다.
       baduk_body_fetch_healthy: badukBodyTooShort < 6 || badukPublishedByRuns > 0,
+      // 사람이 화면을 보고 "바둑이 왜 없어"라고 묻기 전에 기계가 먼저 잡아야
+      // 하는 것. 위 검사들은 전부 "어느 단계가 이상한가"를 묻는데, 그 단계들이
+      // 각자 정상이어도 결과가 0일 수 있다 - 2026-08-14가 정확히 그랬다.
+      // 24시간 화면 0건인데 15개 검사가 모두 통과였다.
+      //
+      // 묻는 방식이 중요하다. "오늘 바둑이 있나"로 물으면 소스가 조용한 날마다
+      // 틀리고, 그렇게 울린 알람은 사람이 무시하게 된다(이 저장소의 177통 전례).
+      // 그래서 **우리가 후보를 붙잡아 본 날에만** 묻는다. 붙잡은 게 없으면 조용한
+      // 날이니 통과, 붙잡았는데 화면이 0이면 중간 어딘가가 고장 난 것이다.
+      baduk_reaches_screen: badukCandidatesSeen === 0 || badukDisplayStages.after_promo > 0,
       // 같은 날 같은 사건에 유료 요약을 두 번 이상 산 흔적. 1쌍은 오판정 여지를
       // 두고 넘긴다(키워드 3개는 우연히도 걸린다). 2쌍부터는 중복 판정이 실제로
       // 새고 있다는 뜻이고, 그건 곧바로 돈이다.
@@ -291,6 +317,11 @@ export async function onRequestGet({ env }) {
         // 한 건에 가려진다. 나눠서 보여준다.
         baduk_portal_24h: Number(badukPortal?.count || 0),
         baduk_body_too_short_24h: badukBodyTooShort,
+        // 어느 매체가 어떤 이유로 실패하는지. selector_miss가 몰려 있으면 그 CMS의
+        // 본문 자리를 news-extract.js에 넣어야 한다는 뜻이고, http_403이 몰려
+        // 있으면 그쪽은 영영 못 긁는다는 뜻이다 - 대응이 정반대라 구분이 필요하다.
+        baduk_body_too_short_hosts_24h: badukFailureHosts,
+        baduk_candidates_seen_24h: badukCandidatesSeen,
         duplicate_paid_pairs_24h: duplicatePaidPairs,
         duplicate_paid_samples: duplicatePaidSample,
         baduk_published_by_runs_24h: badukPublishedByRuns,
