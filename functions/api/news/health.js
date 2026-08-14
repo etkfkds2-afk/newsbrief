@@ -136,6 +136,11 @@ export async function onRequestGet({ env }) {
     // "있는데 못 가져온 것"을 가르는 값이다 - 이게 0이면 조용한 날이니 울리지
     // 않고, 0이 아닌데 화면이 비어 있으면 그건 고장이다.
     let badukCandidatesSeen = 0;
+    // Worker 한 번 호출의 외부 요청 한도(50)를 넘겨 죽은 후보. 이건 매체 고장이
+    // 아니라 우리 쪽 한도인데, 지금까지 body_too_short로 섞여 들어가 매체 탓으로
+    // 보였다. 따로 세어야 "선택자를 넓혀야 하나"와 "배치가 큰가"를 가를 수 있다.
+    let subrequestOverflowFailures = 0;
+    let subrequestStoppedCandidates = 0;
     const badukFailureHosts = {};
     for (const row of recentRuns?.results || []) {
       let diagnostics = null;
@@ -157,6 +162,16 @@ export async function onRequestGet({ env }) {
         && Number(diagnostics.processed_by_category?.baduk || 0) > 0
         && badukCallsUsed < BADUK_RESERVED_ANTHROPIC_CALLS) badukQuotaBlockedRuns += 1;
       badukCandidatesSeen += Number(diagnostics.processed_by_category?.baduk || 0);
+      subrequestStoppedCandidates += Number(diagnostics.subrequest_budget_stopped || 0);
+      // 한도를 실제로 넘겨 죽은 흔적. 예산을 세기 시작한 뒤로는 0이어야 한다.
+      // 세기 전 코드로 돈 실행(subrequests_used가 없다)은 빼고 본다. 안 그러면
+      // 배포 직후 24시간 동안 옛 실행 때문에 계속 울리고, 그렇게 울린 알람은
+      // 사람이 무시하게 된다 - 이 저장소가 이미 겪은 실패다.
+      if (diagnostics.subrequests_used !== undefined) {
+        for (const key of Object.keys(diagnostics.body_too_short_hosts || {})) {
+          if (/Too many subrequests/i.test(key)) subrequestOverflowFailures += 1;
+        }
+      }
       // 어느 매체의 어느 실패인지. 이 값이 없어서 "본문 23건 실패"까지만 알고
       // 무엇을 고쳐야 하는지는 매번 실행 기록을 손으로 파야 했다.
       for (const [key, count] of Object.entries(diagnostics.body_too_short_hosts || {})) {
@@ -273,6 +288,9 @@ export async function onRequestGet({ env }) {
       // 그래서 **우리가 후보를 붙잡아 본 날에만** 묻는다. 붙잡은 게 없으면 조용한
       // 날이니 통과, 붙잡았는데 화면이 0이면 중간 어딘가가 고장 난 것이다.
       baduk_reaches_screen: badukCandidatesSeen === 0 || badukDisplayStages.after_promo > 0,
+      // 예산을 세기 시작한 뒤로는 한도를 넘겨 죽는 일이 없어야 한다. 남아 있으면
+      // 세지 않는 외부 요청 경로가 어딘가 더 있다는 뜻이다.
+      subrequest_budget_respected: subrequestOverflowFailures === 0,
       // 같은 날 같은 사건에 유료 요약을 두 번 이상 산 흔적. 1쌍은 오판정 여지를
       // 두고 넘긴다(키워드 3개는 우연히도 걸린다). 2쌍부터는 중복 판정이 실제로
       // 새고 있다는 뜻이고, 그건 곧바로 돈이다.
@@ -322,6 +340,8 @@ export async function onRequestGet({ env }) {
         // 있으면 그쪽은 영영 못 긁는다는 뜻이다 - 대응이 정반대라 구분이 필요하다.
         baduk_body_too_short_hosts_24h: badukFailureHosts,
         baduk_candidates_seen_24h: badukCandidatesSeen,
+        subrequest_overflow_failures_24h: subrequestOverflowFailures,
+        subrequest_budget_stopped_24h: subrequestStoppedCandidates,
         duplicate_paid_pairs_24h: duplicatePaidPairs,
         duplicate_paid_samples: duplicatePaidSample,
         baduk_published_by_runs_24h: badukPublishedByRuns,

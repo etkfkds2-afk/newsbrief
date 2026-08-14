@@ -575,7 +575,7 @@ test('예약 수집은 매번 네이버 전 분야 인기뉴스를 충분히 처
   assert.match(sources, /const naverPages = pages\.slice\(0, 5\)/);
   assert.match(collector, /const popular = allPopular\.slice\(0, 12\)/);
   assert.match(collector, /diagnostics\.popular_resolved/);
-  assert.match(collector, /await naverSearch\(env, `"\$\{row\.title\}"`, 1, 5\)/);
+  assert.match(collector, /await countedNaverSearch\(env, `"\$\{row\.title\}"`, 1, 5\)/);
   assert.match(collector, /titleSimilarity\(row\.title, item\.title\) >= 0\.72/);
   assert.match(collector, /match\?\.originallink \|\| match\?\.link/);
   assert.doesNotMatch(collector, /const selected = \[pages\[slot % 5\], pages\[5\]\]/);
@@ -636,7 +636,7 @@ test('검색 루프의 naverSearch 호출은 kakaoSearch처럼 try/catch로 보�
   const loopStart = collector.indexOf('for (const effectiveQuery of effectiveQueries) {');
   const loopEnd = collector.indexOf('\n  }\n', loopStart);
   const loopBody = collector.slice(loopStart, loopEnd);
-  const naverCallIndex = loopBody.indexOf('await naverSearch(env, effectiveQuery, start, display)');
+  const naverCallIndex = loopBody.indexOf('await countedNaverSearch(env, effectiveQuery, start, display)');
   assert.ok(naverCallIndex > 0, 'expected the SEARCHES loop naverSearch call to still exist');
   const precedingTry = loopBody.lastIndexOf('try {', naverCallIndex);
   const precedingCatch = loopBody.indexOf('catch', naverCallIndex);
@@ -1233,7 +1233,7 @@ test('재요약 게이트는 유료 호출만 미루고 본문 재수집은 막�
   // 게이트가 기사를 잃지 않는 근거 전체가 이 순서에 걸려 있다. 본문 재수집이
   // 게이트 뒤로 옮겨가면 "본문이 더 잘 긁혀서 성공하는" 유일한 회복 경로가
   // 같이 막혀, 미룬 기사가 영영 못 살아난다.
-  const fetchAt = path.lastIndexOf('await fetchArticleText');
+  const fetchAt = path.lastIndexOf('await countedFetchArticle');
   const gateAt = path.indexOf('const mayResummarize');
   assert.ok(fetchAt >= 0 && gateAt > fetchAt,
     `본문 재수집(${fetchAt})이 게이트(${gateAt})보다 먼저여야 한다`);

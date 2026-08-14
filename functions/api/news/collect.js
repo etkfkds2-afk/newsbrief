@@ -303,8 +303,37 @@ async function collect(env, {
   diagnostics.home_display_limits = { baduk: 30, general: 10 };
   diagnostics.publish_counts_before = JSON.parse(JSON.stringify(publicationCounts));
   if (popularityTargetStart) diagnostics.popularity_target_counts_before = { ...popularityTargetCounts };
+  // Worker 한 번 호출이 쓸 수 있는 외부 요청은 50개다. 지금까지는 배치 크기
+  // 상수를 조절해 그 아래를 맞추려 했는데, 경로가 하나 늘 때마다 다시 넘었다.
+  // 2026-08-14 실측: 24시간에 7건이 "Too many subrequests by single Worker
+  // invocation"으로 죽었고, 그 실패가 매체 탓으로 기록됐다 - 멀쩡한 기사가
+  // body_too_short로 세어지고, 어제까지는 그 매체가 격리까지 됐다. 우리 쪽
+  // 한도를 매체 고장으로 오진하는 구조였다.
+  //
+  // 상수로 맞추는 대신 센다. 후보마다 드는 비용이 다르므로(이미 아는 기사는
+  // 본문만, 새 기사는 본문 2회 + 요약 1회) 세는 편이 항상 맞다. 남은 예산이
+  // 없으면 후보를 **시작하지 않고** 진단에 남긴다 - 실패로 남기는 것보다
+  // 안 하는 편이 낫고, 다음 실행이 그 후보를 그대로 이어받는다.
+  const SUBREQUEST_BUDGET = 44;
+  let subrequestsUsed = 0;
+  const countedFetchArticle = async value => {
+    subrequestsUsed += 1;
+    return fetchArticleText(value);
+  };
+  const subrequestsLeft = () => SUBREQUEST_BUDGET - subrequestsUsed;
+  // 검색·순위 수집도 같은 예산에서 나간다. 본문만 세면 후보를 처리하기도 전에
+  // 예산의 절반이 이미 사라진 상태를 모른 채 시작하게 된다. 순위·아카이브 수집은
+  // 안에서 여러 번 부르므로 넉넉히 잡는다 - 적게 잡아 넘기는 쪽이 더 나쁘다.
+  const counted = (fn, cost = 1) => (...args) => { subrequestsUsed += cost; return fn(...args); };
+  const countedNaverSearch = counted(naverSearch);
+  const countedKakaoSearch = counted(kakaoSearch);
+  const countedBadukLatest = counted(koreanBadukLatest);
+  const countedGoogleNews = counted(googleNewsSearch, 2);
+  const countedPopularity = counted(collectPopularity, 3);
+  const countedArchivedTop = counted(collectArchivedTop, 3);
   const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
     const trace = detail || {};
+    subrequestsUsed += 1;
     // 어느 몫에서 돈을 빼는지. payload.category가 비면 일반으로 본다 - 바둑 몫을
     // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
     const bucket = publicationBucket(payload.category);
@@ -497,13 +526,13 @@ async function collect(env, {
       ORDER BY length(body_text) DESC, fetched_at DESC LIMIT 4`).all();
     const recovered = [];
     for (const row of weakRows.results || []) {
-      let article = await fetchArticleText(canonicalUrl(row.url));
+      let article = await countedFetchArticle(canonicalUrl(row.url));
       if (article.body.length < 300) {
         try {
-          const matches = await naverSearch(env, `"${cleanTitle(row.title)}"`, 1, 3);
+          const matches = await countedNaverSearch(env, `"${cleanTitle(row.title)}"`, 1, 3);
           const match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '')
             === cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '')) || matches[0];
-          if (match) article = await fetchArticleText(canonicalUrl(match.link || match.originallink));
+          if (match) article = await countedFetchArticle(canonicalUrl(match.link || match.originallink));
         } catch {}
       }
       if (article.body.length < 300) {
@@ -593,7 +622,7 @@ async function collect(env, {
     : badukOnly ? [SEARCHES[0]]
     : [SEARCHES[0], generalSearches[slot % generalSearches.length], generalSearches[(slot + 1) % generalSearches.length]];
   if (!popularityCandidates.length && !backfill) {
-    const official = await koreanBadukLatest();
+    const official = await countedBadukLatest();
     diagnostics.official_baduk_found = official.length;
     // 한국기원은 2~4일에 한 번만 글을 올린다. 그래서 "24시간 안에 새 바둑
     // 기사가 있나"를 묻던 건강 검사는 조용한 날마다 틀렸고, 정작 소스엔 새 글이
@@ -636,7 +665,7 @@ async function collect(env, {
       // got a single candidate, not just this one query's results.
       let items = [];
       try {
-        items = await naverSearch(env, effectiveQuery, start, display);
+        items = await countedNaverSearch(env, effectiveQuery, start, display);
       } catch (error) {
         diagnostics.naver_error = String(error?.message || error).slice(0, 120);
       }
@@ -650,7 +679,7 @@ async function collect(env, {
       for (const item of items.slice(0, naverTake)) candidates.push({ category, item, source: 'NAVER' });
       try {
         const page = category === '바둑' ? pageBand + 1 : (backfill ? (slot % 10) * 5 + 1 : 1);
-        const kakaoItems = await kakaoSearch(env, effectiveQuery, page, category === '바둑' ? 10 : (backfill ? 10 : 3));
+        const kakaoItems = await countedKakaoSearch(env, effectiveQuery, page, category === '바둑' ? 10 : (backfill ? 10 : 3));
         const kakaoTake = category === '바둑' ? (backfill ? 3 : 5) : (backfill ? 2 : 1);
         for (const item of kakaoItems.slice(0, kakaoTake)) candidates.push({ category, item, source: 'KAKAO' });
       } catch (error) {
@@ -698,13 +727,13 @@ async function collect(env, {
     const discoveredTitle = cleanTitle(rawTitle || '');
     if (!discoveredTitle || isRejectedTitle(discoveredTitle)) return false;
     try {
-      const match = headlineMatch(await naverSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
+      const match = headlineMatch(await countedNaverSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
       if (match) { candidates.push({ category: '바둑', item: match, source: 'NAVER' }); return true; }
     } catch (error) {
       diagnostics.google_resolve_error = String(error?.message || error).slice(0, 120);
     }
     try {
-      const match = headlineMatch(await kakaoSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
+      const match = headlineMatch(await countedKakaoSearch(env, `"${discoveredTitle}"`, 1, 3), discoveredTitle);
       // 이미 특정된 헤드라인을 제목으로 맞춰 찾은 것이라(광범위 키워드 검색이
       // 아니다) 일반 KAKAO 검색 루프와 달리 daum.net 전용 허용목록이 필요 없다.
       // 다른 소스와 같은 스팸/UGC 차단목록만 거치면 된다. 그 허용목록 때문에
@@ -728,7 +757,7 @@ async function collect(env, {
   diagnostics.google_discoveries_resolved = discoveriesResolved;
   if (backfill) {
     try {
-      const archived = await collectArchivedTop(slot);
+      const archived = await countedArchivedTop(slot);
       candidates.push(...archived);
       for (const row of archived) {
         const key = await sha256(canonicalUrl(row.item.originallink || row.item.link));
@@ -751,7 +780,7 @@ async function collect(env, {
     // 실행에서 body_too_short 8건 중 3건이 정확히 이 경로의
     // "news.google.com:http_503"이었다. 디스커버리 경로와 똑같이 해석해서
     // 진짜 기사 링크가 된 것만 넣는다.
-    const headlines = (await googleNewsSearch(badukQuery, 30)).slice(0, 3);
+    const headlines = (await countedGoogleNews(badukQuery, 30)).slice(0, 3);
     let resolvedCount = 0;
     for (const item of headlines) if (await resolveBadukHeadline(item.title)) resolvedCount += 1;
     diagnostics.google_fallback_headlines = headlines.length;
@@ -765,7 +794,7 @@ async function collect(env, {
   // 최대 2회 들어가므로, 바둑 전용 실행에서 이걸 돌리면 정작 바둑 본문을 가져올
   // 예산이 남지 않는다. 이 호출을 따로 떼어낸 이유 자체가 그것이다.
   if (!popularityCandidates.length && !backfill && !badukOnly) try {
-    const allPopular = await collectPopularity(slot);
+    const allPopular = await countedPopularity(slot);
     // Resolving each ranked headline costs up to 2 subrequests (title search
     // + fallback search). Resolving all 20 ate most of a run's Cloudflare
     // subrequest budget before any candidate body fetch, the same budget
@@ -783,12 +812,12 @@ async function collect(env, {
     const resolvedPopular = await Promise.all(popular.map(async row => {
       if (row.source !== 'NAVER') return row;
       try {
-        let matches = await naverSearch(env, `"${row.title}"`, 1, 5);
+        let matches = await countedNaverSearch(env, `"${row.title}"`, 1, 5);
         const wanted = cleanTitle(row.title).replace(/[^0-9A-Za-z가-힣]/g, '');
         let match = matches.find(item => cleanTitle(item.title).replace(/[^0-9A-Za-z가-힣]/g, '') === wanted)
           || matches.find(item => titleSimilarity(row.title, item.title) >= 0.72);
         if (!match) {
-          matches = await naverSearch(env, row.title, 1, 5);
+          matches = await countedNaverSearch(env, row.title, 1, 5);
           match = matches.find(item => titleSimilarity(row.title, item.title) >= 0.72);
         }
         // Prefer the publisher's original URL. Naver article pages frequently
@@ -837,6 +866,13 @@ async function collect(env, {
         = Number(diagnostics.candidate_outcomes_by_category[bucket][reason] || 0) + 1;
       return 0;
     };
+    // 후보 하나가 최악의 경우 쓰는 양: 본문 2회 + 요약 1회. 그만큼 안 남았으면
+    // 시작하지 않는다. 도중에 한도를 넘으면 그 후보는 error_로 죽으면서 멀쩡한
+    // 매체의 실패로 기록되는데, 그건 진단을 오염시키고 예전에는 격리까지 불렀다.
+    if (subrequestsLeft() < 3) {
+      diagnostics.subrequest_budget_stopped = Number(diagnostics.subrequest_budget_stopped || 0) + 1;
+      return outcome('subrequest_budget');
+    }
     const url = candidateUrl({ item, source });
     const title = cleanTitle(item.title);
     const publishedAt = parseDate(item.pubDate);
@@ -879,8 +915,8 @@ async function collect(env, {
         }
         if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime || hasGenericImage) {
           const fetchUrl = readableArticleUrl(url, item.link || '');
-          let article = await fetchArticleText(fetchUrl);
-          if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+          let article = await countedFetchArticle(fetchUrl);
+          if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
           await env.DB.prepare(`UPDATE news_articles SET
             category=CASE WHEN ?<>'' THEN ? ELSE category END,
             press=CASE WHEN ?<>'' THEN ? ELSE press END,
@@ -895,8 +931,8 @@ async function collect(env, {
         return outcome('existing_full');
       }
       const fetchUrl = readableArticleUrl(url, item.link || '');
-      let article = await fetchArticleText(fetchUrl);
-      if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+      let article = await countedFetchArticle(fetchUrl);
+      if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
         // 이 경로에는 시도 횟수도 간격도 없어서, 후보에 다시 잡히기만 하면
         // 실행마다 유료 요약을 새로 불렀다. 8/9 07:20 정기 실행의 유료 호출
         // 5건이 전부 여기였고(실패 4 + 성공 1) 신규 기사 몫은 0이었다. 하루
@@ -960,8 +996,8 @@ async function collect(env, {
 
     const rawSummary = stripHtml(item.description);
     const fetchUrl = readableArticleUrl(url, item.link || '');
-    let article = await fetchArticleText(fetchUrl);
-    if (article.body.length < 300 && fetchUrl !== url) article = await fetchArticleText(url);
+    let article = await countedFetchArticle(fetchUrl);
+    if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
     const body = article.body;
     const resolvedPublishedAt = article.publishedAt || publishedAt;
     const resolvedPress = article.press || press;
@@ -1210,6 +1246,9 @@ async function collect(env, {
   if (quarantineSkipped) diagnostics.host_quarantine_skipped = quarantineSkipped;
   if (quarantinedNow.length) diagnostics.host_quarantined = quarantinedNow.slice(0, 8);
   diagnostics.baduk_only = badukOnly;
+  // 이번 실행이 외부 요청을 얼마나 썼는지. 44에 붙어 있으면 배치가 한 번에
+  // 소화할 수 있는 양을 넘었다는 뜻이고, 그건 상수를 조절할 근거가 된다.
+  diagnostics.subrequests_used = subrequestsUsed;
   diagnostics.publish_counts_after = publicationCounts;
   if (popularityTargetStart) diagnostics.popularity_target_counts_after = popularityTargetCounts;
   return { inserted, diagnostics };
