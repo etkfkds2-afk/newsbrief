@@ -1050,7 +1050,7 @@ test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 
   assert.match(collector, /processed_by_category/);
   assert.match(collector, /candidate_outcomes/);
   assert.match(collector, /candidate_outcomes_by_category/);
-  assert.match(collector, /SELECT url_key FROM news_articles WHERE url_key IN/);
+  assert.match(collector, /SELECT url_key,category FROM news_articles WHERE url_key IN/);
   assert.match(collector, /const newOrder = Number\(knownCandidateKeys\.has/);
   assert.match(collector, /diagnostics\.new_candidates/);
 });

@@ -910,6 +910,42 @@ async function collect(env, {
   const candidateUrl = ({ item, source }) => canonicalUrl(
     source === 'NAVER' && /naver\.com\//i.test(item?.link || '') ? item.link : (item?.originallink || item?.link)
   );
+  // 매체가 우리를 막았을 뿐 기사 자체는 포털에 그대로 실려 있는 경우가 많다.
+  // 그때는 기사를 버릴 이유가 없다 - 제목으로 포털 미러를 찾아 거기서 읽는다.
+  //
+  // 2026-08-14 실측: 8/13 "최정, 김은지 꺾고 여자 최고기사 결정전 우승"을 쓴
+  // 쿠키뉴스가 403(24시간 5건), 다른 바둑 기사의 sjbnews가 522(5건)였다. 둘 다
+  // 다시 불러도 결과가 같지만 포털에는 있다.
+  //
+  // **두 경로가 같이 써야 한다.** 처음에 새 기사 경로에만 넣었더니 한 번도 발동하지
+  // 않았다(portal_mirror_recovered 0) - 막히는 매체의 기사는 대부분 이미 DB에
+  // 들어와 있어서 복구 경로를 타기 때문이다. 그래서 함수로 뺀다.
+  //
+  // 드는 값은 검색 1회 + 본문 1회이고, 예산이 모자라면 시도하지 않는다.
+  const recoverViaPortalMirror = async (article, title, fetchUrl, url) => {
+    const blockedByHost = /^(?:non_html|http_(?:403|429|5\d\d))$/.test(String(article.fetchStatus || ''));
+    if (article.body.length >= 180 || !blockedByHost || subrequestsLeft() < 2) return article;
+    try {
+      const mirrors = await countedNaverSearch(env, `"${title}"`, 1, 3);
+      const mirror = mirrors.find(found => titleIsTruncationOf(title, cleanTitle(found.title))
+        || titleSimilarity(found.title, title) >= 0.9);
+      const mirrorUrl = canonicalUrl(readableArticleUrl(mirror?.originallink || mirror?.link || '', mirror?.link || ''));
+      if (!mirrorUrl || mirrorUrl === fetchUrl || mirrorUrl === url) {
+        diagnostics.portal_mirror_missing = Number(diagnostics.portal_mirror_missing || 0) + 1;
+        return article;
+      }
+      const viaMirror = await countedFetchArticle(mirrorUrl);
+      if (viaMirror.body.length < 180) {
+        diagnostics.portal_mirror_missing = Number(diagnostics.portal_mirror_missing || 0) + 1;
+        return article;
+      }
+      diagnostics.portal_mirror_recovered = Number(diagnostics.portal_mirror_recovered || 0) + 1;
+      return viaMirror;
+    } catch (error) {
+      diagnostics.portal_mirror_error = String(error?.message || error).slice(0, 120);
+      return article;
+    }
+  };
   const processCandidate = async ({ category, item, source, isPopular = false, urlKey: knownUrlKey = '' }) => {
     const outcome = reason => {
       diagnostics.candidate_outcomes ||= {};
@@ -988,6 +1024,9 @@ async function collect(env, {
       const fetchUrl = readableArticleUrl(url, item.link || '');
       let article = await countedFetchArticle(fetchUrl);
       if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
+      // 막는 매체의 기사는 대부분 여기로 온다(이미 DB에 있으므로). 새 기사 경로에만
+      // 복구를 걸었더니 한 번도 발동하지 않았다 - 2026-08-14 실측.
+      article = await recoverViaPortalMirror(article, title, fetchUrl, url);
         // 이 경로에는 시도 횟수도 간격도 없어서, 후보에 다시 잡히기만 하면
         // 실행마다 유료 요약을 새로 불렀다. 8/9 07:20 정기 실행의 유료 호출
         // 5건이 전부 여기였고(실패 4 + 성공 1) 신규 기사 몫은 0이었다. 하루
@@ -1053,31 +1092,7 @@ async function collect(env, {
     const fetchUrl = readableArticleUrl(url, item.link || '');
     let article = await countedFetchArticle(fetchUrl);
     if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
-    // 매체가 우리를 막았을 뿐 기사 자체는 포털에 그대로 실려 있는 경우가 많다.
-    // 그때는 기사를 버릴 이유가 없다 - 제목으로 포털 미러를 찾아 거기서 읽는다.
-    // 2026-08-14 실측: 8/13 "최정, 김은지 꺾고 여자 최고기사 결정전 우승"은
-    // 쿠키뉴스가 403, 같은 날 다른 바둑 기사는 sjbnews가 522였고, 그 매체들이
-    // 24시간 바둑 실패의 대부분이었다. 둘 다 우리가 다시 불러도 결과가 같지만
-    // 포털에는 있다. 이 저장소가 이미 쓰는 방법이고(위 repair 경로), 드는 값은
-    // 검색 1회 + 본문 1회다.
-    const blockedByHost = /^(?:non_html|http_(?:403|429|5\d\d))$/.test(String(article.fetchStatus || ''));
-    if (article.body.length < 180 && blockedByHost && subrequestsLeft() >= 2) {
-      try {
-        const mirrors = await countedNaverSearch(env, `"${title}"`, 1, 3);
-        const mirror = mirrors.find(found => titleIsTruncationOf(title, cleanTitle(found.title))
-          || titleSimilarity(found.title, title) >= 0.9);
-        const mirrorUrl = canonicalUrl(readableArticleUrl(mirror?.originallink || mirror?.link || '', mirror?.link || ''));
-        if (mirrorUrl && mirrorUrl !== fetchUrl && mirrorUrl !== url) {
-          const viaMirror = await countedFetchArticle(mirrorUrl);
-          if (viaMirror.body.length >= 180) {
-            article = viaMirror;
-            diagnostics.portal_mirror_recovered = Number(diagnostics.portal_mirror_recovered || 0) + 1;
-          }
-        }
-      } catch (error) {
-        diagnostics.portal_mirror_error = String(error?.message || error).slice(0, 120);
-      }
-    }
+    article = await recoverViaPortalMirror(article, title, fetchUrl, url);
     const body = article.body;
     const resolvedPublishedAt = article.publishedAt || publishedAt;
     const resolvedPress = article.press || press;
@@ -1195,11 +1210,18 @@ async function collect(env, {
   // 버린 건수는 남긴다. 안 남기면 후보가 왜 적은지 진단에서 사라진다.
   diagnostics.disallowed_before_batch = disallowedBeforeBatch;
   const knownCandidateKeys = new Set();
+  // 이미 저장된 후보의 카테고리도 같이 읽는다. 바둑 검색에는 저장 카테고리가
+  // 일반인 기사가 섞이는데(기원에서 벌어진 사건, 바둑을 소재로 쓴 문화 기사),
+  // 바둑 전용 실행에서 그것들이 슬롯을 가져가면 정작 바둑이 밀린다.
+  const storedCategoryByKey = new Map();
   if (uniqueCandidates.length) {
     const placeholders = uniqueCandidates.map(() => '?').join(',');
-    const knownRows = await env.DB.prepare(`SELECT url_key FROM news_articles WHERE url_key IN (${placeholders})`)
+    const knownRows = await env.DB.prepare(`SELECT url_key,category FROM news_articles WHERE url_key IN (${placeholders})`)
       .bind(...uniqueCandidates.map(candidate => candidate.urlKey)).all();
-    for (const row of knownRows.results || []) knownCandidateKeys.add(row.url_key);
+    for (const row of knownRows.results || []) {
+      knownCandidateKeys.add(row.url_key);
+      storedCategoryByKey.set(row.url_key, String(row.category || ''));
+    }
   }
   uniqueCandidates.sort((a, b) => {
     // Official baduk.or.kr candidates are few (<=12) and high-trust, so a new
@@ -1225,7 +1247,15 @@ async function collect(env, {
   const limitedCandidates = popularityCandidates.length
     ? uniqueCandidates.slice(popularityOffset, popularityOffset + POPULARITY_REPAIR_BATCH_SIZE)
     : (backfill ? uniqueCandidates.slice(0, 8) : [
-        ...uniqueCandidates.filter(candidate => candidate.category === '바둑').slice(0, SCHEDULED_BADUK_CANDIDATES),
+        ...uniqueCandidates
+          // 바둑 전용 실행에서는 이미 일반으로 분류돼 저장된 기사에 슬롯을 주지
+          // 않는다. 그 기사들은 일반의 하루 상한(12)에 걸려 어차피 아무것도 못
+          // 하면서 칸만 먹는다 - 2026-08-14 실측: baduk_only 실행의 20칸 중
+          // 8칸이 existing_repair_over_daily_limit이었고 바둑 발행은 0건이었다.
+          // 아직 저장 안 된 후보(카테고리 미상)는 그대로 통과시킨다.
+          .filter(candidate => candidate.category === '바둑'
+            && !(badukOnly && (storedCategoryByKey.get(candidate.urlKey) || '바둑') !== '바둑'))
+          .slice(0, SCHEDULED_BADUK_CANDIDATES),
         ...(badukOnly ? []
           : uniqueCandidates.filter(candidate => candidate.category !== '바둑').slice(0, SCHEDULED_GENERAL_CANDIDATES))
       ]);
