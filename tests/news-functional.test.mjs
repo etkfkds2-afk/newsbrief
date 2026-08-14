@@ -724,7 +724,7 @@ test('하루치 예산 페이스는 표시용이고 Claude 호출을 막지 않�
 
   // 차단은 월 목표·하드 한도와 **하루 지출 절대선** 셋만 한다. 남은 날로 나눈
   // 페이스 값은 여전히 차단에 쓰지 않는다(위 doesNotMatch가 그것을 지킨다).
-  const { canUseClaude, CLAUDE_DAILY_HARD_LIMIT_MICRO_USD, koreaDayKey } =
+  const { canUseClaude, CLAUDE_DAILY_HARD_LIMIT_MICRO_USD, claudeDailyHardLimitMicroUsd, koreaDayKey } =
     await import('../functions/_lib/news-ai-budget.js');
   const envWithDailySpend = today => {
     const state = { claude_budget_month: '2026-08', claude_monthly_micro_usd: 2_029_870,
@@ -738,24 +738,32 @@ test('하루치 예산 페이스는 표시용이고 Claude 호출을 막지 않�
       async run() {}
     }; }, async batch() {} } };
   };
-  // 정상 운영일의 하루 지출은 $0.15다. 그 두 배까지는 월 목표 아래인 한 통과한다.
-  const normalDay = await canUseClaude(envWithDailySpend(250_000), 15_000);
+  // 정상 운영일의 하루 지출은 $0.15다. 그 아래는 월 목표 아래인 한 통과한다.
+  const normalDay = await canUseClaude(envWithDailySpend(150_000), 15_000);
   assert.equal(normalDay.allowed, true);
   assert.equal(normalDay.blockedBy, '');
-  // 절대선은 실제 숫자로 검사한다. 상한 상수를 입력에도 쓰면(예: 상한+1)
-  // 상한을 얼마로 바꾸든 늘 통과하는 자기참조 검사가 되어 아무것도 못 잡는다.
-  // 460_000은 2026-08-14에 실제로 나간 하루 지출($0.46)이다 - 하루 상한 60인
-  // 날에 anthropic_calls_today가 146까지 갔고, 설계값의 세 배를 쓰고도 그날
-  // 바둑 화면은 1건이었다. 이 값이 막히지 않으면 그날이 그대로 재현된다.
-  const runawayDay = await canUseClaude(envWithDailySpend(460_000), 15_000);
+  // 절대선을 넘으면 그날은 더 사지 않는다. 오늘 열어 둔 날짜 예외가 있으면
+  // 그것이 유효 상한이므로 그 위에서 검사한다(예외는 다음날 자동 소멸한다).
+  const effective = claudeDailyHardLimitMicroUsd();
+  const runawayDay = await canUseClaude(envWithDailySpend(effective + 60_000), 15_000);
   assert.equal(runawayDay.allowed, false);
   assert.equal(runawayDay.blockedBy, 'daily');
-  // 설계 하루치는 $0.15다. 절대선이 그 두 배를 크게 넘으면 막는 의미가 없다.
+  // 위 검사만 두면 상한을 얼마로 올려도 늘 통과하는 자기참조가 된다. 진짜 방어는
+  // **기본값의 범위**다. 설계 하루치는 $0.15이고 기본 절대선은 그 두 배다.
+  // 2026-08-14 실측: 상한이 사실상 없던 날 하루 지출이 $0.46(설계의 세 배)까지
+  // 갔고, 그러고도 바둑 화면은 1건이었다.
   assert.ok(CLAUDE_DAILY_HARD_LIMIT_MICRO_USD <= 350_000,
     `하루 절대선이 너무 높다: ${CLAUDE_DAILY_HARD_LIMIT_MICRO_USD}`);
   // 정상 운영일($0.15)이 이 선에 걸리면 안 된다. 걸리면 매일 낮에 요약이 끊긴다.
   assert.ok(CLAUDE_DAILY_HARD_LIMIT_MICRO_USD >= 280_000,
     `하루 절대선이 너무 낮다: ${CLAUDE_DAILY_HARD_LIMIT_MICRO_USD}`);
+  // 날짜 예외는 반드시 스스로 사라져야 한다. 사람이 되돌려야 하는 예외는
+  // 되돌려지지 않는다 - 그래서 월 예외도 표로 두고 있다.
+  const budgetSourceText = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
+  const overrideDays = [...budgetSourceText.matchAll(/'(\d{4}-\d{2}-\d{2})': \{ spend:/g)].map(m => m[1]);
+  for (const day of overrideDays) {
+    assert.ok(day >= '2026-08-14', `지난 날짜 예외가 코드에 남아 있다: ${day}`);
+  }
   // 하루선은 KST 자정에 저절로 풀린다 - 사람이 눌러 푸는 경로가 없어야 한다.
   const budgetLib = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
   assert.match(budgetLib, /export async function getClaudeDailySpend[\s\S]*?dayKey\(\)/);

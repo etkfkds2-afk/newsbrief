@@ -41,6 +41,28 @@ const MONTHLY_BUDGET_OVERRIDES = {
   '2026-08': { target: 6_750_000, hard: 7_000_000 }
 };
 
+// 하루치도 특정 **날짜만** 다르게 본다. 월 예외 표와 같은 방식이다 - 이 표에
+// 없는 날은 기본값을 쓰므로, 하루 올리고 되돌리는 것을 잊는 사고가 없다.
+//
+// 2026-08-14: 이날 오전 baduk_now 강제 실행이 하루 상한을 200으로 열어 $0.46을
+// 썼다(설계 $0.15의 세 배). 그 바람에 정작 바둑 요약을 살 돈이 없어 화면이
+// 1건이 됐고, 예산 대기 중인 바둑 기사가 3건 남았다. 그 3건만 마저 사기로 했다
+// (사용자 결정 2026-08-14). calls를 165로 좁게 잡은 이유는 이미 151콜을 썼기
+// 때문이다 - 남는 여유는 14콜, 요약 3~4건어치다. 8/15부터는 표에 없으므로
+// 자동으로 $0.30 / 60콜로 돌아간다. **사람이 되돌릴 일이 없어야 한다.**
+const DAILY_BUDGET_OVERRIDES = {
+  '2026-08-14': { spend: 500_000, calls: 165 }
+};
+
+export function claudeDailyHardLimitMicroUsd(date = new Date()) {
+  return DAILY_BUDGET_OVERRIDES[koreaDayKey(date)]?.spend ?? CLAUDE_DAILY_HARD_LIMIT_MICRO_USD;
+}
+
+// 그날만 열어 둔 호출 상한. 없으면 undefined이고, 부르는 쪽이 기본 상한을 쓴다.
+export function dailyCallCeilingOverride(date = new Date()) {
+  return DAILY_BUDGET_OVERRIDES[koreaDayKey(date)]?.calls;
+}
+
 export function claudeMonthlyTargetMicroUsd(date = new Date()) {
   return MONTHLY_BUDGET_OVERRIDES[monthKey(date)]?.target ?? CLAUDE_MONTHLY_TARGET_MICRO_USD;
 }
@@ -144,7 +166,8 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
   // 하루치 **페이싱**은 관문에서 뺐다(위 dailyAllowanceMicroUsd 주석 참고).
   // 남은 날로 나눈 그 값은 $0.12까지 내려가 낮에 요약을 끊었고, 그래서 표시
   // 전용이 됐다. 여기서 보는 것은 그것이 아니라 움직이지 않는 절대선이다.
-  const overDailyLimit = today >= CLAUDE_DAILY_HARD_LIMIT_MICRO_USD;
+  const dailyLimit = claudeDailyHardLimitMicroUsd();
+  const overDailyLimit = today >= dailyLimit;
   const overMonthly = !(spent < claudeMonthlyTargetMicroUsd()
     && spent + Math.max(0, estimatedMicroUsd) <= claudeMonthlyHardLimitMicroUsd());
   return {
@@ -155,7 +178,7 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
     blockedBy: overMonthly ? 'monthly' : (overDailyLimit ? 'daily' : ''),
     spent,
     today,
-    dailyLimit: CLAUDE_DAILY_HARD_LIMIT_MICRO_USD,
+    dailyLimit,
     allowance
   };
 }

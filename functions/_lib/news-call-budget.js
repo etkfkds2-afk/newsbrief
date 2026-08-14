@@ -12,7 +12,7 @@
 // 새 외부 호출을 추가하면서 계수를 빠뜨리려면 이 파일을 고쳐야 하고, 그러면
 // 눈에 띈다.
 import {
-  blockCloudflareForToday, canUseClaude, koreaDayKey, reserveCloudflareCall
+  blockCloudflareForToday, canUseClaude, dailyCallCeilingOverride, koreaDayKey, reserveCloudflareCall
 } from './news-ai-budget.js';
 
 // Worker 한 번 호출이 쓸 수 있는 외부 요청은 50이다. 44로 잡아 여유를 둔다 -
@@ -121,8 +121,12 @@ export function createCallBudget(env, diagnostics, { forceRetry = false, general
       ]);
       const daily = Number(totalRow?.value || 0);
       const bucketUsed = Number(bucketRow?.value || 0);
+      // 날짜 예외(news-ai-budget.js의 표)는 **사람이 직접 누른 복구 실행에만**
+      // 연다. 정기 실행의 천장까지 같이 올리면 그날 하루가 통째로 헐거워져서,
+      // 오늘 막으려던 폭주를 그대로 다시 허용하게 된다. 표에 없는 날은
+      // undefined라 기본값 그대로이고 되돌릴 것이 없다.
       const totalLimit = forceRetry
-        ? BACKFILL_ANTHROPIC_CALL_LIMIT
+        ? Math.max(BACKFILL_ANTHROPIC_CALL_LIMIT, dailyCallCeilingOverride() ?? 0)
         : (generalBoost ? GENERAL_BOOST_DAILY_CEILING : DAILY_ANTHROPIC_CALL_LIMIT);
       const bucketLimit = forceRetry || bucket === 'baduk'
         ? totalLimit
