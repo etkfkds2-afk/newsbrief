@@ -1009,8 +1009,15 @@ test('자동 수집은 3시간 주기와 watchdog을 사용하고 화면은 10�
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const html = await readFile(new URL('../newsbrief.html', import.meta.url), 'utf8');
   assert.match(workflow, /cron: '17 \*\/3 \* \* \*'/);
-  assert.match(workflow, /cron: '47 \* \* \* \*'/);
+  // 워치독은 3시간마다다. 매시 돌리면 예약만 하루 33회가 되고, 비공개 저장소의
+  // 무료 Actions 분량(월 2,000분)을 월 700분쯤 넘겨 매달 요금이 붙는다 -
+  // 2026-08-14에 실제로 한도에 걸려 수집이 통째로 멈췄다. 흘린 실행은 수집
+  // 90분 뒤에 오는 이 워치독이 메운다.
+  assert.match(workflow, /cron: '47 1-23\/3 \* \* \*'/);
+  assert.doesNotMatch(workflow, /cron: '47 \* \* \* \*'/);
   assert.match(workflow, /automatic_age_hours \/\/ 999\) > 4/);
+  // 건강 점검은 수집 예약에서만 돈다. 예약마다 돌리면 그것만 하루 33회다.
+  assert.match(workflow, /github\.event\.schedule == '17 \*\/3 \* \* \*'/);
   assert.match(html, /setInterval\(\(\)=>load\(\{silent:true\}\),600000\)/);
 });
 

@@ -88,9 +88,16 @@ on:
     # and refresh all news views every three hours; URL keys in D1 make each
     # collection idempotent, so a slower cadence avoids needless requests.
     - cron: '17 */3 * * *'
-    # An hourly watchdog only collects when the last automatic run is over four
-    # hours old. The offset avoids GitHub's busiest top-of-hour scheduler window.
-    - cron: '47 * * * *'
+    # 워치독은 GitHub이 예약 실행을 통째로 흘렸을 때를 위한 안전망이다. 매시
+    # 돌렸더니 하루 24회로 Actions 분량의 대부분을 먹었다 - 비공개 저장소의 무료
+    # 분량은 월 2,000분인데, 예약만 하루 33회라 이번 달에 결국 한도에 걸려
+    # 2026-08-14 03:32부터 모든 실행이 시작조차 못 했다("The job was not started
+    # because ... spending limit"). 그 시각부터 수집이 통째로 멈췄다.
+    #
+    # 수집이 3시간마다(:17)이므로 워치독도 3시간마다 돌리되 90분 뒤로 어긋나게
+    # 둔다. 흘린 실행을 최대 90분 안에 메우므로 안전망 역할은 그대로이고,
+    # 실행 횟수는 24회에서 8회로 줄어든다.
+    - cron: '47 1-23/3 * * *'
     # Classify issue keywords for both categories daily (baduk first, then
     # general - see classify-issues job). Haiku (not Sonnet) keeps this cheap
     # enough to run general daily too instead of only on Sundays.
@@ -209,7 +216,7 @@ jobs:
     needs: deploy
     if: >-
       always() &&
-      ((github.event_name == 'schedule' && (github.event.schedule == '17 */3 * * *' || github.event.schedule == '47 * * * *')) ||
+      ((github.event_name == 'schedule' && (github.event.schedule == '17 */3 * * *' || github.event.schedule == '47 1-23/3 * * *')) ||
        github.event_name == 'workflow_dispatch')
     concurrency:
       group: newsbrief-collector
@@ -228,7 +235,7 @@ jobs:
           run_source=manual
           if [ "$EVENT_NAME" = "schedule" ]; then
             run_source=scheduled
-            if [ "$EVENT_SCHEDULE" = "47 * * * *" ]; then
+            if [ "$EVENT_SCHEDULE" = "47 1-23/3 * * *" ]; then
               run_source=watchdog
               # curl can print one 503 body per retry. jq then emits several
               # booleans, which corrupts GITHUB_OUTPUT on the following line.
@@ -442,7 +449,10 @@ jobs:
 
   health-check:
     needs: [collect-news, classify-issues]
-    if: always() && github.event_name == 'schedule'
+    # 예약이 뜰 때마다 돌리면 하루 33회다. 건강 점검은 수집 직후에 보는 것이
+    # 의미가 있고, 워치독은 어차피 자기 게이트에서 health를 직접 읽는다.
+    # 수집 예약에서만 돌려 하루 8회로 줄인다.
+    if: always() && github.event_name == 'schedule' && github.event.schedule == '17 */3 * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Check NewsBrief production health
