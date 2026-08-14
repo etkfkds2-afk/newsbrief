@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      baduk_now:
+        description: '바둑만 지금 강제로 수집·요약 (하루 호출 상한 무시, 3패스)'
+        required: false
+        default: false
+        type: boolean
       classify_category:
         description: 'Claude로 이슈 키워드 재분류할 카테고리 (비우면 건너뜀)'
         required: false
@@ -297,6 +302,27 @@ jobs:
               -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
               "https://newsbrief-etkfkds2.pages.dev/api/news/collect?source=manual&baduk_only=1"
             sleep 3
+          fi
+          # 바둑만 지금 당장 채워야 할 때 쓰는 손잡이. 하루 호출 상한이 이미 찼는데
+          # 바둑 화면이 비어 있는 상황을 사람이 직접 푸는 용도다(force_retry가 상한을
+          # 200으로 올린다).
+          #
+          # 백필로는 이걸 못 한다. 백필은 "최근 한 달"을 긁는 경로라 가져온 기사가
+          # 며칠~한 달 전 것이고, 24시간 화면에는 원래 안 뜬다. 2026-08-14에 그걸
+          # 모르고 백필을 두 번 돌려 $0.06을 쓰고 바둑은 0건 그대로였다.
+          #
+          # 3패스로 묶어 둔다. 실행당 요약 상한이 있어 최악의 경우에도 예상 지출이
+          # $0.3 안팎이다. 자동 경로(schedule/push)에서는 절대 켜지지 않는다 -
+          # 정기 실행이 이걸 필요로 한다면 그건 몫 배분이 틀린 것이고, 그때 고칠
+          # 곳은 이 버튼이 아니라 BADUK_RESERVED_ANTHROPIC_CALLS다.
+          if [ "${{ inputs.baduk_now }}" = "true" ]; then
+            for i in $(seq 1 3); do
+              curl --fail-with-body --retry 3 --max-time 240 \
+                -X POST \
+                -H "Authorization: Bearer ${NEWSBRIEF_COLLECT_TOKEN}" \
+                "https://newsbrief-etkfkds2.pages.dev/api/news/collect?source=manual&baduk_only=1&force_retry=1"
+              sleep 3
+            done
           fi
           if [ "${{ inputs.backfill }}" = "true" ]; then
             for i in $(seq 1 10); do
