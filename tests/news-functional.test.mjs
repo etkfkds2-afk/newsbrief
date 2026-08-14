@@ -647,7 +647,7 @@ test('검색 루프의 naverSearch 호출은 kakaoSearch처럼 try/catch로 보�
   // try/catch (in onRequestPost) and aborted the whole run before baduk,
   // general, or popularity resolution ever got a single candidate.
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  const loopStart = collector.indexOf('for (const effectiveQuery of effectiveQueries) {');
+  const loopStart = collector.indexOf('for (const [queryIndex, effectiveQuery] of effectiveQueries.entries()) {');
   const loopEnd = collector.indexOf('\n  }\n', loopStart);
   const loopBody = collector.slice(loopStart, loopEnd);
   const naverCallIndex = loopBody.indexOf('await countedNaverSearch(env, effectiveQuery, start, display)');
