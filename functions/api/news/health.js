@@ -171,6 +171,17 @@ export async function onRequestGet({ env }) {
     // 보였다. 따로 세어야 "선택자를 넓혀야 하나"와 "배치가 큰가"를 가를 수 있다.
     let subrequestOverflowFailures = 0;
     let subrequestStoppedCandidates = 0;
+    // 유료 요약을 **사고도 버린** 건수와 그 사유. 이 값이 없어서 오늘 하루를
+    // 통째로 헛돌았다: 2026-08-14 04:31~04:42에 3줄 요약의 "1) 2) 3)"을 원문에
+    // 없는 숫자로 판정해 AI가 써준 요약을 통째로 폐기하고 있었다. 돈은 나가는데
+    // 기사는 0건이었고, 진단에는 그 사실이 어디에도 안 남아서 사람이 기사를 손으로
+    // 받아 코드를 태워 보고서야 찾았다.
+    //
+    // 사는 것과 싣는 것을 나란히 세어 두면 "요약이 나쁘다"와 "검사가 과하다"와
+    // "돈이 없다"가 처음부터 갈린다. 셋은 손댈 곳이 전부 다르다.
+    const summaryRejections = {};
+    let summaryRejected = 0;
+    let summarySkippedNoBudget = 0;
     const badukFailureHosts = {};
     for (const row of recentRuns?.results || []) {
       let diagnostics = null;
@@ -178,6 +189,11 @@ export async function onRequestGet({ env }) {
         diagnostics = JSON.parse(String(row.message || '') || '{}')?.diagnostics;
       } catch { continue; }
       if (!diagnostics) continue;
+      for (const [rule, count] of Object.entries(diagnostics.summary_rejected_by_rule || {})) {
+        summaryRejections[rule] = Number(summaryRejections[rule] || 0) + Number(count || 0);
+        summaryRejected += Number(count || 0);
+      }
+      summarySkippedNoBudget += Number(diagnostics.summary_skipped_no_budget || 0);
       const reason = String(diagnostics.anthropic_exhausted_reason || '');
       // 바둑 후보를 실제로 처리한 실행만 센다. 바둑을 아예 안 돌린 일반 실행이
       // 총량에 걸린 것은 바둑의 굶주림이 아니다.
@@ -342,6 +358,12 @@ export async function onRequestGet({ env }) {
       // 바둑 몫이 막혀 굶은 실행이 하루에 셋 이상이면 몫 배분이 틀어진 것이다.
       // 한두 번은 총량을 다 쓴 바쁜 날일 수 있어 넘긴다.
       baduk_ai_quota_available: badukQuotaBlockedRuns < 3,
+      // 유료 요약을 사놓고 우리 검사가 버리기만 한 날. 예산이 없어 못 산 것
+      // (summarySkippedNoBudget)은 여기 안 들어온다 - 그건 돈 문제지 품질
+      // 문제가 아니다. 2026-08-14에 정확히 이 상태였는데 어느 검사도 묻지
+      // 않았다: 요약을 사고, 버리고, 하루 예산을 세 배 쓰고, 화면은 1건.
+      // 열 건 넘게 버렸는데 실린 것이 하나도 없으면 검사가 과한 것이다.
+      paid_summary_reaches_screen: summaryRejected < 10 || badukPublishedByRuns > 0,
       // 저장은 됐는데 화면까지 못 가는 바둑 기사. 홍보 규칙만이 아니라 SQL 품질
       // 조건과 바둑 관련성 재판정까지 합쳐서 본다. 1건은 진짜 스팸이 요약까지
       // 받았을 여지를 두고 넘기고, 2건부터는 어딘가 과하게 넓다고 본다.
@@ -386,6 +408,10 @@ export async function onRequestGet({ env }) {
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
         date_only_published_time: Number(dateOnlyTime?.count || 0),
+        // 산 요약을 버린 건수와 사유, 그리고 돈이 없어 아예 못 산 건수.
+        summary_rejected_24h: summaryRejected,
+        summary_rejected_by_rule_24h: summaryRejections,
+        summary_skipped_no_budget_24h: summarySkippedNoBudget,
         future_published_time: Number(futureTime?.count || 0),
         // 저장 → 화면 각 단계에 몇 건이 남는지. 줄어드는 자리가 원인 자리다.
         baduk_display_stages: badukDisplayStages,
