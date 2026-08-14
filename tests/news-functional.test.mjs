@@ -1246,7 +1246,7 @@ test('재요약 게이트는 유료 호출만 미루고 본문 재수집은 막�
   // 게이트가 기사를 잃지 않는 근거 전체가 이 순서에 걸려 있다. 본문 재수집이
   // 게이트 뒤로 옮겨가면 "본문이 더 잘 긁혀서 성공하는" 유일한 회복 경로가
   // 같이 막혀, 미룬 기사가 영영 못 살아난다.
-  const fetchAt = path.lastIndexOf('await countedFetchArticle');
+  const fetchAt = path.lastIndexOf('await acquireArticle');
   const gateAt = path.indexOf('const mayResummarize');
   assert.ok(fetchAt >= 0 && gateAt > fetchAt,
     `본문 재수집(${fetchAt})이 게이트(${gateAt})보다 먼저여야 한다`);

@@ -787,6 +787,23 @@ async function collect(env, {
       return article;
     }
   };
+  // 기사 본문을 받아오는 **유일한 입구**. 예전에는 같은 절차가 네 군데에 각각
+  // 적혀 있었고, 그중 미러 복구가 붙은 곳은 두 군데뿐이었다. 그래서 정작 막히는
+  // 매체의 기사가 대부분 지나가는 경로에는 복구가 없었고, 복구는 배포하고도
+  // 한 번도 발동하지 않았다(2026-08-14 실측 portal_mirror_recovered 0).
+  //
+  // 절차는 셋이다:
+  //   1) 읽기 좋은 주소(포털 미러가 있으면 그쪽)를 먼저 부른다
+  //   2) 본문이 짧으면 원주소로 한 번 더 부른다
+  //   3) 그래도 짧고 그 이유가 매체 차단이면 제목으로 미러를 찾아 거기서 읽는다
+  // 새 호출 자리를 만들 때 이 함수를 쓰면 세 절차가 저절로 따라온다.
+  const acquireArticle = async (url, link, title) => {
+    const fetchUrl = readableArticleUrl(url, link || '');
+    let article = await countedFetchArticle(fetchUrl);
+    if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
+    article = await recoverViaPortalMirror(article, title, fetchUrl, url);
+    return { article, fetchUrl };
+  };
   const processCandidate = async ({ category, item, source, isPopular = false, urlKey: knownUrlKey = '' }) => {
     const outcome = reason => {
       diagnostics.candidate_outcomes ||= {};
@@ -846,9 +863,7 @@ async function collect(env, {
           await env.DB.prepare('UPDATE news_articles SET published_at=? WHERE id=?').bind(publishedAt, exists.id).run();
         }
         if (!exists.image_url || hasSyntheticTime || hasDateOnly || hasMissingTime || hasGenericImage) {
-          const fetchUrl = readableArticleUrl(url, item.link || '');
-          let article = await countedFetchArticle(fetchUrl);
-          if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
+          const { article } = await acquireArticle(url, item.link, title);
           await env.DB.prepare(`UPDATE news_articles SET
             category=CASE WHEN ?<>'' THEN ? ELSE category END,
             press=CASE WHEN ?<>'' THEN ? ELSE press END,
@@ -862,12 +877,7 @@ async function collect(env, {
         }
         return outcome('existing_full');
       }
-      const fetchUrl = readableArticleUrl(url, item.link || '');
-      let article = await countedFetchArticle(fetchUrl);
-      if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
-      // 막는 매체의 기사는 대부분 여기로 온다(이미 DB에 있으므로). 새 기사 경로에만
-      // 복구를 걸었더니 한 번도 발동하지 않았다 - 2026-08-14 실측.
-      article = await recoverViaPortalMirror(article, title, fetchUrl, url);
+      const { article } = await acquireArticle(url, item.link, title);
         // 이 경로에는 시도 횟수도 간격도 없어서, 후보에 다시 잡히기만 하면
         // 실행마다 유료 요약을 새로 불렀다. 8/9 07:20 정기 실행의 유료 호출
         // 5건이 전부 여기였고(실패 4 + 성공 1) 신규 기사 몫은 0이었다. 하루
@@ -930,10 +940,7 @@ async function collect(env, {
     }
 
     const rawSummary = stripHtml(item.description);
-    const fetchUrl = readableArticleUrl(url, item.link || '');
-    let article = await countedFetchArticle(fetchUrl);
-    if (article.body.length < 300 && fetchUrl !== url) article = await countedFetchArticle(url);
-    article = await recoverViaPortalMirror(article, title, fetchUrl, url);
+    const { article, fetchUrl } = await acquireArticle(url, item.link, title);
     const body = article.body;
     const resolvedPublishedAt = article.publishedAt || publishedAt;
     const resolvedPress = article.press || press;
