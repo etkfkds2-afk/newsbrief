@@ -550,7 +550,7 @@ async function collect(env, {
             BADUK_SEARCHES[(slot * (backfill ? 3 : 1) + index) % BADUK_SEARCHES.length])
         ])]
       : [query];
-    for (const [queryIndex, effectiveQuery] of effectiveQueries.entries()) {
+    for (const effectiveQuery of effectiveQueries) {
       const pageBand = backfill ? Math.floor(slot / Math.ceil(BADUK_SEARCHES.length / 4)) % 5 : 0;
       const start = category === '바둑' ? pageBand * 20 + 1 : (backfill ? backfillStart : 1);
       const display = category === '바둑' ? 20 : (backfill ? 10 : 4);
@@ -562,22 +562,6 @@ async function collect(env, {
       let items = [];
       try {
         items = await countedNaverSearch(env, effectiveQuery, start, display);
-        // 바둑은 한 페이지 더 본다. 최신 20건만 보면 그 대부분이 이미 아는
-        // 기사라 새 후보가 거의 안 남는다 - 2026-08-14 실측: 고유 후보 47건 중
-        // 새 것이 1건이었고, 소스(구글뉴스)에 24시간 안 바둑 기사가 5건 있는데
-        // 화면에는 1건이었다. 14~21시간 전 기사가 최신 20건 밖으로 밀려난 것이다.
-        //
-        // 드는 값은 검색 1회다. 같은 실행이 예산 44 중 9만 쓰고 있었으므로
-        // 여유는 충분하다. 처리량은 아래 슬롯 상한이 그대로 묶으므로 늘어나는
-        // 것은 처리량이 아니라 그 칸에 들어올 후보의 다양성이다.
-        // 넓은 '바둑' 질의(첫 번째)에만 건다. 회전 전문 검색어는 결과 자체가
-        // 적어서 두 번째 장이 곧바로 30일 밖으로 넘어간다 - 2026-08-14 실측:
-        // 전부 걸었더니 후보는 1건에서 35건으로 늘었는데 그중 17~18건이
-        // too_old였다. 슬롯만 먹고 아무것도 못 한다.
-        if (queryIndex === 0 && category === '바둑' && !backfill && budget.remaining() > 12) {
-          const older = await countedNaverSearch(env, effectiveQuery, start + display, display);
-          items = [...items, ...older];
-        }
       } catch (error) {
         diagnostics.naver_error = String(error?.message || error).slice(0, 120);
       }
@@ -587,7 +571,12 @@ async function collect(env, {
       // 들지 않는다. 후보가 늘어도 처리량은 아래 20슬롯 상한이 그대로 묶으므로
       // 늘어나는 것은 처리량이 아니라 그 20칸에 들어올 후보의 다양성이다.
       // 2026-08-11 실측: 20칸 중 8칸이 이미 아는 기사(existing_*)에 돌아갔다.
-      const naverTake = category === '바둑' ? (backfill ? 6 : 40) : (backfill ? 2 : 2);
+      // 두 번째 장은 쓰지 않는다. 2026-08-14에 넣어 봤더니 새 후보가 1건에서
+      // 20건으로 늘었는데 그중 18건이 too_old였다 - 네이버 뉴스 검색은 '바둑'
+      // 같은 낱말에도 최근 결과 자체가 20건 남짓이라, 그 뒤는 곧바로 30일 밖으로
+      // 넘어간다. 슬롯만 먹고 아무것도 못 한다. 후보를 넓히려면 페이지가 아니라
+      // 소스를 늘려야 한다(카카오·구글·한국기원은 이미 각각 부르고 있다).
+      const naverTake = category === '바둑' ? (backfill ? 6 : 20) : (backfill ? 2 : 2);
       for (const item of items.slice(0, naverTake)) candidates.push({ category, item, source: 'NAVER' });
       try {
         const page = category === '바둑' ? pageBand + 1 : (backfill ? (slot % 10) * 5 + 1 : 1);

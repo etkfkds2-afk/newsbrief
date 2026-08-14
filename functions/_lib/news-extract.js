@@ -298,6 +298,12 @@ export async function fetchArticleText(url) {
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:published_time|og:article:published_time)["']/i)?.[1]
       || html.match(/["']datePublished["']\s*:\s*["']([^"']+)/i)?.[1]
       || html.match(/data-date-time=["']([^"']+)/i)?.[1]
+      // 다음(v.daum.net)은 발행시각을 메타태그에도 화면에도 안 넣는다. 페이지
+      // 스크립트 안에 reg_dt:"2026-08-14 10:48:11" 로만 들어 있다 - 2026-08-14
+      // 실측. 그래서 다음 미러로 들어온 기사만 시각이 비어 fetched_at으로
+      // 물러섰고, 목록에서 어떤 기사는 시각이 찍히고 어떤 기사는 안 찍히는
+      // 상태가 됐다. 바둑은 다음 미러 비중이 커서 눈에 더 띈다.
+      || html.match(/reg_dt\s*:\s*["']([^"']+)["']/i)?.[1]
       // 위 지역지 CMS는 메타태그에 시각을 안 넣고 화면에만 "승인 2026.08.11"로
       // 적는다(2026-08-12 실측 paxetv). 그러면 발행시각이 비어 fetched_at으로
       // 물러서는데, 며칠 지난 기사가 수집일로 찍혀 목록 위쪽에 섞인다.
