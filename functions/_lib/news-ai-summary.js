@@ -14,7 +14,7 @@ function numbers(value) {
 //    자리를 지켰다."            (원문 숫자: 11일 6 9 14일 8월 1 80 - 2와 3이 없다)
 //   "1) GS칼텍스배 프로기전에서 김정현 9단이 신민준 9단을 꺾고 4강에 진출했다."
 // 전부 정확한 요약인데 줄 번호 때문에 죽었다. 그날 24시간 바둑 화면이 0건이었다.
-function numbersGrounded(summary, source) {
+export function numbersGrounded(summary, source) {
   const allowed = numbers(source);
   const body = String(summary || '').split('\n').map(stripNumbering).join('\n');
   return [...numbers(body)].every(value => allowed.has(value));
