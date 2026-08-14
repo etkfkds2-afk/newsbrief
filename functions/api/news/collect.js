@@ -348,7 +348,11 @@ async function collect(env, {
   const countedArchivedTop = counted(collectArchivedTop, 3);
   const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
     const trace = detail || {};
-    subrequestsUsed += 1;
+    // 요약 한 번이 외부 요청 한 번이 아니다. Anthropic이 실패하면 Cloudflare AI로
+    // 한 번 더 나간다. 1로 세다가 실제로는 2가 나가서, 예산을 센 뒤에도 한도를
+    // 넘긴 실행이 남았다(2026-08-14 실측: subrequest_overflow_failures 2건).
+    // 적게 세는 쪽이 더 나쁘다 - 넘기면 후보가 죽고 그게 매체 탓으로 기록된다.
+    subrequestsUsed += 2;
     // 어느 몫에서 돈을 빼는지. payload.category가 비면 일반으로 본다 - 바둑 몫을
     // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
     const bucket = publicationBucket(payload.category);
@@ -917,10 +921,10 @@ async function collect(env, {
         = Number(diagnostics.candidate_outcomes_by_category[bucket][reason] || 0) + 1;
       return 0;
     };
-    // 후보 하나가 최악의 경우 쓰는 양: 본문 2회 + 요약 1회. 그만큼 안 남았으면
+    // 후보 하나가 최악의 경우 쓰는 양: 본문 2회 + 요약 2회. 그만큼 안 남았으면
     // 시작하지 않는다. 도중에 한도를 넘으면 그 후보는 error_로 죽으면서 멀쩡한
     // 매체의 실패로 기록되는데, 그건 진단을 오염시키고 예전에는 격리까지 불렀다.
-    if (subrequestsLeft() < 3) {
+    if (subrequestsLeft() < 4) {
       diagnostics.subrequest_budget_stopped = Number(diagnostics.subrequest_budget_stopped || 0) + 1;
       return outcome('subrequest_budget');
     }
@@ -1263,6 +1267,8 @@ async function collect(env, {
   // 아니면 일반 몫에서 뺀다 - 바둑 예약분이 일반 실행의 판정 비용에 쓰이지 않게.
   if (dedupTargets.length && recentStoryTitles.length && env.ANTHROPIC_API_KEY
     && await reserveAnthropicCall(env, diagnostics, forceRetry, generalBoost, badukOnly ? 'baduk' : 'general')) {
+    // 이 판정도 외부 요청이다. 계수기를 안 지나고 있었다.
+    subrequestsUsed += 1;
     const judged = await findDuplicateStories(env,
       dedupTargets.map(candidate => ({ title: cleanTitle(candidate.item?.title || '') })), recentStoryTitles);
     for (const [index, sameTitle] of judged.duplicates) {
