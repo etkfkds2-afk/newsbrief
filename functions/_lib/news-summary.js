@@ -51,6 +51,15 @@ export function normalizeText(value) {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s+([,.;:!?])/g, '$1')
     .replace(/([가-힣])\s+([은는이가을를와과의에도만])(?=\s|[,.;:!?]|$)/gu, '$1$2')
+    // 여러 글자 조사도 붙인다. 본문에서 태그를 지울 때 그 자리에 공백이 들어가면
+    // "인간 바둑<b>에서도</b>"가 "인간 바둑 에서도"가 된다. 위 한 글자 규칙만
+    // 있어서 이런 것이 그대로 화면까지 갔다 - 2026-08-14 실측: 신진서 기사의
+    // 3줄 요약 첫 줄이 "그가 인간 바둑 에서도 전대미문의 역사를…"이었고, 원문은
+    // "바둑에서도"로 멀쩡히 붙어 있었다. 우리가 만든 흠이다.
+    //
+    // 여기 넣는 것은 홀로 설 수 없는 조사뿐이다. 낱말로도 쓰이는 말(이·그·도·만)은
+    // 위 규칙이 이미 앞뒤 문맥을 보고 처리하므로 건드리지 않는다.
+    .replace(/([가-힣])\s+(에서도|에서는|에서만|에서|에게서|에게도|에게|에는|이라고|이라는|라고는|으로서|으로써|으로는|으로도|로서|로써|까지도|까지는|까지|부터는|부터|처럼|만큼|조차|마저)(?=\s|[,.;:!?]|$)/gu, '$1$2')
     .replace(/\s+(['’”])(?=[은는이가을를와과의에도로](?:\s|[.,]))/gu, '$1')
     .replace(/([가-힣])\s+([’”])/gu, '$1$2')
     .replace(/([가-힣]+(?:초등|중|고등))\s+학교/gu, '$1학교')
@@ -306,9 +315,28 @@ export function reorderGeneralSummary(summary, title = '') {
 // 이 함수가 유일한 기준이다. 새로 실을 때와 계속 실어 둘 때가 같은 것을 물으면,
 // 기준을 한 번 올리는 것만으로 옛 행까지 자동으로 정리된다.
 export function publishableSummary(summary, title, category) {
-  return validateThreeLineSummary(summary, title)
-    && summaryMentionsTitle(summary, title)
-    && (category === '바둑' || validateGeneralEditorialSummary(summary, title));
+  return !summaryRejectionReason(summary, title, category);
+}
+
+// 왜 떨어졌는지를 이름으로 돌려준다. 통과하면 빈 문자열이다.
+//
+// "안 나온 건 기록에 남긴다"가 요구사항이고, 그게 없으면 화면이 빌 때마다 사람이
+// 기사를 손으로 받아 코드를 태워 봐야 원인을 안다(2026-08-14에 실제로 그랬다).
+// 검사를 너무 조인 것과 요약이 진짜 나쁜 것은 대응이 정반대인데, 이 이름 하나가
+// 그 둘을 가른다.
+export function summaryRejectionReason(summary, title, category) {
+  const text = normalizeText(summary || '');
+  if (!text) return 'empty';
+  const lines = text.split('\n').map(stripNumbering).filter(Boolean);
+  if (lines.length !== 3) return `not_three_lines_${lines.length}`;
+  if (isRejectedTitle(title)) return 'rejected_title';
+  if (DEPENDENT_FIRST_LINE.test(lines[0])) return 'dependent_first_line';
+  const detached = lines.find(line => DETACHED_PARTICLE.test(line));
+  if (detached) return 'detached_particle';
+  if (!validateThreeLineSummary(summary, title)) return 'three_line_checks';
+  if (!summaryMentionsTitle(summary, title)) return 'title_not_mentioned';
+  if (category !== '바둑' && !validateGeneralEditorialSummary(summary, title)) return 'general_editorial';
+  return '';
 }
 
 export function validateGeneralEditorialSummary(summary, title = '') {

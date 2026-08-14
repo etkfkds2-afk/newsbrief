@@ -1,5 +1,5 @@
 import {
-  isRejectedTitle, normalizeText, publishableSummary, reorderGeneralSummary,
+  isRejectedTitle, normalizeText, publishableSummary, reorderGeneralSummary, summaryRejectionReason,
   validateGeneralEditorialSummary, validateThreeLineSummary
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
@@ -118,6 +118,22 @@ const LOCAL_GENERAL_PRESS = /(?:충청|대전|세종|청주|충북|충남|전북
 // 들고 있으면 사후 복구(news-repairs.js)와 어긋나고, 어긋나는 순간 "새로는 안
 // 실리는데 이미 실린 것은 안 내려가는" 상태가 된다.
 const validPublishedSummary = publishableSummary;
+
+// 요약이 왜 화면에 못 갔는지를 진단에 남긴다. "안 나온 건 기록에 남긴다"가
+// 요구사항이고, 없으면 화면이 빌 때마다 사람이 기사를 손으로 받아 코드를
+// 태워 봐야 원인을 안다(2026-08-14에 실제로 그랬다).
+const recordSummaryRejection = (diagnostics, summary, title, category) => {
+  const reason = summaryRejectionReason(summary, title, category);
+  if (!reason) return true;
+  diagnostics.summary_rejected_by_rule ||= {};
+  diagnostics.summary_rejected_by_rule[reason]
+    = Number(diagnostics.summary_rejected_by_rule[reason] || 0) + 1;
+  diagnostics.summary_rejected_samples ||= [];
+  if (diagnostics.summary_rejected_samples.length < 5) {
+    diagnostics.summary_rejected_samples.push(`${reason}|${String(title).slice(0, 34)}`);
+  }
+  return false;
+};
 
 async function reserveAiCall(env, diagnostics) {
   const reservation = await reserveCloudflareCall(env);
@@ -357,13 +373,19 @@ async function collect(env, {
     // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
     const bucket = publicationBucket(payload.category);
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
-    // freeOnly: 이미 같은 이야기를 요약해 둔 기사다. 카드로 세워질 일이 없으므로
-    // 무료 추출 요약이면 충분하다. 호출부는 이 결과가 검증을 통과하지 못하면
-    // 유료 경로로 다시 부른다 - 중복 판정이 틀렸더라도 기사를 잃지 않기 위해서다.
-    if (freeOnly || sourceLength < 300) {
+    // freeOnly: 이미 같은 이야기를 요약해 둔 기사다. 카드로 세워질 일이 없고
+    // 화면에서는 제목·언론사·링크만 쓰므로 무료 추출 요약이면 충분하다.
+    // **여기가 추출식 요약이 허용되는 유일한 자리다** - 아래 주석 참고.
+    if (freeOnly) {
       const extractive = await makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
       if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
       return extractive;
+    }
+    // 본문이 짧아도 AI에게 보낸다. 예전에는 300자 미만이면 추출식으로 돌렸는데,
+    // 짧은 기사일수록 오려 붙인 문장이 더 이상해진다.
+    if (sourceLength < 120) {
+      diagnostics.summary_body_too_short = Number(diagnostics.summary_body_too_short || 0) + 1;
+      return '';
     }
 
     let cloudflareReserved = Boolean(env.AI);
@@ -403,12 +425,21 @@ async function collect(env, {
       if (!summary) summary = anthropicSummary;
     }
 
-    const extractive = summary || await makeBestSummary({
-      AI: undefined,
-      ANTHROPIC_API_KEY: undefined
-    }, payload, trace);
-    if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
-    return extractive;
+    // AI가 못 만들었으면 아무것도 내지 않는다.
+    //
+    // 예전에는 여기서 추출식 요약(본문 문장을 그대로 오려 붙이는 방식)으로
+    // 물러섰다. 그게 화면의 이상한 요약을 만드는 정체였다 - 2026-08-14 실측:
+    //   "1) 그가 인간 바둑에서도 전대미문의 역사를 써 내려가고 있다."
+    // 앞 문장이 없는데 '그가'로 시작한다. 본문에서는 바로 앞 문장이 신진서를
+    // 소개하고 있어 말이 되지만, 그 문장만 떼어 첫 줄에 놓으면 읽는 사람은
+    // 누구 얘기인지 알 수 없다. 문장을 고르는 방식으로는 이 문제를 못 고친다 -
+    // 요약은 문장을 고르는 일이 아니라 다시 쓰는 일이기 때문이다.
+    //
+    // 빈 값을 돌려주면 호출부가 summary_quality를 'full'로 올리지 않으므로
+    // 기사는 저장만 되고 화면에 안 나온다. 다음 실행이 AI로 다시 시도한다.
+    if (summary) return summary;
+    diagnostics.ai_summary_unavailable = Number(diagnostics.ai_summary_unavailable || 0) + 1;
+    return '';
   };
   // 본문을 못 주는 매체를 스스로 기억하고 스스로 풀어준다.
   //
@@ -1051,7 +1082,7 @@ async function collect(env, {
         const repaired = mayResummarize
           ? await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry')
           : '';
-        const valid = validPublishedSummary(repaired, title, exists.category || category);
+        const valid = recordSummaryRejection(diagnostics, repaired, title, exists.category || category);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
           category=CASE WHEN ?<>'' THEN ? ELSE category END,
@@ -1151,7 +1182,7 @@ async function collect(env, {
         && diagnostics.story_duplicate_samples.push(`${title.slice(0, 28)} <- ${duplicateOf.slice(0, 28)}`);
     } else {
       summary = await summarize(payload);
-      validSummary = validPublishedSummary(summary, title, finalCategory);
+      validSummary = recordSummaryRejection(diagnostics, summary, title, finalCategory);
       // 같은 실행에 같은 보도자료가 몰려 들어와도 첫 건만 요약을 받게 한다.
       if (validSummary && dayStories) {
         dayStories.add(title);
