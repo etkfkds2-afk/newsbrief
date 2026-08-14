@@ -1025,12 +1025,21 @@ test('일일 이슈 분류는 남은 Workers AI를 사용하고 Claude로 fallba
   assert.match(classifier, /classifyWithAnthropic/);
 });
 
-test('일반 뉴스는 AI 실패 시 검증된 추출식 요약을 사용하고 기타 이슈를 마지막에 표시한다', async () => {
+test('3줄 요약은 예외 없이 AI가 만들고, 못 만들면 아무것도 내지 않는다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const articles = await readFile(new URL('../functions/api/news/articles.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(collector, /if \(payload\.category !== '바둑'\) return ''/);
-  assert.match(collector, /diagnostics\.extractive_fallback_used/);
-  assert.match(collector, /AI: undefined,\s+ANTHROPIC_API_KEY: undefined/);
+  // 예전에는 AI가 실패하면 본문 문장을 오려 붙이는 추출식 요약으로 물러섰다.
+  // 그게 화면의 이상한 요약을 만들던 정체다 - 2026-08-14 실측:
+  //   "1) 그가 인간 바둑에서도 전대미문의 역사를 써 내려가고 있다."
+  // 앞 문장이 없는데 '그가'로 시작한다. 문장을 고르는 방식으로는 못 고친다.
+  // 요약은 문장을 고르는 일이 아니라 다시 쓰는 일이기 때문이다.
+  //
+  // 더 나쁜 것은 이 폴백이 진짜 원인을 가렸다는 점이다. AI 요약을 우리가
+  // 잘못 버리고 있었는데(줄 번호를 기사 숫자로 셌다) 화면에는 늘 뭔가 떠
+  // 있어서 아무도 몰랐다. 폴백을 걷어낸 뒤에야 빈 화면으로 드러났다.
+  assert.doesNotMatch(collector, /extractive_fallback_used/);
+  assert.doesNotMatch(collector, /AI: undefined,\s+ANTHROPIC_API_KEY: undefined/);
+  assert.match(collector, /ai_summary_unavailable/);
   assert.match(articles, /validateGeneralEditorialSummary/);
   assert.doesNotMatch(articles, /group\.key !== '일반\|ai:misc'/);
   assert.match(articles, /return \[\.\.\.rest\.slice\(0, capCount\), \.\.\.misc\]/);

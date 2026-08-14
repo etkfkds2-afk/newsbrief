@@ -7,7 +7,8 @@ import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
 import { recordClaudeUsage } from '../../_lib/news-ai-budget.js';
-import { createCallBudget, SUBREQUESTS_PER_CANDIDATE } from '../../_lib/news-call-budget.js';
+import { createCallBudget } from '../../_lib/news-call-budget.js';
+import { loadHostHealth } from '../../_lib/news-host-health.js';
 import { createStoryIndex, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
 import { isBadukRelevant } from '../../_lib/baduk-relevance.js';
@@ -229,24 +230,19 @@ async function collect(env, {
   const countedGoogleNews = budget.counted(googleNewsSearch, 2);
   const countedPopularity = budget.counted(collectPopularity, 3);
   const countedArchivedTop = budget.counted(collectArchivedTop, 3);
-  const summarize = async (payload, detail, purpose = 'new', { freeOnly = false } = {}) => {
+  // 3줄 요약은 예외 없이 AI가 만든다. 본문 문장을 오려 붙이는 추출식 요약은
+  // 이 경로에 없다 - 그게 화면의 이상한 요약("그가 인간 바둑에서도 …")을 만들던
+  // 정체였다. AI가 못 만들면 빈 값을 돌려주고 기사는 저장만 된다.
+  //
+  // 외부 요청은 실제로 나가기 직전에 하나씩 센다. 미리 두 개를 깎아 두면,
+  // 한 번만 부르고 끝난 실행에서도 예산이 잘못 줄어 뒤따르는 후보가 까닭 없이
+  // 잘린다 - 고치려던 것보다 나쁜 결과다.
+  const summarize = async (payload, detail, purpose = 'new') => {
     const trace = detail || {};
-    // 요약 한 번이 외부 요청 한 번이 아니다. Anthropic이 실패하면 Cloudflare AI로
-    // 한 번 더 나간다. 적게 세는 쪽이 더 나쁘다 - 넘기면 후보가 죽고 그게 매체
-    // 탓으로 기록된다.
-    budget.spend(2);
     // 어느 몫에서 돈을 빼는지. payload.category가 비면 일반으로 본다 - 바둑 몫을
     // 실수로 쓰는 쪽보다 안 쓰는 쪽이 안전하다.
     const bucket = publicationBucket(payload.category);
     const sourceLength = normalizeText(payload.body || payload.rawSummary).length;
-    // freeOnly: 이미 같은 이야기를 요약해 둔 기사다. 카드로 세워질 일이 없고
-    // 화면에서는 제목·언론사·링크만 쓰므로 무료 추출 요약이면 충분하다.
-    // **여기가 추출식 요약이 허용되는 유일한 자리다** - 아래 주석 참고.
-    if (freeOnly) {
-      const extractive = await makeBestSummary({ AI: undefined, ANTHROPIC_API_KEY: undefined }, payload, trace);
-      if (extractive) diagnostics.extractive_fallback_used = Number(diagnostics.extractive_fallback_used || 0) + 1;
-      return extractive;
-    }
     // 본문이 짧아도 AI에게 보낸다. 예전에는 300자 미만이면 추출식으로 돌렸는데,
     // 짧은 기사일수록 오려 붙인 문장이 더 이상해진다.
     if (sourceLength < 120) {
@@ -259,6 +255,7 @@ async function collect(env, {
 
     let summary = '';
     if (cloudflareReserved) {
+      budget.spend(1);
       summary = await makeBestSummary({ ...env, ANTHROPIC_API_KEY: undefined, NEWSBRIEF_USE_ANTHROPIC: '0' }, payload, trace);
       const cloudflareValid = trace.ai_provider === 'cloudflare'
         && trace.structurally_valid && trace.numbers_grounded;
@@ -270,6 +267,7 @@ async function collect(env, {
 
     if (env.ANTHROPIC_API_KEY && await budget.reserveAnthropic(bucket)) {
       const anthropicTrace = {};
+      budget.spend(1);
       const anthropicSummary = await makeBestSummary({
         ...env,
         AI: undefined,
@@ -319,80 +317,10 @@ async function collect(env, {
     diagnostics.ai_summary_unavailable = Number(diagnostics.ai_summary_unavailable || 0) + 1;
     return '';
   };
-  // 본문을 못 주는 매체를 스스로 기억하고 스스로 풀어준다.
-  //
-  // 사람이 차단 목록을 손으로 관리하면, 새로 막힌 매체가 생길 때마다 누군가
-  // 진단을 읽고 목록에 적어야 한다. 그 사이 그 매체는 매 실행 슬롯과
-  // subrequest를 가져간다(2026-08-12 실측: 바둑 20칸 중 6칸이 body_too_short).
-  //
-  // 연속 실패가 기준을 넘으면 하루 동안 후보에서 뺀다. 하루가 지나면 자동으로
-  // 한 번 다시 시도하고, 그때 성공하면 기록이 지워진다. 매체가 차단을 풀거나
-  // 페이지 구조를 바꾸면 사람이 아무것도 안 해도 돌아온다.
-  //
-  // 핵심 소스는 격리하지 않는다. 한국기원이 잠깐 흔들렸다고 바둑의 원천을
-  // 하루 동안 끊으면, 고치려던 것보다 큰 구멍이 난다.
-  //
-  // 다만 예외는 **본문을 실제로 주는 뉴스 호스트**로 좁힌다. naver.com 전체를
-  // 열어 두면 entertain.naver.com처럼 JS로만 그리는 페이지가 영원히 재시도된다
-  // (2026-08-12 실측: 홈·랭킹·기사 모두 2KB 껍데기, 매 실행 selector_miss 2건).
-  // 격리 예외는 "믿는 곳"이 아니라 "본문이 오는 곳"이어야 한다.
-  const QUARANTINE_FAIL_THRESHOLD = 5;
-  const QUARANTINE_HOURS = 24;
-  const NEVER_QUARANTINE = /(?:^|\.)(?:baduk\.or\.kr|news\.naver\.com|v\.daum\.net|news\.daum\.net)$/i;
-  // 판정 규칙을 바꾸면 옛 규칙으로 쌓인 장부는 버린다. 규칙만 고치고 장부를
-  // 두면, 이제는 격리하지 않기로 한 사유로 이미 5회가 쌓인 매체가 그대로 갇혀
-  // 있다 - 고쳤는데 아무것도 안 달라지는 상태가 24시간 이어진다. 이 값을 올리는
-  // 것이 곧 "옛 판정으로 갇힌 곳을 전부 풀어준다"는 뜻이다.
-  const QUARANTINE_RULE_VERSION = '2';
-  const hostHealthRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='article_host_health'").first();
-  let hostHealth = {};
-  try { hostHealth = JSON.parse(String(hostHealthRow?.value || '{}')) || {}; } catch { hostHealth = {}; }
-  let hostHealthChanged = false;
-  if (String(hostHealth.__rule || '') !== QUARANTINE_RULE_VERSION) {
-    diagnostics.host_quarantine_reset = Object.keys(hostHealth).filter(key => key !== '__rule').length;
-    hostHealth = { __rule: QUARANTINE_RULE_VERSION };
-    hostHealthChanged = true;
-  }
-  const candidateHost = value => {
-    try { return new URL(value).hostname.toLowerCase(); } catch { return ''; }
-  };
-  const quarantinedHost = value => {
-    const host = candidateHost(value);
-    if (!host || NEVER_QUARANTINE.test(host)) return false;
-    const record = hostHealth[host];
-    if (!record || Number(record.fail || 0) < QUARANTINE_FAIL_THRESHOLD) return false;
-    const lastAttempt = Date.parse(String(record.at || '')) || 0;
-    // 하루가 지나면 한 번 통과시켜 본다(탐침). 실패하면 at이 갱신돼 또 하루 쉰다.
-    return Date.now() - lastAttempt < QUARANTINE_HOURS * 3600000;
-  };
-  // 매체 탓인 실패만 장부에 적는다. 본문 실패는 원인이 뒤섞여 들어온다 - 우리가
-  // 그 실행의 subrequest를 다 써서 못 가져온 것(error_...)도, 그 기사 한 건이
-  // 지워진 것(http_404·dead_page)도 같은 자리로 떨어진다. 그것까지 세면 우리
-  // 쪽 사정으로 멀쩡한 매체가 24시간 차단되고, 바둑처럼 매체 수가 적은 쪽은
-  // 그대로 기사가 끊긴다. 고치려던 것보다 큰 고장을 만드는 길이다.
-  //
-  // 그래서 "몇 번을 다시 불러도 결과가 같은" 것만 센다: 차단(403·429), 서버가
-  // 계속 죽어 있는 것(5xx), HTML이 아닌 것.
-  //
-  // selector_miss는 뺀다. 그건 매체가 우리를 막은 게 아니라 **우리가 그 CMS의
-  // 본문 자리를 모르는 것**이고, 고칠 수 있는 유일한 종류다. 격리해 버리면 두
-  // 가지를 동시에 잃는다: 그 매체의 기사 전부, 그리고 body_too_short_hosts에서
-  // 사라져 무엇을 고쳐야 하는지 알 단서까지. 2026-08-14 실측: 하루 만에 8개
-  // 호스트가 격리됐고(gamefocus·game.donga는 selector_miss만으로) 그 사이 24시간
-  // 바둑 발행이 0건이 됐다. 선택자를 넓히는 일은 사람이 해야 하므로, 계속 눈에
-  // 띄게 두는 편이 맞다 - 조용히 감추면 영영 안 고친다.
-  const HOST_ATTRIBUTABLE_FAILURE = /^(?:non_html|http_(?:403|429|5\d\d))$/;
-  const recordHostResult = (value, ok, fetchStatus = '') => {
-    const host = candidateHost(value);
-    if (!host || NEVER_QUARANTINE.test(host)) return;
-    if (ok) {
-      if (hostHealth[host]) { delete hostHealth[host]; hostHealthChanged = true; }
-      return;
-    }
-    if (!HOST_ATTRIBUTABLE_FAILURE.test(String(fetchStatus || ''))) return;
-    hostHealth[host] = { fail: Number(hostHealth[host]?.fail || 0) + 1, at: new Date().toISOString() };
-    hostHealthChanged = true;
-  };
+  // 본문을 못 주는 매체를 스스로 기억하고 스스로 풀어주는 장부. 판정 경계와 그
+  // 근거는 news-host-health.js에 있다 - 잘못 잡으면 바둑 기사가 통째로 사라지는
+  // 쪽이라 경계 셋이 전부 "덜 가두는" 방향으로 맞춰져 있다.
+  const hostHealth = await loadHostHealth(env, diagnostics);
   // 미래로 저장된 발행시각은 매 실행이 스스로 무력화한다. 시각을 잘못 읽는 고장은
   // 목록이 발행시각 내림차순이라 그 기사가 맨 위에 박혀 그날 기사를 통째로 가린다.
   //
@@ -1030,12 +958,12 @@ async function collect(env, {
       // 장부는 기사 원주소(url)로 적는다. 실제로 받으러 간 주소(fetchUrl)는 네이버
       // 미러일 수 있는데, 후보를 거를 때 보는 것은 원주소다. 둘을 섞어 적으면
       // 장부의 열쇠와 거르는 열쇠가 달라 격리가 영영 발동하지 않는다.
-      recordHostResult(url, false, article.fetchStatus);
+      hostHealth.record(url, false, article.fetchStatus);
       return outcome('body_too_short');
     }
     // 본문을 제대로 받아왔다. 이전 실패 기록이 있으면 지운다 - 매체가 차단을
     // 풀거나 구조를 되돌리면 사람 손 없이 바로 복귀해야 한다.
-    recordHostResult(url, true);
+    hostHealth.record(url, true);
     const finalCategory = category === '바둑'
       ? classify(category, title, body || rawSummary)
       : (article.sectionCategory || classify(category, title, body || rawSummary));
@@ -1117,7 +1045,7 @@ async function collect(env, {
     // 바둑이 0건이 됐다. 실제로 받으러 갈 주소(readableArticleUrl)가 격리 대상이
     // 아니면 통과시킨다. 이 값이 곧 fetchArticleText가 먼저 부르는 주소다.
     const fetchTarget = readableArticleUrl(key, candidate.item?.link || '');
-    if (quarantinedHost(fetchTarget) && quarantinedHost(key)) { quarantineSkipped += 1; continue; }
+    if (hostHealth.isQuarantined(fetchTarget) && hostHealth.isQuarantined(key)) { quarantineSkipped += 1; continue; }
     uniqueCandidates.push({ ...candidate, urlKey: await sha256(key) });
   }
   // 버린 건수는 남긴다. 안 남기면 후보가 왜 적은지 진단에서 사라진다.
@@ -1251,22 +1179,8 @@ async function collect(env, {
   for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
   // 격리 장부는 실행당 한 번만 쓴다. 후보마다 쓰면 D1 쓰기가 후보 수만큼 늘고,
   // 어차피 다음 실행 전에는 아무도 읽지 않는다.
-  if (hostHealthChanged) {
-    // 오래된 기록은 버린다. 안 그러면 장부가 한없이 자라 매 실행 읽고 쓰는 값이
-    // 커진다. 격리는 24시간이므로 이틀 넘게 조용한 매체는 기억할 이유가 없다.
-    const staleBefore = Date.now() - 2 * QUARANTINE_HOURS * 3600000;
-    const trimmed = Object.fromEntries(Object.entries(hostHealth)
-      // 규칙 표시(__rule)는 호스트가 아니므로 시각이 없다. 같이 지우면 다음
-      // 실행이 "규칙이 바뀌었다"고 오인해 장부를 매번 비운다 - 격리가 영영 발동
-      // 안 하게 된다.
-      .filter(([host, record]) => host === '__rule'
-        || (Date.parse(String(record?.at || '')) || 0) >= staleBefore));
-    await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES('article_host_health',?)
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(JSON.stringify(trimmed)).run();
-  }
-  const quarantinedNow = Object.entries(hostHealth)
-    .filter(([, record]) => Number(record?.fail || 0) >= QUARANTINE_FAIL_THRESHOLD)
-    .map(([host, record]) => `${host}:${record.fail}`);
+  await hostHealth.save();
+  const quarantinedNow = hostHealth.quarantinedHosts();
   if (quarantineSkipped) diagnostics.host_quarantine_skipped = quarantineSkipped;
   if (quarantinedNow.length) diagnostics.host_quarantined = quarantinedNow.slice(0, 8);
   diagnostics.baduk_only = badukOnly;
