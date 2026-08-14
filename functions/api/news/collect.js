@@ -504,10 +504,17 @@ async function collect(env, {
   // (2026-08-14 실측 404). 카드는 떴는데 누르면 "페이지 주소가 잘못됐다"가 나왔다.
   // 코드를 고쳐도 이미 저장된 행은 그대로이므로 여기서 같이 옮긴다 - url_key는
   // 건드리지 않는다. 링크만 열리면 되고, 키를 바꾸면 중복 판정이 흔들린다.
+  //
+  // 창을 반드시 둔다. LIKE는 인덱스를 못 타므로 창이 없으면 매 실행이 기사
+  // 전체를 훑는다 - 바로 위 미래시각 UPDATE에 7일 창이 있는 것도 같은 이유다.
+  // 창 없이 넣었더니 백필 실행이 Cloudflare Worker CPU 한도를 넘겨 죽었다
+  // (2026-08-14 실측: error code 1102, 503). 잘못된 주소는 방금 저장된 행에서
+  // 생기고, 옛 행은 이 정리를 이미 지났다.
   const repairedSportsUrls = await env.DB.prepare(`UPDATE news_articles
     SET url='https://n.news.naver.com/mnews/article/'
       || substr(url, instr(url, '/article/') + 9)
-    WHERE url LIKE 'https://sports.naver.com/%/article/%'`).run();
+    WHERE url LIKE 'https://sports.naver.com/%/article/%'
+      AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const repairedSportsCount = Number(repairedSportsUrls?.meta?.changes || 0);
   if (repairedSportsCount) diagnostics.sports_url_repaired = repairedSportsCount;
   // 이미 실려 있는 요약이 오늘의 기준을 여전히 통과하는지 매 실행이 다시 묻는다.
