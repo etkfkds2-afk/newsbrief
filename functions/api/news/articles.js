@@ -1,7 +1,5 @@
 import { json, userId } from '../../_lib/news-db.js';
-import {
-  normalizeText, reorderGeneralSummary, validateGeneralEditorialSummary, validateThreeLineSummary
-} from '../../_lib/news-summary.js';
+import { normalizeText, reorderGeneralSummary } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import {
   isSameIssueTitle, isSameStoryPrepared, sharesKeywordsPrepared, storyFingerprint
@@ -463,8 +461,23 @@ export async function onRequestGet({ request, env }) {
       if (excludeBaduk && item.category !== '바둑' && isBadukRelevant(item.title, item.summary)) continue;
       // duplicate 행은 요약이 없다. 3줄 검증을 걸면 전부 떨어져 관련 보도가 사라진다.
       const isDuplicateRow = item.summary_quality === 'duplicate';
-      if (!isDuplicateRow && !validateThreeLineSummary(item.summary, item.title)) continue;
-      if (!isDuplicateRow && item.category !== '바둑' && !validateGeneralEditorialSummary(item.summary, item.title)) continue;
+      // 읽기 단계는 요약 자격을 **다시 묻지 않는다.** summary_quality='full'은
+      // 이미 publishableSummary가 내린 판정이고(collect.js의 저장 직전, 그리고
+      // 매 수집 실행이 도는 quarantineWeakSummaries의 재검사), 여기서 한 번 더
+      // 묻는 것은 어느 방향으로도 손해다:
+      //
+      //   - 검사 조합이 저장 때와 조금이라도 다르면(실제로 달랐다 - 여기는
+      //     summaryMentionsTitle을 빠뜨린 조합이었다) 저장된 기사가 화면에서만
+      //     **아무 기록도 없이** 사라진다. 진단에도 health에도 안 남으므로
+      //     사람이 목록을 세어 보기 전에는 아무도 모른다. 이 저장소가 이미 같은
+      //     방식으로 바둑 기사를 잃은 적이 있다(2026-08-12, 24시간 6건 중 5건).
+      //   - 같게 맞춰 놓아도 그때부터는 순수한 중복 계산이다. 기사 150장마다
+      //     정규식 다발을 돌리는 것은 읽기 경로에서 가장 무거운 작업이고, 이
+      //     경로는 Cloudflare "Worker exceeded resource limits" 503 전력이 있다.
+      //
+      // 판정하는 곳을 하나로 두면 기준을 올릴 때 새 기사와 이미 저장된 기사에
+      // 동시에 적용되고, 내려간 것은 weak_summary_samples에 남는다. 화면은 그
+      // 결과를 그대로 보여주기만 한다.
       if (item.category === '바둑' && !isBadukDisplayRelevant(item.title, item.summary)) continue;
       // 광고성 차단은 item.category가 아니라 보고 있는 탭을 기준으로 건다. 위
       // where 절이 바둑 탭에 함께 싣는 일반 기사(기원 사건 등)에도 적용해야

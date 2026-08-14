@@ -23,7 +23,7 @@ const filterHitColumns = CONTENT_QUALITY_FILTERS
 
 export async function onRequestGet({ env }) {
   try {
-    const [run, automaticRun, counts, missingTime, futureTime, stateRows, exhausted, storageResult, badukStored,
+    const [run, automaticRun, counts, missingTime, dateOnlyTime, futureTime, stateRows, exhausted, storageResult, badukStored,
       badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits, brokenUrls] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
@@ -39,6 +39,20 @@ export async function onRequestGet({ env }) {
       // 본다. 옛 행은 창을 벗어나 사라지고, 진짜 회귀는 하루 안에 다시 뜬다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
         WHERE summary_quality='full' AND TRIM(published_at)=''
+          AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
+      // 날짜만 있고 **시각이 없는** 행. 위 검사는 published_at이 통째로 빈 것만
+      // 셌기 때문에 'YYYY-MM-DD'로 저장된 행은 전부 통과였다 - 2026-08-14 실측:
+      // missing_published_time은 0인데 사용자는 "시간 안 나오는 카드가 많다"고
+      // 했고, 실제로 화면(newsbrief.html의 fmt)은 그런 값을 "8. 14."로 그린다.
+      // health가 "발행시각이 붙나"를 물으면서 정작 화면이 시각을 못 그리는
+      // 경우를 안 세고 있었던 것이다. 물어야 할 것은 단계가 아니라 결과다.
+      //
+      // 한국기원(baduk.or.kr)은 뺀다. 그쪽은 목록에 날짜만 싣고 시각을 아예
+      // 내지 않으므로 날짜만 남는 것이 **정상**이다(사용자 확인 2026-08-14).
+      // 넣어 두면 조용한 날마다 울리고, 그렇게 울린 알람은 곧 무시된다.
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+        WHERE summary_quality='full' AND published_at GLOB '????-??-??'
+          AND url NOT LIKE '%baduk.or.kr%'
           AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
       // 발행시각이 **미래**인 행. 시각을 못 읽는 고장은 위에서 잡히지만, 잘못 읽는
       // 고장은 아무 데도 안 잡혔다. 2026-08-12: 타임존 없는 시각을 UTC로 읽어 +9시간
@@ -310,6 +324,11 @@ export async function onRequestGet({ env }) {
       // 0을 요구하면 발행시각을 아예 안 내는 매체가 한 곳만 걸려도 실패한다.
       // 추출이 망가지면 이 값은 몇 건이 아니라 수십 건으로 뛰므로 여유를 둔다.
       published_time_healthy: Number(missingTime?.count || 0) <= 3,
+      // 날짜만 남은 행. 한국기원을 뺀 값이라 여기 잡히는 것은 전부 "원문에 시각이
+      // 있는데 우리가 못 읽은" 경우다. 여유를 5로 둔 이유는 발행시각을 정말로
+      // 안 내는 지역 매체가 섞이기 때문이고, 추출이 망가지면 이 값은 몇 건이
+      // 아니라 수십 건으로 뛴다.
+      published_time_has_clock: Number(dateOnlyTime?.count || 0) <= 5,
       // 미래 시각은 0을 요구한다. 발행시각을 안 내는 매체는 있어도 아직 오지 않은
       // 시각을 내는 매체는 없다 - 하나라도 있으면 우리 파싱이 틀린 것이다.
       published_time_not_future: Number(futureTime?.count || 0) === 0,
@@ -359,6 +378,7 @@ export async function onRequestGet({ env }) {
         duplicate_paid_samples: duplicatePaidSample,
         baduk_published_by_runs_24h: badukPublishedByRuns,
         missing_published_time: Number(missingTime?.count || 0),
+        date_only_published_time: Number(dateOnlyTime?.count || 0),
         future_published_time: Number(futureTime?.count || 0),
         // 저장 → 화면 각 단계에 몇 건이 남는지. 줄어드는 자리가 원인 자리다.
         baduk_display_stages: badukDisplayStages,

@@ -180,13 +180,20 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const cursor = Number(cursorRow?.value || 0);
   const rows = await env.DB.prepare(`SELECT id,url,published_at FROM news_articles
     WHERE datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
-      -- 빈 값/날짜만 있는 행은 예전대로 일반만, 커서로 조금씩 훑는다(수가 많다).
+      -- 빈 값/날짜만 있는 행은 커서로 조금씩 훑는다(수가 많다).
+      -- 카테고리로 가르지 않고 **한국기원(baduk.or.kr)만** 뺀다. 예전에는
+      -- category<>'바둑'이라 바둑 기사는 시각을 영영 못 되찾았는데, 시각을 정말로
+      -- 안 내는 곳은 카테고리가 아니라 한국기원 한 곳이다(그쪽은 목록에 날짜만
+      -- 싣는다 - 사용자 확인 2026-08-14). 나머지 바둑 매체는 원문에 시각이 있고,
+      -- 그게 안 붙어 화면에 "8. 14."로만 뜨던 카드가 많았다. health의
+      -- published_time_has_clock 검사와 **같은 집합**을 봐야 한다 - 검사가 세는
+      -- 것과 복구가 고치는 것이 다르면 값이 영원히 안 떨어진다.
       -- 미래 시각은 커서·카테고리·요약품질을 가리지 않고 매번 전부 잡는다. 커서를
       -- 태우면 커서가 이미 지나간 행은 한 바퀴를 다 돌 때까지 안 고쳐지는데,
       -- 미래 시각은 목록 맨 위에 박혀 그날 기사를 가리므로 그때까지 둘 수 없다.
       -- 실측 2026-08-12: 남은 1건이 커서 뒤에 있어 복구를 두 번 돌려도 그대로였다.
       -- 미래 행은 보통 0~2건이라 매번 훑어도 비용이 없다.
-      AND ((id>? AND summary_quality='full' AND category<>'바둑'
+      AND ((id>? AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
           AND (TRIM(published_at)='' OR published_at GLOB '????-??-??'))
         OR datetime(published_at)>datetime('now','+2 hours'))
     ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();

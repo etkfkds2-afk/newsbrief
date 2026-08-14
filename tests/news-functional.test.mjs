@@ -544,10 +544,21 @@ test('예약 건강 점검은 HTTP 200이어도 응답의 ok가 false면 경고�
   assert.match(workflow, /\[ "\$health_ok" != "true" \]/);
 });
 
-test('정기 수집은 명백히 불량한 일반 요약만 재요약 대기열로 격리한다', async () => {
+test('이미 실린 요약의 재검사는 publishableSummary 한 곳만 쓰고 30일 창을 다 덮는다', async () => {
   const source = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(source, /validateGeneralEditorialSummary/);
-  assert.match(source, /general_summaries_quarantined/);
+  // 예전에는 유지보수 루프가 validateGeneralEditorialSummary **단독**으로 요약을
+  // 격리했다. 그건 발행 기준(publishableSummary)보다 헐거운 옛 조합이라, 한쪽이
+  // 실은 것을 다른 쪽이 내리는 왕복이 생겼다 - 내려간 기사는 다음 실행이 유료
+  // 요약을 다시 사서 올리고 그 다음 실행이 또 내린다. 돈만 나가고 화면은 그대로다.
+  // 이름이 아니라 **호출**이 없어야 한다. 왜 걷어냈는지는 주석으로 남겨 두므로
+  // 이름만 보고 판정하면 그 주석에 걸린다.
+  assert.doesNotMatch(source, /validateGeneralEditorialSummary\(/);
+  assert.doesNotMatch(source, /general_summaries_quarantined/);
+  // 재검사의 유일한 주인은 quarantineWeakSummaries다(안에서 publishableSummary를 쓴다).
+  assert.match(source, /quarantineWeakSummaries\(env,\s*\n?\s*deepSweep/);
+  // 사흘 창만 돌면 화면이 보여주는 30일 중 27일이 재검사 사각지대가 된다.
+  assert.match(source, /\{ limit: 200, days: 30 \}/);
+  assert.match(source, /\{ limit: 60, days: 3 \}/);
 });
 
 test('외부 Google 발견 결과가 있으면 Worker의 중복 RSS 호출을 생략한다', async () => {
@@ -711,22 +722,43 @@ test('하루치 예산 페이스는 표시용이고 Claude 호출을 막지 않�
   assert.equal(overspent, 121_631);
   assert.ok(overspent < first, `${overspent} < ${first}`);
 
-  // 차단은 월 목표와 하드 한도만 한다. 하루치를 이미 넘겨 쓴 상태에서도
-  // 월 목표 아래면 호출이 허용되어야 한다.
-  const state = { claude_budget_month: '2026-08', claude_monthly_micro_usd: 2_029_870,
-    claude_spend_day: new Date().toISOString().slice(0, 10), claude_daily_micro_usd: 900_000 };
-  const env = { DB: { prepare(sql) { return {
-    bind() { return this; },
-    async first() {
-      const key = (sql.match(/key='([a-z_]+)'/) || [])[1];
-      return key in state ? { value: state[key] } : null;
-    },
-    async run() {}
-  }; }, async batch() {} } };
-  const { canUseClaude } = await import('../functions/_lib/news-ai-budget.js');
-  const verdict = await canUseClaude(env, 15_000);
-  assert.equal(verdict.allowed, true);
-  assert.ok(verdict.today > verdict.allowance, `${verdict.today} > ${verdict.allowance}`);
+  // 차단은 월 목표·하드 한도와 **하루 지출 절대선** 셋만 한다. 남은 날로 나눈
+  // 페이스 값은 여전히 차단에 쓰지 않는다(위 doesNotMatch가 그것을 지킨다).
+  const { canUseClaude, CLAUDE_DAILY_HARD_LIMIT_MICRO_USD, koreaDayKey } =
+    await import('../functions/_lib/news-ai-budget.js');
+  const envWithDailySpend = today => {
+    const state = { claude_budget_month: '2026-08', claude_monthly_micro_usd: 2_029_870,
+      claude_spend_day: koreaDayKey(), claude_daily_micro_usd: today };
+    return { DB: { prepare(sql) { return {
+      bind() { return this; },
+      async first() {
+        const key = (sql.match(/key='([a-z_]+)'/) || [])[1];
+        return key in state ? { value: state[key] } : null;
+      },
+      async run() {}
+    }; }, async batch() {} } };
+  };
+  // 정상 운영일의 하루 지출은 $0.15다. 그 두 배까지는 월 목표 아래인 한 통과한다.
+  const normalDay = await canUseClaude(envWithDailySpend(250_000), 15_000);
+  assert.equal(normalDay.allowed, true);
+  assert.equal(normalDay.blockedBy, '');
+  // 절대선은 실제 숫자로 검사한다. 상한 상수를 입력에도 쓰면(예: 상한+1)
+  // 상한을 얼마로 바꾸든 늘 통과하는 자기참조 검사가 되어 아무것도 못 잡는다.
+  // 460_000은 2026-08-14에 실제로 나간 하루 지출($0.46)이다 - 하루 상한 60인
+  // 날에 anthropic_calls_today가 146까지 갔고, 설계값의 세 배를 쓰고도 그날
+  // 바둑 화면은 1건이었다. 이 값이 막히지 않으면 그날이 그대로 재현된다.
+  const runawayDay = await canUseClaude(envWithDailySpend(460_000), 15_000);
+  assert.equal(runawayDay.allowed, false);
+  assert.equal(runawayDay.blockedBy, 'daily');
+  // 설계 하루치는 $0.15다. 절대선이 그 두 배를 크게 넘으면 막는 의미가 없다.
+  assert.ok(CLAUDE_DAILY_HARD_LIMIT_MICRO_USD <= 350_000,
+    `하루 절대선이 너무 높다: ${CLAUDE_DAILY_HARD_LIMIT_MICRO_USD}`);
+  // 정상 운영일($0.15)이 이 선에 걸리면 안 된다. 걸리면 매일 낮에 요약이 끊긴다.
+  assert.ok(CLAUDE_DAILY_HARD_LIMIT_MICRO_USD >= 280_000,
+    `하루 절대선이 너무 낮다: ${CLAUDE_DAILY_HARD_LIMIT_MICRO_USD}`);
+  // 하루선은 KST 자정에 저절로 풀린다 - 사람이 눌러 푸는 경로가 없어야 한다.
+  const budgetLib = await readFile(new URL('../functions/_lib/news-ai-budget.js', import.meta.url), 'utf8');
+  assert.match(budgetLib, /export async function getClaudeDailySpend[\s\S]*?dayKey\(\)/);
 });
 
 test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적용한다', async () => {
@@ -1054,7 +1086,13 @@ test('3줄 요약은 예외 없이 AI가 만들고, 못 만들면 아무것도 �
   assert.doesNotMatch(collector, /extractive_fallback_used/);
   assert.doesNotMatch(collector, /AI: undefined,\s+ANTHROPIC_API_KEY: undefined/);
   assert.match(collector, /ai_summary_unavailable/);
-  assert.match(articles, /validateGeneralEditorialSummary/);
+  // 읽기 단계는 요약 자격을 다시 묻지 않는다. summary_quality='full'은 이미
+  // publishableSummary가 내린 판정이고, 읽기 쪽이 조금이라도 다른 조합을 들고
+  // 있으면 저장된 기사가 화면에서만 **아무 기록 없이** 사라진다(2026-08-12에
+  // 바둑 24시간 6건 중 5건을 그렇게 잃었다). 같게 맞춰도 순수한 중복 계산이고,
+  // 이 경로는 Worker 리소스 한도 503 전력이 있다.
+  assert.doesNotMatch(articles, /validateGeneralEditorialSummary\(/);
+  assert.doesNotMatch(articles, /validateThreeLineSummary\(/);
   assert.doesNotMatch(articles, /group\.key !== '일반\|ai:misc'/);
   assert.match(articles, /return \[\.\.\.rest\.slice\(0, capCount\), \.\.\.misc\]/);
   assert.doesNotMatch(articles, /rest\.slice\(0, misc\.length \? 11 : 12\)/);

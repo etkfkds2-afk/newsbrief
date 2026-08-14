@@ -41,7 +41,17 @@ export const GENERAL_DAILY_ANTHROPIC_CALL_LIMIT =
 // 총량을 60에 두면 부스트가 바둑 예약분을 먹는다.
 export const GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = GENERAL_DAILY_ANTHROPIC_CALL_LIMIT + 24;
 export const GENERAL_BOOST_DAILY_CEILING = DAILY_ANTHROPIC_CALL_LIMIT + 24;
-export const BACKFILL_ANTHROPIC_CALL_LIMIT = 200;
+// 사람이 손으로 누르는 복구 실행(force_retry / baduk_now)의 상한.
+//
+// 200이던 값을 90으로 내린다. 200은 사실상 상한이 없는 것과 같았다 - 2026-08-14
+// 실측: 하루 상한 60인 날에 baduk_now를 여러 번 누르자 anthropic_calls_today가
+// 146까지 갔고 그날 지출은 $0.46, 설계값 $0.15의 세 배였다. 그러고도 바둑
+// 화면은 1건이다. 복구 실행은 상한을 **넓히는** 것이지 없애는 것이 아니다.
+//
+// 이 값만으로 막지는 않는다. 진짜 관문은 하루 지출 절대선
+// (CLAUDE_DAILY_HARD_LIMIT_MICRO_USD)이다 - 모드마다 호출 상한이 다르면 언젠가
+// 또 한 모드가 빠져나가지만, 지출은 한 줄로 흐르므로 거기 하나만 막으면 된다.
+export const BACKFILL_ANTHROPIC_CALL_LIMIT = 90;
 export const ESTIMATED_SUMMARY_CALL_MICRO_USD = 15_000;
 
 // 바둑의 하루가 사실상 끝난 뒤에는 남은 예약분을 일반이 쓴다. 아침에 미리 떼어
@@ -133,9 +143,14 @@ export function createCallBudget(env, diagnostics, { forceRetry = false, general
         diagnostics.anthropic_budget_exhausted = true;
         // 어느 뚜껑에 걸렸는지 남긴다. 총량인지, 자기 몫인지, 월 예산인지가
         // 구분되지 않으면 다음에 또 원인을 처음부터 찾게 된다.
-        diagnostics.anthropic_exhausted_reason = !budget.allowed ? 'monthly_budget'
+        // 하루 지출선과 월 예산선을 구분한다. 앞의 것은 내일 00:00 KST에 저절로
+        // 풀리고 뒤의 것은 다음 달까지 안 풀린다 - 사람이 봐야 할 대응이 정반대라
+        // 'monthly_budget' 하나로 뭉개면 안 된다.
+        diagnostics.anthropic_exhausted_reason = budget.blockedBy === 'monthly' ? 'monthly_budget'
+          : budget.blockedBy === 'daily' ? 'daily_spend'
           : (daily >= totalLimit ? 'daily_total' : `bucket_${bucket}`);
         diagnostics.claude_monthly_micro_usd = budget.spent;
+        diagnostics.claude_daily_micro_usd = budget.today;
         return false;
       }
       await env.DB.batch([

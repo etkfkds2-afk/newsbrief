@@ -10,6 +10,24 @@ export const CLAUDE_MONTHLY_TARGET_MICRO_USD = 4_750_000;
 export const CLAUDE_MONTHLY_HARD_LIMIT_MICRO_USD = 5_000_000;
 export const CLOUDFLARE_DAILY_CALL_LIMIT = 4;
 
+// 하루 지출의 절대선. 설계값은 $0.15/일이고, 이 값은 그 두 배다.
+//
+// 왜 필요한가. 지금까지 하루를 막는 관문은 **호출 수**뿐이었는데, 그 상한이
+// 모드마다 달랐다 - force_retry는 200, general_boost는 84, 정기 실행은 60.
+// 그래서 사람이 baduk_now를 몇 번 누르면 하루 상한이 사실상 없어진다.
+// 2026-08-14 실측: 하루 상한 60인 날에 anthropic_calls_today가 146까지 갔고
+// claude_daily_micro_usd는 $0.46, 설계값의 세 배였다. 그날 바둑 화면은 1건이다.
+// 돈을 세 배 쓰고 화면은 비는 것이 가장 나쁜 결과다.
+//
+// 호출 수가 아니라 **돈**으로 막는다. 모드가 몇 개든 지출은 한 줄로 흐르므로
+// 여기 하나만 막으면 새는 경로가 안 생긴다. 요약(collect)과 이슈 분류
+// (classify-issues)가 모두 canUseClaude를 지나므로 둘 다 이 선에 걸린다.
+//
+// 정상 운영일($0.15)에는 절대 안 걸리는 높이로 잡았다. 걸린다면 그날은 이미
+// 무언가 폭주한 것이고, 폭주한 채로 계속 사는 것보다 멈추는 편이 낫다.
+// 경계는 KST이므로 다음날 00:00(한국시간)에 저절로 풀린다.
+export const CLAUDE_DAILY_HARD_LIMIT_MICRO_USD = 300_000;
+
 // 특정 달만 예산을 달리 본다. **이 표에 없는 달은 위 기본값을 쓴다** - 한 달만
 // 올리고 다음 달에 되돌리는 것을 잊는 사고를 막으려고 표로 뒀다.
 //
@@ -123,13 +141,21 @@ export async function canUseClaude(env, estimatedMicroUsd = 0) {
   const spent = await getClaudeMonthlySpend(env);
   const today = await getClaudeDailySpend(env);
   const allowance = dailyAllowanceMicroUsd(spent - today);
-  // 하루치 페이싱은 관문에서 뺐다(위 dailyAllowanceMicroUsd 주석 참고).
-  // today/allowance는 health가 그대로 보여주되 차단은 하지 않는다.
+  // 하루치 **페이싱**은 관문에서 뺐다(위 dailyAllowanceMicroUsd 주석 참고).
+  // 남은 날로 나눈 그 값은 $0.12까지 내려가 낮에 요약을 끊었고, 그래서 표시
+  // 전용이 됐다. 여기서 보는 것은 그것이 아니라 움직이지 않는 절대선이다.
+  const overDailyLimit = today >= CLAUDE_DAILY_HARD_LIMIT_MICRO_USD;
+  const overMonthly = !(spent < claudeMonthlyTargetMicroUsd()
+    && spent + Math.max(0, estimatedMicroUsd) <= claudeMonthlyHardLimitMicroUsd());
   return {
-    allowed: spent < claudeMonthlyTargetMicroUsd()
-      && spent + Math.max(0, estimatedMicroUsd) <= claudeMonthlyHardLimitMicroUsd(),
+    allowed: !overDailyLimit && !overMonthly,
+    // 어느 선에 걸렸는지 부르는 쪽이 알아야 진단이 "예산"으로 뭉개지지 않는다.
+    // 하루치는 내일 00:00 KST에 저절로 풀리고 월치는 다음 달에 풀린다 - 대응이
+    // 다르므로 이름도 달라야 한다.
+    blockedBy: overMonthly ? 'monthly' : (overDailyLimit ? 'daily' : ''),
     spent,
     today,
+    dailyLimit: CLAUDE_DAILY_HARD_LIMIT_MICRO_USD,
     allowance
   };
 }
@@ -183,7 +209,13 @@ export async function recordClaudeUsage(env, model, usage = {}) {
 
 export async function reserveCloudflareCall(env) {
   if (!env?.AI) return { allowed: false, used: 0, reason: 'not-bound' };
-  const day = new Date().toISOString().slice(0, 10);
+  // 하루 경계는 KST다. 이 한 곳만 UTC로 남아 있었다 - 나머지(월 예산, 하루 지출,
+  // Anthropic 호출 수, 발행 상한)는 전부 KST로 옮겼는데 무료 Cloudflare 몫만
+  // toISOString()을 그대로 쓰고 있었다. UTC 자정은 한국시간 오전 9시라, 새벽
+  // 수집(KST 00:17/03:17/06:17)은 언제나 "어제 UTC 하루"의 꼬리에 걸려 이미
+  // 4/4로 소진된 계수기를 봤다. 그 시간대의 요약은 무료 경로를 건너뛰고 곧바로
+  // 유료 Claude로 갔다 - 공짜로 막을 수 있는 것에 돈을 쓰고 있었다는 뜻이다.
+  const day = koreaDayKey();
   const dayRow = await env.DB.prepare("SELECT value FROM news_state WHERE key='ai_budget_day'").first();
   if (String(dayRow?.value || '') !== day) {
     await env.DB.batch([

@@ -1,13 +1,12 @@
 import {
-  isRejectedTitle, normalizeText, publishableSummary, reorderGeneralSummary, summaryRejectionReason,
-  validateGeneralEditorialSummary, validateThreeLineSummary
+  isRejectedTitle, normalizeText, publishableSummary, summaryRejectionReason
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
 import {
   canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
 import { recordClaudeUsage } from '../../_lib/news-ai-budget.js';
-import { createCallBudget } from '../../_lib/news-call-budget.js';
+import { createCallBudget, SUBREQUESTS_PER_CANDIDATE } from '../../_lib/news-call-budget.js';
 import { loadHostHealth } from '../../_lib/news-host-health.js';
 import { createStoryIndex, sharesTitleKeywords } from '../../_lib/news-dedup.js';
 import { findDuplicateStories } from '../../_lib/news-issue-classify.js';
@@ -85,7 +84,11 @@ const validPublishedSummary = publishableSummary;
 // 요약이 왜 화면에 못 갔는지를 진단에 남긴다. "안 나온 건 기록에 남긴다"가
 // 요구사항이고, 없으면 화면이 빌 때마다 사람이 기사를 손으로 받아 코드를
 // 태워 봐야 원인을 안다(2026-08-14에 실제로 그랬다).
-const recordSummaryRejection = (diagnostics, summary, title, category) => {
+const recordSummaryRejection = (diagnostics, summary, title, category, detail) => {
+  // 예산이 없어 아예 물어보지 못한 건은 품질 장부에 적지 않는다. 이미
+  // summary_skipped_no_budget으로 세었고, 여기 'empty'로 또 적으면 "요약이
+  // 나쁘다"와 "요약을 살 돈이 없었다"가 한 칸에 쌓여 구분이 사라진다.
+  if (detail?.budget_blocked) return false;
   const reason = summaryRejectionReason(summary, title, category);
   if (!reason) return true;
   diagnostics.summary_rejected_by_rule ||= {};
@@ -265,7 +268,19 @@ async function collect(env, {
       await budget.blockCloudflareForToday();
     }
 
-    if (env.ANTHROPIC_API_KEY && await budget.reserveAnthropic(bucket)) {
+    const anthropicReserved = Boolean(env.ANTHROPIC_API_KEY) && await budget.reserveAnthropic(bucket);
+    // 예산이 없어 **한 번도 물어보지 못한** 경우를 따로 표시한다. 이걸 안 하면
+    // 아래에서 빈 문자열이 나가고, 부르는 쪽은 그것을 요약 품질 미달('empty')로
+    // 기록한다. 2026-08-14 실측: 진단에 summary_rejected_by_rule {empty:3}만
+    // 남아서 "AI가 요약을 못 만든다"로 읽혔는데 실제로는 그날 호출 상한을 이미
+    // 146/60으로 넘겨 아무것도 물어보지 않은 것이었다. 원인이 품질이냐 예산이냐에
+    // 따라 손댈 곳이 정반대라, 이 둘이 같은 이름으로 쌓이면 진단이 거짓말을 한다.
+    if (!cloudflareReserved && !anthropicReserved) {
+      trace.budget_blocked = true;
+      diagnostics.summary_skipped_no_budget = Number(diagnostics.summary_skipped_no_budget || 0) + 1;
+      return '';
+    }
+    if (anthropicReserved) {
       const anthropicTrace = {};
       budget.spend(1);
       const anthropicSummary = await makeBestSummary({
@@ -373,12 +388,25 @@ async function collect(env, {
   // 넘겨 실행 전체가 죽는다(2026-08-14 실측: error code 1102로 3패스 모두 503).
   // 재검사는 정기 실행이 매번 하므로 한 번 걸러도 잃는 것이 없다.
   if (!popularityCandidates.length && !backfill && !forceRetry) {
-    const freshQualitySweep = await quarantineWeakSummaries(env, { limit: 60, days: 3 });
+    // 창을 번갈아 연다. 보통은 최근 사흘 60건만 본다 - 새로 들어온 것과 방금
+    // 기준을 올린 것이 거기 다 들어온다. 여섯 시간마다 한 번은 **화면이 보여주는
+    // 창 전체**(30일)를 200건까지 훑는다.
+    //
+    // 깊은 훑기가 필요해진 이유: 아래 유지보수 루프가 커서로 아카이브 전체를
+    // 돌며 요약을 검사하고 있었는데 그 검사가 옛 조합이라 걷어냈다(아래 주석).
+    // 걷어내기만 하면 사흘보다 오래된 행은 어떤 재검사도 안 받는데, 화면은 30일을
+    // 보여주므로 나머지 27일이 통째로 사각지대가 된다. 읽기 단계에서 한 번 더
+    // 거르는 방법도 있지만 그건 기준을 둘로 만드는 길이고, 그 길로 갔다가 기사가
+    // 화면에서만 조용히 사라지는 고장을 이미 겪었다(articles.js의 같은 주석).
+    const deepSweep = koreaNow.getUTCHours() % 6 === 0;
+    const freshQualitySweep = await quarantineWeakSummaries(env,
+      deepSweep ? { limit: 200, days: 30 } : { limit: 60, days: 3 });
     if (freshQualitySweep.quarantined) {
       diagnostics.weak_summary_quarantined = freshQualitySweep.quarantined;
       diagnostics.weak_summary_samples = freshQualitySweep.samples;
     }
     diagnostics.weak_summary_checked = freshQualitySweep.checked;
+    diagnostics.weak_summary_deep_sweep = deepSweep;
   }
   // Maintenance is deliberately bounded. Scanning and updating the complete
   // archive on every request exhausted the Pages Worker CPU during backfills.
@@ -398,16 +426,18 @@ async function collect(env, {
         const fixedSource = articleSource(row.url, row.source, row.press);
         if (fixedSource !== row.source) await env.DB.prepare('UPDATE news_articles SET source=? WHERE id=?').bind(fixedSource, row.id).run();
       }
-      if (fixedCategory !== '바둑' && row.summary) {
-        const reordered = reorderGeneralSummary(row.summary, row.title);
-        if (!validateGeneralEditorialSummary(reordered, row.title)) {
-          await env.DB.prepare("UPDATE news_articles SET summary='',summary_quality='none' WHERE id=?").bind(row.id).run();
-          diagnostics.general_summaries_quarantined = Number(diagnostics.general_summaries_quarantined || 0) + 1;
-        } else if (reordered !== row.summary) {
-          await env.DB.prepare('UPDATE news_articles SET summary=? WHERE id=?').bind(reordered, row.id).run();
-          diagnostics.general_summaries_reordered = Number(diagnostics.general_summaries_reordered || 0) + 1;
-        }
-      }
+      // 요약 품질 판정은 여기서 하지 않는다. 위 quarantineWeakSummaries가
+      // publishableSummary 하나로 이미 매 실행 다시 묻고 있고, 여기 있던 검사는
+      // 그보다 **헐거운 옛 조합**(validateGeneralEditorialSummary 단독)이었다.
+      // 기준이 둘이면 한쪽이 실은 것을 다른 쪽이 내리는 왕복이 생긴다 - 내려간
+      // 기사는 다음 실행이 유료 요약을 다시 사서 올리고, 그 다음 실행이 또
+      // 내린다. 돈은 계속 나가는데 화면은 그대로다.
+      //
+      // reorderGeneralSummary도 뺐다. 읽기 경로(articles.js)가 화면에 내보내기
+      // 직전에 같은 정렬을 하므로 저장본을 고쳐 둘 이유가 없고, 기사 40건마다
+      // 정규식 다발을 돌리는 것이 이 실행에서 가장 무거운 CPU 작업이었다.
+      // Worker CPU 한도 초과(error code 1102)로 수집이 503으로 죽던 원인 중
+      // 하나다 - 2026-08-14 실측으로 그날 자동/수동 실행 4개가 이렇게 죽었다.
     }
     const lastMaintainedId = (stored.results || []).at(-1)?.id || 0;
     await env.DB.prepare("INSERT INTO news_state(key,value) VALUES('maintenance_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -907,7 +937,7 @@ async function collect(env, {
         const repaired = mayResummarize
           ? await summarize({ title, rawSummary: stripHtml(item.description) || exists.raw_summary, body: article.body || exists.body_text, category }, retryDetail, 'retry')
           : '';
-        const valid = recordSummaryRejection(diagnostics, repaired, title, exists.category || category);
+        const valid = recordSummaryRejection(diagnostics, repaired, title, exists.category || category, retryDetail);
         await env.DB.prepare(`UPDATE news_articles SET
           title=?,
           category=CASE WHEN ?<>'' THEN ? ELSE category END,
@@ -1003,8 +1033,9 @@ async function collect(env, {
       (diagnostics.story_duplicate_samples ||= []).length < 2
         && diagnostics.story_duplicate_samples.push(`${title.slice(0, 28)} <- ${duplicateOf.slice(0, 28)}`);
     } else {
-      summary = await summarize(payload);
-      validSummary = recordSummaryRejection(diagnostics, summary, title, finalCategory);
+      const newDetail = {};
+      summary = await summarize(payload, newDetail);
+      validSummary = recordSummaryRejection(diagnostics, summary, title, finalCategory, newDetail);
       // 같은 실행에 같은 보도자료가 몰려 들어와도 첫 건만 요약을 받게 한다.
       if (validSummary && dayStories) {
         dayStories.add(title);
@@ -1189,6 +1220,28 @@ async function collect(env, {
   }
   for (const row of badukRetries) await retrySummary(row);
   for (const candidate of badukCandidates) inserted += await processCandidate(candidate);
+  // 날짜만 남은 발행시각을 매 실행이 조금씩 스스로 되찾는다.
+  //
+  // 예전에는 이 복구가 workflow_dispatch 입력(repair_times)으로만 돌았다. 즉
+  // **사람이 버튼을 눌러야** 카드에 시각이 붙었고, 그래서 "시간 안 나오는 카드가
+  // 많다"는 것을 사용자가 먼저 발견해 알려 주는 구조였다. health도 빈 값만 세고
+  // 날짜만 있는 값은 통과시켰으니 기계는 아무 말도 안 했다.
+  //
+  // 남은 subrequest 예산 안에서만, 후보 하나 몫(4)을 남겨 두고 돈다. 본문 수집을
+  // 밀어내면 고치려던 것보다 나쁜 결과가 된다. 한 실행에 최대 3건이라 느리지만
+  // 정기 실행이 하루 여러 번 돌므로 사람 손 없이 줄어든다.
+  //
+  // 예산이 빠듯한 실행(백필·바둑전용·인기복구·강제재시도)에서는 건너뛴다.
+  if (!backfill && !badukOnly && !forceRetry && !popularityCandidates.length) {
+    const timeRepairLimit = Math.min(3, Math.floor((budget.remaining() - SUBREQUESTS_PER_CANDIDATE) / 2));
+    // 0을 넘기면 안 된다. repairGeneralArticleTimes의 `Number(limit) || 10`이
+    // 0을 거짓으로 보고 기본값 10으로 되돌린다.
+    if (timeRepairLimit > 0) {
+      const timeRepair = await repairGeneralArticleTimes(env, timeRepairLimit);
+      budget.spend(timeRepair.attempted);
+      if (timeRepair.attempted) diagnostics.published_time_repair = timeRepair;
+    }
+  }
   // 격리 장부는 실행당 한 번만 쓴다. 후보마다 쓰면 D1 쓰기가 후보 수만큼 늘고,
   // 어차피 다음 실행 전에는 아무도 읽지 않는다.
   await hostHealth.save();
