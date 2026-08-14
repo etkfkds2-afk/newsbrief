@@ -719,8 +719,11 @@ test('Anthropic 요약 fallback은 평시·백필·월간 비용 상한을 적�
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
   const ai = await readFile(new URL('../functions/_lib/news-ai-summary.js', import.meta.url), 'utf8');
   assert.match(collector, /DAILY_ANTHROPIC_CALL_LIMIT = 60/);
-  // 총 60은 그대로, 몫만 나눈다(일반 40 하드 상한 → 바둑에 최소 20 보장).
-  assert.match(collector, /BADUK_RESERVED_ANTHROPIC_CALLS = 20/);
+  // 총 60은 그대로, 몫만 나눈다(일반 24 하드 상한 → 바둑에 최소 36 보장).
+  // 바둑이 메인이므로 예약분이 일반보다 커야 한다 - 20/40이던 시절 일반이 먼저
+  // 39건을 써서 오전에 총량이 바닥났고 그날 바둑 화면이 0건이 됐다.
+  assert.match(collector, /BADUK_RESERVED_ANTHROPIC_CALLS = 36/);
+  assert.match(collector, /GENERAL_MAY_USE_BADUK_RESERVE_AFTER_KST_HOUR = 21/);
   assert.match(collector, /GENERAL_BOOST_ANTHROPIC_CALL_LIMIT = GENERAL_DAILY_ANTHROPIC_CALL_LIMIT \+ 24/);
   assert.match(collector, /BACKFILL_ANTHROPIC_CALL_LIMIT = 200/);
   assert.doesNotMatch(collector, /TOTAL_ANTHROPIC_CALL_LIMIT/);

@@ -51,12 +51,29 @@ const DAILY_ANTHROPIC_CALL_LIMIT = 60;
 // 맨 마지막이라, 일반이 60을 넘겨 쓰는 순간 바둑은 그날 내내 한 건도 못 산다.
 //
 // 그래서 총량은 그대로 60에 두고 몫만 나눈다.
-// - 일반: 40이 하드 상한. 이 위로는 바둑 몫이라 못 넘본다.
-// - 바둑: 따로 상한을 두지 않는다(총량까지). 최소 20은 일반이 절대 못 건드리고,
-//   일반이 40을 다 안 쓴 날은 남는 것까지 바둑이 가져간다.
+// - 일반: 24가 하드 상한. 이 위로는 바둑 몫이라 못 넘본다.
+// - 바둑: 따로 상한을 두지 않는다(총량까지). 최소 36은 일반이 절대 못 건드리고,
+//   일반이 24를 다 안 쓴 날은 남는 것까지 바둑이 가져간다.
 // 하루 최대 지출은 예전과 같다 - 총량 60이 유일한 뚜껑이기 때문이다.
-export const BADUK_RESERVED_ANTHROPIC_CALLS = 20;
+//
+// 예약분을 20에서 36으로 올린 이유. "바둑 쓰고 남은 걸 일반에 쓴다"가 요구사항인데
+// 20/40은 그 반대였다 - 2026-08-14 실측: 60건 중 일반이 39건을 먼저 써서 오전
+// 11시에 총량이 바닥났고, 그 뒤 바둑 요약이 기준 미달로 내려갔을 때 다시 살 호출이
+// 없었다. 그날 바둑 화면은 0건이었다. 바둑 실사용은 하루 21~28건이라 36이면 굶지
+// 않는다. 일반은 24로도 하루 목표 10건을 채운다(최근 12건 발행에 39호출을 썼는데,
+// 그 대부분이 이미 요약이 있는 기사의 재시도였다).
+export const BADUK_RESERVED_ANTHROPIC_CALLS = 36;
 const GENERAL_DAILY_ANTHROPIC_CALL_LIMIT = DAILY_ANTHROPIC_CALL_LIMIT - BADUK_RESERVED_ANTHROPIC_CALLS;
+// 바둑의 하루가 사실상 끝난 뒤에는 남은 예약분을 일반이 쓴다. "바둑 쓰고 남은 걸
+// 일반에"를 글자 그대로 지키려면, 아침에 미리 떼어 둔 몫을 밤까지 놀리면 안 된다.
+// 한국시간 21시를 기준으로 삼는다 - 그 시각이면 그날 바둑 실행이 다 지났다.
+const GENERAL_MAY_USE_BADUK_RESERVE_AFTER_KST_HOUR = 21;
+const generalLimitForNow = (date = new Date()) => {
+  const koreaHour = new Date(date.valueOf() + 9 * 3600000).getUTCHours();
+  return koreaHour >= GENERAL_MAY_USE_BADUK_RESERVE_AFTER_KST_HOUR
+    ? DAILY_ANTHROPIC_CALL_LIMIT
+    : GENERAL_DAILY_ANTHROPIC_CALL_LIMIT;
+};
 // A boost adds 24 calls to the normal allowance. Keeping this below the
 // normal limit made the old "boost" disable Claude once 24 calls were used.
 // 부스트는 사람이 손으로 누르는 버튼이라 총량도 같이 올린다 - 일반 몫만 올리고
@@ -138,11 +155,12 @@ async function reserveAnthropicCall(env, diagnostics, forceRetry = false, genera
   const totalLimit = forceRetry
     ? BACKFILL_ANTHROPIC_CALL_LIMIT
     : (generalBoost ? GENERAL_BOOST_DAILY_CEILING : DAILY_ANTHROPIC_CALL_LIMIT);
-  // 바둑은 자기 상한이 없다. 총량이 유일한 뚜껑이고, 일반이 40에서 멈추므로
-  // 최소 20은 언제나 바둑에게 남는다.
+  // 바둑은 자기 상한이 없다. 총량이 유일한 뚜껑이고, 일반이 24에서 멈추므로
+  // 최소 36은 언제나 바둑에게 남는다. 밤 9시(한국시간)를 넘기면 그날 바둑
+  // 실행이 다 지났으므로 남은 예약분을 일반이 가져다 쓴다.
   const bucketLimit = forceRetry || bucket === 'baduk'
     ? totalLimit
-    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : GENERAL_DAILY_ANTHROPIC_CALL_LIMIT);
+    : (generalBoost ? GENERAL_BOOST_ANTHROPIC_CALL_LIMIT : generalLimitForNow());
   const budget = await canUseClaude(env, ESTIMATED_SUMMARY_CALL_MICRO_USD);
   const recordCounts = () => {
     diagnostics.anthropic_calls_today = daily;
