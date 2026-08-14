@@ -24,7 +24,7 @@ const filterHitColumns = CONTENT_QUALITY_FILTERS
 export async function onRequestGet({ env }) {
   try {
     const [run, automaticRun, counts, missingTime, futureTime, stateRows, exhausted, storageResult, badukStored,
-      badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits] = await Promise.all([
+      badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits, brokenUrls] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),
       env.DB.prepare(`SELECT started_at,finished_at,status,message FROM news_runs
         WHERE message LIKE '%\"mode\":\"scheduled\"%' OR message LIKE '%\"mode\":\"watchdog\"%'
@@ -104,7 +104,16 @@ export async function onRequestGet({ env }) {
       env.DB.prepare(`SELECT ${filterHitColumns}
         FROM news_articles a
         WHERE a.category='바둑' AND a.summary_quality='full'
-          AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')`).first()
+          AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')`).first(),
+      // 브라우저에서 열리지 않는 주소 형태가 저장돼 있는지. 카드는 떴는데 누르면
+      // "페이지 주소가 잘못됐다"가 나오는 고장은 지금까지 어느 검사도 묻지 않았다
+      // - health는 기사가 **있는지**만 봤고 그 링크가 **열리는지**는 안 봤다.
+      // 2026-08-14: canonicalUrl이 m.sports.naver.com에서 m.을 떼어 404 주소를
+      // 만들고 있었고, 사람이 눌러 보고서야 드러났다. 네이버 스포츠에는 데스크톱
+      // 기사 주소가 없다. 외부 요청 없이 주소 모양만 보므로 값이 들지 않는다.
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
+        WHERE url LIKE 'https://sports.naver.com/%/article/%'
+          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')`).first()
     ]);
     // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
     // 쉽게 3단어를 넘긴다(news-dedup.js의 같은 이유로 수집에서도 안 건다).
@@ -291,6 +300,9 @@ export async function onRequestGet({ env }) {
       // 예산을 세기 시작한 뒤로는 한도를 넘겨 죽는 일이 없어야 한다. 남아 있으면
       // 세지 않는 외부 요청 경로가 어딘가 더 있다는 뜻이다.
       subrequest_budget_respected: subrequestOverflowFailures === 0,
+      // 0을 요구한다. 안 열리는 주소는 "몇 건은 어쩔 수 없는" 종류가 아니라
+      // 우리가 만든 모양이므로, 하나라도 있으면 정규화가 틀린 것이다.
+      stored_urls_openable: Number(brokenUrls?.count || 0) === 0,
       // 같은 날 같은 사건에 유료 요약을 두 번 이상 산 흔적. 1쌍은 오판정 여지를
       // 두고 넘긴다(키워드 3개는 우연히도 걸린다). 2쌍부터는 중복 판정이 실제로
       // 새고 있다는 뜻이고, 그건 곧바로 돈이다.
@@ -340,6 +352,7 @@ export async function onRequestGet({ env }) {
         // 있으면 그쪽은 영영 못 긁는다는 뜻이다 - 대응이 정반대라 구분이 필요하다.
         baduk_body_too_short_hosts_24h: badukFailureHosts,
         baduk_candidates_seen_24h: badukCandidatesSeen,
+        broken_url_rows: Number(brokenUrls?.count || 0),
         subrequest_overflow_failures_24h: subrequestOverflowFailures,
         subrequest_budget_stopped_24h: subrequestStoppedCandidates,
         duplicate_paid_pairs_24h: duplicatePaidPairs,

@@ -183,15 +183,25 @@ export async function sha256(value) {
 export function canonicalUrl(value) {
   try {
     const url = new URL(String(value || ''));
-    const oldSports = url.hostname.toLowerCase() === 'sports.naver.com'
+    // 아래 'm.' 제거보다 **먼저** 판정해야 한다. 예전에는 hostname이 정확히
+    // 'sports.naver.com'일 때만 이 규칙이 돌아서, m.sports.naver.com 주소는
+    // 규칙을 비껴간 다음 'm.'만 떨어졌다. 그 결과가 sports.naver.com/general/
+    // article/079/0004178768인데 이 주소는 **404다**(2026-08-14 실측: m.을 붙이면
+    // 200, 떼면 404). 화면에 카드가 떠서 눌렀는데 "페이지 주소가 잘못됐다"가
+    // 나오는 상태였다. 네이버 스포츠에는 데스크톱 기사 주소가 없다.
+    const naverHost = url.hostname.toLowerCase().replace(/^m\./, '');
+    const sportsArticle = naverHost === 'sports.naver.com'
       ? url.pathname.match(/^\/(?:[^/]+)\/article\/(\d{3})\/(\d+)/)
       : null;
-    if (oldSports) return `https://n.news.naver.com/mnews/article/${oldSports[1]}/${oldSports[2]}`;
+    // n.news.naver.com 형태는 뉴스와 스포츠 양쪽에서 모두 열린다(스포츠 기사는
+    // m.sports.naver.com으로 넘겨준다). 주소 형태를 하나로 모으면 같은 기사가
+    // 두 주소로 들어와 카드가 두 장이 되는 일도 함께 막힌다.
+    if (sportsArticle) return `https://n.news.naver.com/mnews/article/${sportsArticle[1]}/${sportsArticle[2]}`;
     url.hash = '';
     for (const key of [...url.searchParams.keys()]) {
       if (/^(?:utm_|fbclid|gclid|ref|from|sid$)/i.test(key)) url.searchParams.delete(key);
     }
-    url.hostname = url.hostname.toLowerCase().replace(/^m\./, '');
+    url.hostname = naverHost;
     return url.toString().replace(/\/$/, '');
   } catch {
     return String(value || '').trim();

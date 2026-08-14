@@ -499,6 +499,17 @@ async function collect(env, {
       AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const neutralizedCount = Number(neutralizedFutureTimes?.meta?.changes || 0);
   if (neutralizedCount) diagnostics.future_published_time_cleared = neutralizedCount;
+  // 이미 저장된 404 주소를 매 실행이 스스로 고친다. canonicalUrl이 만들던
+  // sports.naver.com/<섹션>/article/<OID>/<AID>는 브라우저에서 열리지 않는다
+  // (2026-08-14 실측 404). 카드는 떴는데 누르면 "페이지 주소가 잘못됐다"가 나왔다.
+  // 코드를 고쳐도 이미 저장된 행은 그대로이므로 여기서 같이 옮긴다 - url_key는
+  // 건드리지 않는다. 링크만 열리면 되고, 키를 바꾸면 중복 판정이 흔들린다.
+  const repairedSportsUrls = await env.DB.prepare(`UPDATE news_articles
+    SET url='https://n.news.naver.com/mnews/article/'
+      || substr(url, instr(url, '/article/') + 9)
+    WHERE url LIKE 'https://sports.naver.com/%/article/%'`).run();
+  const repairedSportsCount = Number(repairedSportsUrls?.meta?.changes || 0);
+  if (repairedSportsCount) diagnostics.sports_url_repaired = repairedSportsCount;
   // 이미 실려 있는 요약이 오늘의 기준을 여전히 통과하는지 매 실행이 다시 묻는다.
   //
   // 예전에는 이 검사가 workflow_dispatch 입력(repair_general_quality)으로만 돌았다.
