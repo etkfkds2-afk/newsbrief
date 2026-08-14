@@ -550,7 +550,7 @@ async function collect(env, {
             BADUK_SEARCHES[(slot * (backfill ? 3 : 1) + index) % BADUK_SEARCHES.length])
         ])]
       : [query];
-    for (const effectiveQuery of effectiveQueries) {
+    for (const [queryIndex, effectiveQuery] of effectiveQueries.entries()) {
       const pageBand = backfill ? Math.floor(slot / Math.ceil(BADUK_SEARCHES.length / 4)) % 5 : 0;
       const start = category === '바둑' ? pageBand * 20 + 1 : (backfill ? backfillStart : 1);
       const display = category === '바둑' ? 20 : (backfill ? 10 : 4);
@@ -570,7 +570,11 @@ async function collect(env, {
         // 드는 값은 검색 1회다. 같은 실행이 예산 44 중 9만 쓰고 있었으므로
         // 여유는 충분하다. 처리량은 아래 슬롯 상한이 그대로 묶으므로 늘어나는
         // 것은 처리량이 아니라 그 칸에 들어올 후보의 다양성이다.
-        if (category === '바둑' && !backfill && budget.remaining() > 12) {
+        // 넓은 '바둑' 질의(첫 번째)에만 건다. 회전 전문 검색어는 결과 자체가
+        // 적어서 두 번째 장이 곧바로 30일 밖으로 넘어간다 - 2026-08-14 실측:
+        // 전부 걸었더니 후보는 1건에서 35건으로 늘었는데 그중 17~18건이
+        // too_old였다. 슬롯만 먹고 아무것도 못 한다.
+        if (queryIndex === 0 && category === '바둑' && !backfill && budget.remaining() > 12) {
           const older = await countedNaverSearch(env, effectiveQuery, start + display, display);
           items = [...items, ...older];
         }
