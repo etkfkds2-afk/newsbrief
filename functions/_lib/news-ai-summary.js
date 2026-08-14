@@ -1,4 +1,4 @@
-import { buildSummary, normalizeText, stripNumbering, validateThreeLineSummary } from './news-summary.js';
+import { buildSummary, normalizeText, stripNumbering, summaryRejectionReason, validateThreeLineSummary } from './news-summary.js';
 
 function numbers(value) {
   return new Set((String(value || '').match(/\d+(?:[.,]\d+)*(?:%|원|명|건|년|월|일|시|분)?/g) || []).map(v => v.replace(/,/g, '')));
@@ -109,7 +109,15 @@ export async function makeBestSummary(env, { title = '', rawSummary = '', body =
         ai_returned: Boolean(answer),
         normalized: aiSummary.slice(0, 700),
         structurally_valid: structurallyValid,
-        numbers_grounded: grounded
+        numbers_grounded: grounded,
+        // AI가 답을 줬는데 우리가 버렸다면 **어느 규칙이** 버렸는지 남긴다.
+        // 이게 없으면 "AI가 요약을 못 한다"와 "우리 검사가 과하다"를 구분할 수
+        // 없다 - 2026-08-14에 정확히 그걸 몰라서 헤맸다. 검사를 조인 그날
+        // 바둑 8건이 통째로 빈 값이 됐는데, 원인이 AI인지 검사인지 알 방법이
+        // 진단 어디에도 없었다.
+        ai_reject_rule: structurallyValid ? (grounded ? '' : 'numbers_not_grounded')
+          : (summaryRejectionReason(aiSummary, title, '바둑') || 'three_line_checks'),
+        ai_first_line: aiSummary.split('\n')[0]?.slice(0, 90) || ''
       });
       if (structurallyValid && grounded) return aiSummary;
     } catch (error) {

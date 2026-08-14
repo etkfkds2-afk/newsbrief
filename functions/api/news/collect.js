@@ -425,6 +425,18 @@ async function collect(env, {
       if (!summary) summary = anthropicSummary;
     }
 
+    // AI가 답을 줬는데 우리 검사가 버린 경우를 실행 진단까지 올린다. trace는
+    // 호출부가 들고 있을 뿐 어디에도 안 남아서, "AI가 요약을 못 한다"와 "우리
+    // 검사가 과하다"를 구분할 근거가 진단에 전혀 없었다.
+    if (trace.ai_reject_rule) {
+      diagnostics.ai_rejected_by_rule ||= {};
+      diagnostics.ai_rejected_by_rule[trace.ai_reject_rule]
+        = Number(diagnostics.ai_rejected_by_rule[trace.ai_reject_rule] || 0) + 1;
+      diagnostics.ai_rejected_samples ||= [];
+      if (diagnostics.ai_rejected_samples.length < 4) {
+        diagnostics.ai_rejected_samples.push(`${trace.ai_reject_rule}| ${trace.ai_first_line || ''}`);
+      }
+    }
     // AI가 못 만들었으면 아무것도 내지 않는다.
     //
     // 예전에는 여기서 추출식 요약(본문 문장을 그대로 오려 붙이는 방식)으로
