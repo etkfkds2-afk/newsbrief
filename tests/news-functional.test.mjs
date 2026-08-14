@@ -833,7 +833,16 @@ test('바둑과 일반 뉴스는 각각 하루 12개까지 게시한다', async 
   assert.match(collector, /consumePublicationCapacity/);
   assert.match(collector, /publish_counts_before/);
   assert.match(collector, /publish_counts_after/);
-  assert.match(collector, /validPublishedSummary\(row\.summary, row\.title, row\.category\)/);
+  // 발행 건수를 셀 때 저장된 판정을 그대로 쓴다. 예전에는 이 달의 full 행을
+  // 요약 본문까지 전부 읽어 와 행마다 publishableSummary를 다시 돌렸다. 8월
+  // 중순 기준 440건이라 CPU 한도를 넘겨, 수집이 네트워크를 한 번도 안 타고
+  // 1초 만에 error code 1102(503)로 죽었다. 달이 흐를수록 확실히 나빠지는 모양이다.
+  assert.match(collector, /WHERE a\.summary_quality='full' AND TRIM\(a\.summary\)<>''/);
+  assert.doesNotMatch(collector, /validPublishedSummary\(row\.summary/);
+  // 세는 데 쓰지도 않는 요약 본문을 440건씩 실어 오지 않는다.
+  assert.doesNotMatch(collector, /SELECT a\.category,a\.title,a\.summary,/);
+  // OR로 묶인 상관 서브쿼리는 인덱스를 못 탄다. 인기 랭킹 복구 실행에서만 켠다.
+  assert.match(collector, /const needsPopularFlag = popularityCandidates\.length > 0/);
   assert.match(collector, /const dayStart = Date\.UTC/);
 });
 

@@ -113,9 +113,26 @@ async function collect(env, {
   const koreaNow = new Date(now.valueOf() + 9 * 3600000);
   const dayStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), koreaNow.getUTCDate()) - 9 * 3600000;
   const monthStart = Date.UTC(koreaNow.getUTCFullYear(), koreaNow.getUTCMonth(), 1) - 9 * 3600000;
-  const publishedRows = await env.DB.prepare(`SELECT a.category,a.title,a.summary,a.published_at,a.fetched_at,
-      EXISTS(SELECT 1 FROM news_popular_items p WHERE p.url_key=a.url_key OR p.title=a.title) AS is_popular
-    FROM news_articles a WHERE a.summary_quality='full'
+  // 이 쿼리가 실행 첫머리에서 Worker를 죽이고 있었다.
+  //
+  // 2026-08-14 실측: 이 달의 summary_quality='full' 행이 440건이다(일반 349 +
+  // 바둑 91). 예전에는 그 440건의 **요약 본문까지** 전부 읽어 와서, 아래 루프가
+  // 행마다 publishableSummary(정규식 수십 개)를 다시 돌렸다. 발행 건수를 세려고
+  // 한 일인데, 그 판정은 저장할 때 이미 내려서 summary_quality에 적어 둔 것이다.
+  // 달이 흐를수록 행이 늘어 CPU가 같이 늘고, 8월 중순에 한도를 넘겼다 - 수집이
+  // 네트워크를 한 번도 안 타고 1초 만에 error code 1102(503)로 죽었다.
+  // 저장된 판정을 그대로 믿는다. 재검사는 quarantineWeakSummaries의 몫이다.
+  //
+  // is_popular는 인기 랭킹 복구 실행에서만 쓴다. 그런데 OR로 묶인 상관 서브쿼리라
+  // 인덱스를 못 타고 행마다 두 테이블을 훑는다 - 읽기 경로에서 같은 모양을 걷어낸
+  // 이유가 그것이다(articles.js "인기뉴스 조회는 OR 조인 없이"). 정기 실행에서는
+  // 쓰지도 않으면서 440번 돌고 있었으므로, 필요한 실행에서만 계산한다.
+  const needsPopularFlag = popularityCandidates.length > 0;
+  const publishedRows = await env.DB.prepare(`SELECT a.category,a.title,a.published_at,a.fetched_at
+      ${needsPopularFlag
+        ? ', EXISTS(SELECT 1 FROM news_popular_items p WHERE p.url_key=a.url_key OR p.title=a.title) AS is_popular'
+        : ', 0 AS is_popular'}
+    FROM news_articles a WHERE a.summary_quality='full' AND TRIM(a.summary)<>''
       AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime(?)`)
     .bind(new Date(monthStart).toISOString()).all();
   const publicationCounts = {
@@ -172,7 +189,8 @@ async function collect(env, {
     return (storyTitlesByDay.get(day) || []).find(seen => sharesTitleKeywords(seen, title)) || '';
   };
   for (const row of publishedRows.results || []) {
-    if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
+    // 발행 자격은 위 쿼리의 summary_quality='full' AND TRIM(summary)<>''로 이미
+    // 물었다. 여기서 정규식으로 다시 묻던 것이 CPU 한도 초과의 정체다(위 주석).
     const bucket = row.category === '바둑' ? 'baduk' : 'general';
     const timestamp = storedTime(row.published_at || row.fetched_at);
     publicationCounts[bucket].monthly += 1;
@@ -191,7 +209,6 @@ async function collect(env, {
   const popularityTargetCounts = { baduk: 0, general: 0 };
   if (popularityTargetStart) {
     for (const row of publishedRows.results || []) {
-      if (!validPublishedSummary(row.summary, row.title, row.category)) continue;
       if (!Number(row.is_popular || 0)) continue;
       const timestamp = storedTime(row.published_at || row.fetched_at);
       if (timestamp < popularityTargetStart || timestamp >= popularityTargetStart + 86400000) continue;
