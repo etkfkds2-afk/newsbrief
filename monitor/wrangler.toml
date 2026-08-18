@@ -1,0 +1,15 @@
+name = "newsbrief-watch"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# 30분마다 확인한다. 무료 요금제 안에서 하루 48번이고, 4시간 정지 판정에
+# 비하면 충분히 촘촘하다. Pages는 크론을 못 걸어서 이 워커가 따로 있다.
+[triggers]
+crons = ["*/30 * * * *"]
+
+[vars]
+HEALTH_URL = "https://newsbrief-etkfkds2.pages.dev/api/news/health"
+COLLECT_URL = "https://newsbrief-etkfkds2.pages.dev/api/news/collect"
+
+# NEWSBRIEF_COLLECT_TOKEN은 배포할 때 wrangler secret으로 넣는다. 이미 GitHub
+# Secrets에 있는 값을 그대로 쓰므로 사람이 새로 만들 토큰은 없다.

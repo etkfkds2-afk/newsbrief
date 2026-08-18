@@ -212,6 +212,27 @@ jobs:
           command: pages deploy dist --project-name=newsbrief-etkfkds2 --branch=main
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
+      # 예비 수집기(monitor/)는 Actions 밖에서 도는 안전망이다. 2026-08-16~18에
+      # Actions 요금 한도로 예약 21회가 시작조차 못 해 수집이 30시간 멈췄는데,
+      # 경고를 보내는 health-check가 막힌 그 워크플로 안에 있어서 아무도 몰랐다.
+      # 이 워커는 Cloudflare 크론으로 30분마다 깨어나 수집이 4시간 넘게 멈췄으면
+      # 직접 돌린다. Pages는 크론을 못 걸어서 별도 워커로 둔다.
+      #
+      # 이 배포 자체는 Actions 안에 있지만 상관없다. 배포가 막혀도 이미 올라간
+      # 워커는 계속 돈다 - 막히는 것은 새 배포뿐이다.
+      - name: Deploy standby collector worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: af27f3bbca2209ff9cb2c77a2e47184a
+          workingDirectory: monitor
+          command: deploy
+          secrets: |
+            NEWSBRIEF_COLLECT_TOKEN
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          NEWSBRIEF_COLLECT_TOKEN: ${{ secrets.NEWSBRIEF_COLLECT_TOKEN }}
+
   collect-news:
     needs: deploy
     if: >-
