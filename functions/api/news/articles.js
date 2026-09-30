@@ -391,10 +391,15 @@ export async function onRequestGet({ request, env }) {
     // 전체 후보를 읽는 만큼 이 요청은 무거워진다. 지름길을 없앤 직후에는 카드
     // 묶기가 쌍마다 문자열을 다시 쪼개고 있어서 월간 화면이 Worker CPU 한도에
     // 걸려 죽었다. 그건 지문을 미리 계산하는 방식으로 따로 고쳤다(23배).
-    if (!['saved', 'hidden'].includes(view)) where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
+    // 하한은 **하나만** 건다. hours 는 위에서 30일(720시간) 이하로 잘리므로 hours 가
+    // 있으면 그 하한이 30일 하한을 이미 포함한다. 예전처럼 둘 다 걸면 SQLite 가 인덱스
+    // 범위를 넓은 30일 쪽으로 잡고 24시간 조건은 줄마다 걸러서, "24시간" 화면도 30일치를
+    // 읽었다(2026-09-30 D1 읽기 한도 초과 조사 중 발견). 결과는 같다.
     if (hours > 0 && !['saved', 'hidden'].includes(view)) {
       where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now', ?)");
       bindings.push(`-${hours} hours`);
+    } else if (!['saved', 'hidden'].includes(view)) {
+      where.push("datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at)) >= datetime('now','-30 days')");
     }
     // Similar stories are collapsed after the query. Read extra rows so that
     // deduplication does not make a requested 100/300 item page needlessly short.
@@ -433,7 +438,10 @@ export async function onRequestGet({ request, env }) {
       LEFT JOIN news_hidden h ON h.url_key=a.url_key AND h.user_id=?
       LEFT JOIN news_likes l ON l.url_key=a.url_key AND l.user_id=?
       WHERE ${[...where, ...(extraWhere ? [extraWhere] : [])].join(' AND ')}
-      ORDER BY ${order}
+      -- a.id: 정렬 값이 같은 기사(날짜만 있는 기사는 전부 그날 00:00 이다)의 순서를 못 박는다.
+      -- 예전에는 표를 id 순으로 훑어 정렬해서 동률이 id 오름차순으로 나왔다. 시간 인덱스를
+      -- 타면 동률이 거꾸로 나와 LIMIT 경계에서 들어가는 기사가 바뀐다. 예전 순서를 그대로 둔다.
+      ORDER BY ${order}, a.id
       LIMIT ?
     `;
     const result = await env.DB.prepare(selectSql(null)).bind(...bindings, queryLimit).all();

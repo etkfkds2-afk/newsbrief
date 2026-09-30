@@ -14,7 +14,11 @@
 // D1 은 쿼리마다 meta.rows_read 로 읽은 줄 수를 돌려준다. 그걸 요청 동안 더해서
 // 끝날 때 news_state 에 날짜별로 한 번 쓴다. 날짜는 UTC 다 - D1 한도가 UTC 자정에 풀린다.
 
-export const D1_DAILY_READ_LIMIT_DEFAULT = 500000;
+// 계정 한도(500만)의 20%. 고친 뒤 실측(scanstats, 기사 8천 건 가정) 평소 사용량은 하루 약
+// 30만 줄이라 3배 넘게 남는다 - 50만으로 두면 기사가 많은 날 정상인데도 수집이 멈출 수 있다.
+// 폭주(2026-09-30 이전 코드는 이슈 분류 한 번에 천만 줄 단위)는 이 값으로도 바로 막힌다.
+// 나머지 80%는 같은 계정의 대관관리와 data-lab 몫이다.
+export const D1_DAILY_READ_LIMIT_DEFAULT = 1000000;
 const KEY_PREFIX = 'd1_rows_read:';
 
 export function d1ReadDayKey(now = new Date()) {

@@ -176,11 +176,22 @@ export function json(data, status = 200) {
 // 작은 표부터 만든다.
 export const NEWS_READ_INDEXES = [
   ['idx_news_popularity_collected', 'CREATE INDEX IF NOT EXISTS idx_news_popularity_collected ON news_popularity(datetime(collected_at))'],
+  // 수집 첫머리의 "비정상 종료된 실행" 표시가 status='running' 인 행(보통 0~1건)만 읽게 한다.
+  ['idx_news_runs_running', "CREATE INDEX IF NOT EXISTS idx_news_runs_running ON news_runs(id) WHERE status='running'"],
   ['idx_news_popular_items_collected', 'CREATE INDEX IF NOT EXISTS idx_news_popular_items_collected ON news_popular_items(datetime(collected_at))'],
+  // 열리지 않는 네이버 스포츠 주소만 모은다. 수집이 매번 고쳐 두므로 거의 비어 있다.
+  // health 의 broken_url_rows 와 수집의 주소 복구가 이것만 읽는다(조건 글자가 같아야 한다).
+  ['idx_news_articles_sports_url', "CREATE INDEX IF NOT EXISTS idx_news_articles_sports_url ON news_articles(id) WHERE url LIKE 'https://sports.naver.com/%/article/%'"],
+  // 한국기원 바둑 기사의 최신 날짜(health). 없으면 바둑 기사 전체에서 MAX 를 구한다.
+  ['idx_news_articles_kba_latest', "CREATE INDEX IF NOT EXISTS idx_news_articles_kba_latest ON news_articles(datetime(COALESCE(NULLIF(published_at,''),fetched_at))) WHERE category='바둑' AND summary_quality='full' AND url LIKE '%baduk.or.kr%'"],
   // 재요약 후보(summary_quality='none')만 모아 둔다. 없으면 후보 몇 건을 찾으려고 매 수집이 전체를 훑는다.
   ['idx_news_articles_unsummarized', "CREATE INDEX IF NOT EXISTS idx_news_articles_unsummarized ON news_articles(id) WHERE summary_quality='none'"],
+  // 시각 복구 후보(날짜만 있거나 빈 발행시각의 요약 기사). news-repairs.js 가 커서 뒤를 이것으로 찾는다.
+  ['idx_news_articles_date_only', "CREATE INDEX IF NOT EXISTS idx_news_articles_date_only ON news_articles(id) WHERE summary_quality='full' AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')"],
   ['idx_news_articles_when', "CREATE INDEX IF NOT EXISTS idx_news_articles_when ON news_articles(datetime(COALESCE(NULLIF(published_at,''),fetched_at)))"],
-  ['idx_news_articles_fetched', 'CREATE INDEX IF NOT EXISTS idx_news_articles_fetched ON news_articles(datetime(fetched_at))']
+  ['idx_news_articles_fetched', 'CREATE INDEX IF NOT EXISTS idx_news_articles_fetched ON news_articles(datetime(fetched_at))'],
+  // 발행시각이 미래인 행(보통 0~2건)을 바로 찾는다. 없으면 시각 복구·health·수집이 창 전체를 읽는다.
+  ['idx_news_articles_published', 'CREATE INDEX IF NOT EXISTS idx_news_articles_published ON news_articles(datetime(published_at))']
 ];
 
 let readIndexesReadyFor;

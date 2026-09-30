@@ -178,29 +178,45 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
   const cursorKey = 'general_time_repair_cursor';
   const cursorRow = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(cursorKey).first();
   const cursor = Number(cursorRow?.value || 0);
-  const rows = await env.DB.prepare(`SELECT id,url_key,url,published_at FROM news_articles
-    WHERE datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
-      -- 이미 원문을 확인해 본 행은 다시 긁지 않는다. 날짜만 싣는 매체의 기사는
-      -- 몇 번을 다시 불러도 결과가 같은데, 그 사이 subrequest만 나간다.
-      -- 빈 값/날짜만 있는 행은 커서로 조금씩 훑는다(수가 많다).
-      -- 카테고리로 가르지 않고 **한국기원(baduk.or.kr)만** 뺀다. 예전에는
-      -- category<>'바둑'이라 바둑 기사는 시각을 영영 못 되찾았는데, 시각을 정말로
-      -- 안 내는 곳은 카테고리가 아니라 한국기원 한 곳이다(그쪽은 목록에 날짜만
-      -- 싣는다 - 사용자 확인 2026-08-14). 나머지 바둑 매체는 원문에 시각이 있고,
-      -- 그게 안 붙어 화면에 "8. 14."로만 뜨던 카드가 많았다. health의
-      -- published_time_has_clock 검사와 **같은 집합**을 봐야 한다 - 검사가 세는
-      -- 것과 복구가 고치는 것이 다르면 값이 영원히 안 떨어진다.
-      -- 미래 시각은 커서·카테고리·요약품질을 가리지 않고 매번 전부 잡는다. 커서를
-      -- 태우면 커서가 이미 지나간 행은 한 바퀴를 다 돌 때까지 안 고쳐지는데,
-      -- 미래 시각은 목록 맨 위에 박혀 그날 기사를 가리므로 그때까지 둘 수 없다.
-      -- 실측 2026-08-12: 남은 1건이 커서 뒤에 있어 복구를 두 번 돌려도 그대로였다.
-      -- 미래 행은 보통 0~2건이라 매번 훑어도 비용이 없다.
-      AND ((id>? AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
-          AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
-          AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=news_articles.url_key))
-        OR datetime(published_at)>datetime('now','+2 hours'))
-    -- +id: 순서는 같다. 없으면 id 순 전체 훑기를 골라 30일 인덱스를 안 탄다(health.js 같은 이유).
-    ORDER BY +id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+  const batch = Math.min(Math.max(Number(limit) || 10, 1), 10);
+  // 후보는 두 갈래다. 둘을 OR 로 한 쿼리에 묶으면 어느 인덱스도 못 타서 30일치를 전부
+  // 읽는다(2026-09-30 D1 읽기 한도 초과 조사). 갈래마다 자기 인덱스로 앞 batch 건을
+  // 찾고 여기서 id 순으로 합쳐 batch 건을 자른다 - "A 또는 B 의 id 순 앞 N건"과 같다.
+  // 30일 조건 앞 + 는 30일 인덱스 대신 갈래의 인덱스를 쓰게 한다. 조건은 그대로다.
+  const [dateOnlyRows, futureRows] = await Promise.all([
+    // 이미 원문을 확인해 본 행은 다시 긁지 않는다. 날짜만 싣는 매체의 기사는
+    // 몇 번을 다시 불러도 결과가 같은데, 그 사이 subrequest만 나간다.
+    // 빈 값/날짜만 있는 행은 커서로 조금씩 훑는다(수가 많다).
+    // 카테고리로 가르지 않고 **한국기원(baduk.or.kr)만** 뺀다. 예전에는
+    // category<>'바둑'이라 바둑 기사는 시각을 영영 못 되찾았는데, 시각을 정말로
+    // 안 내는 곳은 카테고리가 아니라 한국기원 한 곳이다(그쪽은 목록에 날짜만
+    // 싣는다 - 사용자 확인 2026-08-14). 나머지 바둑 매체는 원문에 시각이 있고,
+    // 그게 안 붙어 화면에 "8. 14."로만 뜨던 카드가 많았다. health의
+    // published_time_has_clock 검사와 **같은 집합**을 봐야 한다 - 검사가 세는
+    // 것과 복구가 고치는 것이 다르면 값이 영원히 안 떨어진다.
+    // idx_news_articles_date_only 로 찾는다(조건 글자가 인덱스와 같아야 한다).
+    env.DB.prepare(`SELECT id,url_key,url,published_at FROM news_articles
+      WHERE +datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+        AND id>? AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
+        AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
+        AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=news_articles.url_key)
+      ORDER BY id LIMIT ?`).bind(cursor, batch).all(),
+    // 미래 시각은 커서·카테고리·요약품질을 가리지 않고 매번 전부 잡는다. 커서를
+    // 태우면 커서가 이미 지나간 행은 한 바퀴를 다 돌 때까지 안 고쳐지는데,
+    // 미래 시각은 목록 맨 위에 박혀 그날 기사를 가리므로 그때까지 둘 수 없다.
+    // 실측 2026-08-12: 남은 1건이 커서 뒤에 있어 복구를 두 번 돌려도 그대로였다.
+    // idx_news_articles_published 로 찾는다. 보통 0~2건이다.
+    env.DB.prepare(`SELECT id,url_key,url,published_at FROM news_articles
+      WHERE +datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+        AND datetime(published_at)>datetime('now','+2 hours')
+      ORDER BY +id LIMIT ?`).bind(batch).all()
+  ]);
+  const seenIds = new Set();
+  const merged = [...(dateOnlyRows.results || []), ...(futureRows.results || [])]
+    .filter(row => !seenIds.has(row.id) && seenIds.add(row.id))
+    .sort((left, right) => Number(left.id) - Number(right.id))
+    .slice(0, batch);
+  const rows = { results: merged };
   const candidates = rows.results || [];
   if (!candidates.length) {
     await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)

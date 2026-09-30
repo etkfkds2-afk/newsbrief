@@ -370,7 +370,8 @@ async function collect(env, {
   // 옛 행은 이미 이 정리를 지났다.
   const neutralizedFutureTimes = await env.DB.prepare(`UPDATE news_articles SET published_at=''
     WHERE TRIM(published_at)<>'' AND datetime(published_at)>datetime('now','+2 hours')
-      AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
+      -- +: 조건은 같다. 7일 인덱스 대신 발행시각 인덱스로 미래 행(보통 0건)만 읽는다.
+      AND +datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const neutralizedCount = Number(neutralizedFutureTimes?.meta?.changes || 0);
   if (neutralizedCount) diagnostics.future_published_time_cleared = neutralizedCount;
   // 이미 저장된 404 주소를 매 실행이 스스로 고친다. canonicalUrl이 만들던
@@ -388,7 +389,8 @@ async function collect(env, {
     SET url='https://n.news.naver.com/mnews/article/'
       || substr(url, instr(url, '/article/') + 9)
     WHERE url LIKE 'https://sports.naver.com/%/article/%'
-      AND datetime(fetched_at)>=datetime('now','-7 days')`).run();
+      -- +: 조건은 같다. 7일 인덱스 대신 이 주소 모양만 모은 부분 인덱스를 읽는다(news-db.js).
+      AND +datetime(fetched_at)>=datetime('now','-7 days')`).run();
   const repairedSportsCount = Number(repairedSportsUrls?.meta?.changes || 0);
   if (repairedSportsCount) diagnostics.sports_url_repaired = repairedSportsCount;
   // 이미 실려 있는 요약이 오늘의 기준을 여전히 통과하는지 매 실행이 다시 묻는다.

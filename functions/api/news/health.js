@@ -80,7 +80,8 @@ export async function onRequestGet({ env }) {
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
         WHERE TRIM(published_at)<>''
           AND datetime(published_at)>datetime('now','+2 hours')
-          AND datetime(fetched_at)>=datetime('now','-3 days')`).first(),
+          -- +: 조건은 같다. 3일 인덱스 대신 발행시각 인덱스로 미래 행(보통 0건)만 읽는다.
+          AND +datetime(fetched_at)>=datetime('now','-3 days')`).first(),
       env.DB.prepare(`SELECT key,value FROM news_state WHERE key IN
         ('ai_blocked','claude_monthly_micro_usd','claude_budget_month',
          'claude_daily_micro_usd','claude_spend_day','baduk_source_latest')`).all(),
@@ -93,15 +94,21 @@ export async function onRequestGet({ env }) {
       env.DB.prepare('SELECT COUNT(*) AS count FROM news_saved').all(),
       // 한국기원 기사를 어디까지 가져왔는지. 소스 최신 날짜(collect.js가 적는다)와
       // 견주기 위한 값이다.
-      env.DB.prepare(`SELECT MAX(date(COALESCE(NULLIF(published_at,''),fetched_at))) AS latest
+      // 가장 늦은 한 건만 읽는다(idx_news_articles_kba_latest). MAX(date(...)) 로 물으면
+      // 바둑 기사 전체를 훑는다. 같은 값이다: date() 는 시각 순서를 그대로 따르고, 행이
+      // 없으면 둘 다 아래 badukStoredLatest 에서 ''가 된다.
+      env.DB.prepare(`SELECT date(COALESCE(NULLIF(published_at,''),fetched_at)) AS latest
         FROM news_articles WHERE category='바둑' AND summary_quality='full'
-          AND url LIKE '%baduk.or.kr%'`).first(),
+          AND url LIKE '%baduk.or.kr%'
+        ORDER BY datetime(COALESCE(NULLIF(published_at,''),fetched_at)) DESC LIMIT 1`).first(),
       // 한국기원 밖에서 들어온 바둑 기사. 위 badukStored와 baduk_source_latest는
       // 둘 다 baduk.or.kr만 보므로, 포털(네이버·카카오·구글)에서 오는 바둑이
       // 통째로 끊겨도 두 값은 꿈쩍하지 않는다. 2026-08-11이 정확히 그랬다 -
       // 포털 바둑 발행이 하루 종일 0건인데 health는 ok를 반환했다.
+      // +category: 조건은 같다. 그냥 두면 SQLite 가 category 인덱스로 바둑 기사 전체를
+      // 읽고 24시간을 줄마다 거른다. +를 붙이면 24시간 인덱스로 찾는다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
-        WHERE category='바둑' AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
+        WHERE +category='바둑' AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
           AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')`).first(),
       // 최근 하루치 수집 실행의 진단. "소스에 있는 걸 우리가 가져왔나"를 바둑
       // 전체에 대해 묻기 위해 후보가 어디서 죽었는지를 본다.
@@ -137,7 +144,7 @@ export async function onRequestGet({ env }) {
       // 조건별로 세어 두면 다음에는 숫자만 보고 바로 그 줄로 간다.
       env.DB.prepare(`SELECT ${filterHitColumns}
         FROM news_articles a
-        WHERE a.category='바둑' AND a.summary_quality='full'
+        WHERE +a.category='바둑' AND a.summary_quality='full'
           AND datetime(COALESCE(NULLIF(a.published_at,''),a.fetched_at))>=datetime('now','-24 hours')`).first(),
       // 브라우저에서 열리지 않는 주소 형태가 저장돼 있는지. 카드는 떴는데 누르면
       // "페이지 주소가 잘못됐다"가 나오는 고장은 지금까지 어느 검사도 묻지 않았다
@@ -145,9 +152,11 @@ export async function onRequestGet({ env }) {
       // 2026-08-14: canonicalUrl이 m.sports.naver.com에서 m.을 떼어 404 주소를
       // 만들고 있었고, 사람이 눌러 보고서야 드러났다. 네이버 스포츠에는 데스크톱
       // 기사 주소가 없다. 외부 요청 없이 주소 모양만 보므로 값이 들지 않는다.
+      // 시간 조건 앞 +: 조건은 같다. 30일 인덱스 대신 이 주소 모양만 모은 부분 인덱스
+      // (idx_news_articles_sports_url)를 읽게 한다. 수집이 매번 고쳐 두므로 거의 비어 있다.
       env.DB.prepare(`SELECT COUNT(*) AS count FROM news_articles
         WHERE url LIKE 'https://sports.naver.com/%/article/%'
-          AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')`).first()
+          AND +datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')`).first()
     ]);
     // 바둑은 세지 않는다. 대회·기사 이름이 매 제목에 반복돼 서로 다른 대국이
     // 쉽게 3단어를 넘긴다(news-dedup.js의 같은 이유로 수집에서도 안 건다).

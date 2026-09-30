@@ -337,7 +337,8 @@ test('이슈 후보 조회는 일반 기사에도 포털 인기 신호를 함께
   assert.match(endpoint, /FROM news_popularity\s+WHERE datetime\(collected_at\) >= datetime\('now','-7 days'\)/);
   assert.match(endpoint, /FROM news_popular_items\s+WHERE datetime\(collected_at\) >= datetime\('now','-7 days'\)/);
   assert.match(endpoint, /SELECT match_key FROM ranked_popularity ORDER BY best_rank ASC, seen_at DESC LIMIT 12/);
-  assert.match(endpoint, /AS is_popular/);
+  // 2026-09-30: 인기 12개를 기사 줄마다 다시 계산하던 상관 서브쿼리를 걷어내고 JS 에서 붙인다.
+  assert.match(endpoint, /is_popular: topPopular\.has\(row\.url_key\) \|\| topPopular\.has\(row\.title\)/);
   assert.doesNotMatch(endpoint, /category === '바둑'\s*&&\s*isStandaloneEventArticle/);
 });
 

@@ -163,37 +163,49 @@ export async function onRequestPost({ request, env }) {
     }
     bindings.push(400);
 
-    const [result, cacheRow] = await Promise.all([
+    const [topResult, result, cacheRow] = await Promise.all([
       // is_popular used to match ANY historical popularity-table hit, so almost
       // every general article eventually qualified as a standalone 1-article
       // issue. Scope it to this week's true top 12 (by best portal rank) so the
       // gate is rare again, the way it was meant to be.
+      //
+      // 이 12개는 **따로 한 번만** 뽑는다. 예전에는 기사 조회 안에
+      // EXISTS(SELECT 1 FROM top_popularity ...)로 넣었는데, SQLite 가 그걸 상관
+      // 서브쿼리로 돌려 30일 기사 한 줄마다 인기 두 표를 처음부터 다시 훑었다.
+      // 읽는 양이 (기사 수) x (인기 기록 수)라 한 번에 천만 줄 단위였다 - 2026-09-30
+      // 오전 이 작업 한 번이 D1 하루 한도(계정 전체 500만 줄)를 다 쓰고 같은 계정의
+      // 대관관리까지 멈췄다. 판정(url_key 나 제목이 12개 중 하나와 같다)은 그대로다.
       env.DB.prepare(`
         WITH ranked_popularity AS (
           SELECT url_key AS match_key, MIN(rank) AS best_rank, MAX(collected_at) AS seen_at
           FROM news_popularity
           WHERE datetime(collected_at) >= datetime('now','-7 days')
-          GROUP BY url_key
+          -- +: 묶는 값은 같다. 그냥 url_key/title 로 두면 SQLite 가 기본 키 순서로 표 전체를
+          -- 읽는 길을 골라 7일 조건이 있어도 60일치를 다 훑는다. +를 붙이면 7일 인덱스로 찾는다.
+          GROUP BY +url_key
           UNION ALL
           SELECT title AS match_key, MIN(rank) AS best_rank, MAX(collected_at) AS seen_at
           FROM news_popular_items
           WHERE datetime(collected_at) >= datetime('now','-7 days')
-          GROUP BY title
-        ),
-        top_popularity AS (
-          SELECT match_key FROM ranked_popularity ORDER BY best_rank ASC, seen_at DESC LIMIT 12
+          GROUP BY +title
         )
-        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at,
-               CASE WHEN EXISTS(SELECT 1 FROM top_popularity tp WHERE tp.match_key=a.url_key OR tp.match_key=a.title)
-               THEN 1 ELSE 0 END AS is_popular
+        SELECT match_key FROM ranked_popularity ORDER BY best_rank ASC, seen_at DESC LIMIT 12
+      `).all(),
+      env.DB.prepare(`
+        SELECT a.url_key, a.title, a.summary, a.category, a.published_at, a.fetched_at
         FROM news_articles a
         WHERE ${where.join(' AND ')}
-        ORDER BY datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC
+        -- a.id: 동률 순서를 예전(id 오름차순)대로 못 박는다(articles.js 같은 이유).
+        ORDER BY datetime(COALESCE(NULLIF(a.published_at,''), a.fetched_at)) DESC, a.id
         LIMIT ?
       `).bind(...bindings).all(),
       env.DB.prepare('SELECT payload FROM news_issue_cache WHERE category=?').bind(category).first()
     ]);
-    const articles = result.results || [];
+    const topPopular = new Set((topResult.results || []).map(row => row.match_key));
+    const articles = (result.results || []).map(row => ({
+      ...row,
+      is_popular: topPopular.has(row.url_key) || topPopular.has(row.title) ? 1 : 0
+    }));
     const inWindowKeys = new Set(articles.map(a => a.url_key));
 
     // Drop url_keys that aged out of the 30-day window (and any group that

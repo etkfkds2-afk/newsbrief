@@ -13,13 +13,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { NEWS_READ_INDEXES, NEWS_SCHEMA, ensureNewsReadIndexes } from '../functions/_lib/news-db.js';
-import { d1ReadDayKey } from '../functions/_lib/news-d1-meter.js';
+import { D1_DAILY_READ_LIMIT_DEFAULT, d1ReadDayKey } from '../functions/_lib/news-d1-meter.js';
 import { onRequestPost as collect } from '../functions/api/news/collect.js';
 import { onRequestGet as health } from '../functions/api/news/health.js';
 import { onRequestGet as articles } from '../functions/api/news/articles.js';
 import { onRequestPost as classifyIssues } from '../functions/api/news/classify-issues.js';
 
 const ARTICLES = 6000;
+// 부분 인덱스(WHERE 가 붙은 것)는 조건에 맞는 몇 줄만 담는다. 그걸 훑는 것은 표 전체 훑기가 아니다.
+const PARTIAL_INDEXES = NEWS_READ_INDEXES.filter(([, sql]) => / WHERE /.test(sql)).map(([name]) => name);
+const scansWholeArticleTable = line => /^SCAN (news_articles|a)\b/.test(line)
+  && !PARTIAL_INDEXES.some(name => new RegExp(`USING (COVERING )?INDEX ${name}\\b`).test(line));
 const CATEGORIES = ['정치', '경제', '사회', 'IT/과학', '세계', '생활/문화', '스포츠', '바둑'];
 
 function seed() {
@@ -64,7 +68,7 @@ function d1(db, plans) {
     const execute = kind => {
       const plan = planOf(sql);
       plans.push({ sql: sql.replace(/\s+/g, ' ').trim(), plan });
-      const scanned = plan.some(line => /^SCAN (news_articles|a)\b(?!.*USING (COVERING )?INDEX idx_news_articles_unsummarized)/.test(line));
+      const scanned = plan.some(scansWholeArticleTable);
       const meta = { rows_read: scanned ? count('news_articles') : 1 };
       const prepared = db.prepare(sql);
       if (kind === 'run') { const result = prepared.run(...params); return { meta: { ...meta, changes: Number(result.changes) } }; }
@@ -96,8 +100,7 @@ async function withNoNetwork(run) {
 }
 
 function fullArticleScans(plans) {
-  return plans.filter(({ plan }) => plan.some(line =>
-    /^SCAN (news_articles|a)\b/.test(line) && !/USING (COVERING )?INDEX idx_news_articles_unsummarized/.test(line)));
+  return plans.filter(({ plan }) => plan.some(scansWholeArticleTable));
 }
 
 test('자동으로 도는 경로는 기사 표를 통째로 훑지 않는다', async () => {
@@ -146,7 +149,7 @@ test('하루 읽기 한도에 닿으면 수집과 이슈 분류는 읽지 않고
   const recorded = db.prepare('SELECT value FROM news_state WHERE key=?').get(d1ReadDayKey())?.value;
   assert.ok(recorded > 0, '수집이 읽은 줄 수를 장부에 남긴다');
 
-  db.prepare('UPDATE news_state SET value=? WHERE key=?').run(500000, d1ReadDayKey());
+  db.prepare('UPDATE news_state SET value=? WHERE key=?').run(D1_DAILY_READ_LIMIT_DEFAULT, d1ReadDayKey());
   const plans = [];
   const skipped = await withNoNetwork(() => collect({ request: collectorRequest('/api/news/collect?source=scheduled'), env: { ...env, DB: d1(db, plans) } }));
   assert.equal(skipped.status, 200, '5xx 면 curl 과 수집 스크립트가 되풀이한다');
@@ -159,9 +162,9 @@ test('하루 읽기 한도에 닿으면 수집과 이슈 분류는 읽지 않고
 
   const report = await (await health({ env })).json();
   assert.ok(report.failures.includes('d1_reads_under_daily_limit'));
-  assert.equal(report.metrics.d1_rows_read_today, 500000);
+  assert.equal(report.metrics.d1_rows_read_today, D1_DAILY_READ_LIMIT_DEFAULT);
 
-  const raised = await withNoNetwork(() => collect({ request: collectorRequest('/api/news/collect?source=scheduled'), env: { ...env, NEWSBRIEF_D1_DAILY_READ_LIMIT: '900000' } }));
+  const raised = await withNoNetwork(() => collect({ request: collectorRequest('/api/news/collect?source=scheduled'), env: { ...env, NEWSBRIEF_D1_DAILY_READ_LIMIT: String(D1_DAILY_READ_LIMIT_DEFAULT * 2) } }));
   assert.notEqual((await raised.json()).skipped, 'd1_daily_read_limit');
 });
 
@@ -195,4 +198,48 @@ test('읽기 인덱스는 수집마다 하나씩 만들고, 만들다 실패해�
   assert.equal(response.status, 200, JSON.stringify(body));
   assert.equal(body.ok, true);
   assert.match(body.diagnostics.d1_read_index.error, /rows written/);
+});
+
+test('시각 복구는 커서 뒤의 날짜만 있는 기사와 어디에 있든 미래 시각 기사를 함께 id 순으로 고른다', async () => {
+  // 한 쿼리의 OR 을 두 쿼리로 나눴다(각자 인덱스를 타게). 고르는 집합과 순서가 예전과 같아야 한다.
+  const { repairGeneralArticleTimes } = await import('../functions/_lib/news-repairs.js');
+  const db = seed();
+  const future = new Date(Date.now() + 9 * 3600000).toISOString();
+  // 커서(5900) 앞에 하나, 뒤에 하나 미래 시각을 심는다.
+  db.prepare('UPDATE news_articles SET published_at=? WHERE id IN (5801, 5951)').run(future);
+  db.prepare("INSERT INTO news_state(key,value) VALUES('general_time_repair_cursor',5900)").run();
+  const expected = db.prepare(`SELECT id FROM news_articles
+    WHERE datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-30 days')
+      AND ((id>5900 AND summary_quality='full' AND url NOT LIKE '%baduk.or.kr%'
+          AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
+          AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=news_articles.url_key))
+        OR datetime(published_at)>datetime('now','+2 hours'))
+    ORDER BY id LIMIT 10`).all().map(row => row.id);
+  assert.ok(expected.includes(5801) && expected.includes(5951));
+  const plans = [];
+  const result = await withNoNetwork(() => repairGeneralArticleTimes({ DB: d1(db, plans) }));
+  assert.equal(result.attempted, expected.length);
+  const checked = new Set(db.prepare('SELECT url_key FROM news_time_checks').all().map(row => row.url_key));
+  for (const id of expected) assert.ok(checked.has(`k${id - 1}`), `id ${id} 를 확인했다`);
+  // 원문에서 시각을 못 얻었고 저장값이 미래였으므로 비운다.
+  assert.equal(db.prepare('SELECT published_at FROM news_articles WHERE id=5801').get().published_at, '');
+  assert.equal(db.prepare('SELECT published_at FROM news_articles WHERE id=5951').get().published_at, '');
+  assert.deepEqual(fullArticleScans(plans).map(({ sql }) => sql.slice(0, 120)), []);
+});
+
+test('기사 목록은 정렬 값이 같은 기사를 id 오름차순으로 낸다', async () => {
+  // 날짜만 있는 기사는 전부 그날 00:00 으로 같은 값이다. 예전에는 표를 id 순으로 훑어
+  // 정렬해서 동률이 id 오름차순이었다. 시간 인덱스를 타도 그 순서가 그대로여야 LIMIT
+  // 경계에서 들어가는 기사가 바뀌지 않는다.
+  const db = seed();
+  const day = new Date(Date.now() - 3600000).toISOString().slice(0, 10);
+  // 제목·요약이 비슷하면 목록이 한 카드로 접으므로 서로 겹치지 않게 준다.
+  db.prepare(`UPDATE news_articles SET published_at=?, summary_quality='full',
+    title=hex(randomblob(8))||' '||hex(randomblob(8)), summary='1) '||hex(randomblob(12))||' '||hex(randomblob(12))
+    WHERE id BETWEEN 5901 AND 5960`).run(day);
+  const response = await articles({ request: new Request('https://newsbrief.test/api/news/articles?limit=200&view=latest'), env: { DB: d1(db, []) } });
+  const items = (await response.json()).items.filter(item => item.published_at === day);
+  assert.ok(items.length > 10);
+  const ids = items.map(item => Number(item.id));
+  assert.deepEqual(ids, [...ids].sort((left, right) => left - right));
 });
