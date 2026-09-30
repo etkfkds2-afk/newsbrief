@@ -1,5 +1,6 @@
-import { ensureNewsDb, isCollectorAuthorized, json } from '../../_lib/news-db.js';
+import { ensureNewsDb, ensureNewsReadIndexes, isCollectorAuthorized, json } from '../../_lib/news-db.js';
 import { CONTENT_QUALITY_FILTERS } from './articles.js';
+import { d1DailyReadLimit, d1RowsReadToday, meterD1 } from '../../_lib/news-d1-meter.js';
 import { isSameIssueTitle } from '../../_lib/news-dedup.js';
 import {
   classifyIssues, isStandaloneEventArticle, rejectConflictingExistingMatches,
@@ -108,8 +109,18 @@ export function enforceIssueRules(groups, articles, category) {
 
 export async function onRequestPost({ request, env }) {
   if (!isCollectorAuthorized(request, env)) return json({ error: 'Unauthorized' }, 401);
+  let meter;
   try {
     await ensureNewsDb(env);
+    // D1 하루 읽기 퓨즈(news-d1-meter.js). collect.js 와 같다.
+    const d1ReadToday = await d1RowsReadToday(env);
+    const d1ReadLimit = d1DailyReadLimit(env);
+    if (d1ReadToday >= d1ReadLimit) {
+      return json({ ok: true, status: 'skipped', skipped: 'd1_daily_read_limit', d1_rows_read_today: d1ReadToday, d1_daily_read_limit: d1ReadLimit });
+    }
+    meter = meterD1(env);
+    env = meter.env;
+    await ensureNewsReadIndexes(env);
     const url = new URL(request.url);
     const category = url.searchParams.get('category') || '바둑';
     const resetIssues = url.searchParams.get('reset') === '1';
@@ -398,5 +409,7 @@ export async function onRequestPost({ request, env }) {
     });
   } catch (error) {
     return json({ ok: false, error: error.message }, 500);
+  } finally {
+    await meter?.save();
   }
 }

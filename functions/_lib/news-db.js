@@ -164,6 +164,48 @@ export function json(data, status = 200) {
   });
 }
 
+// 읽기를 줄이는 인덱스. 거의 모든 조회가 "최근 N시간/일"을 아래 식으로 묻는데, 식에
+// 인덱스가 없으면 조건이 있어도 매번 기사 전체를 훑는다. 기사가 쌓이면서 D1 무료 한도
+// (계정 전체 하루 읽기 500만 줄)를 넘겼고, 같은 계정의 대관관리까지 멈췄다(2026-09-30
+// 실측 하루 1,600만 줄). 조회 조건은 이 식과 글자까지 같아야 인덱스를 탄다.
+//
+// NEWS_SCHEMA 묶음에 넣지 않는다. 이미 있는 표에 인덱스를 만들면 행 수만큼 **쓰기**가
+// 잡히는데, 무료 쓰기 한도도 계정 전체 하루 10만 줄이다. 묶음에 넣으면 그 한도에 걸릴 때
+// 묶음 전체가 실패하고, 그러면 수집이 매번 실패하며 되풀이된다. 그래서 호출마다 없는
+// 것 하나만 만들고, 실패해도 수집은 그대로 한다(인덱스가 없어도 결과는 같고 느릴 뿐이다).
+// 작은 표부터 만든다.
+export const NEWS_READ_INDEXES = [
+  ['idx_news_popularity_collected', 'CREATE INDEX IF NOT EXISTS idx_news_popularity_collected ON news_popularity(datetime(collected_at))'],
+  ['idx_news_popular_items_collected', 'CREATE INDEX IF NOT EXISTS idx_news_popular_items_collected ON news_popular_items(datetime(collected_at))'],
+  // 재요약 후보(summary_quality='none')만 모아 둔다. 없으면 후보 몇 건을 찾으려고 매 수집이 전체를 훑는다.
+  ['idx_news_articles_unsummarized', "CREATE INDEX IF NOT EXISTS idx_news_articles_unsummarized ON news_articles(id) WHERE summary_quality='none'"],
+  ['idx_news_articles_when', "CREATE INDEX IF NOT EXISTS idx_news_articles_when ON news_articles(datetime(COALESCE(NULLIF(published_at,''),fetched_at)))"],
+  ['idx_news_articles_fetched', 'CREATE INDEX IF NOT EXISTS idx_news_articles_fetched ON news_articles(datetime(fetched_at))']
+];
+
+let readIndexesReadyFor;
+
+// 없는 읽기 인덱스를 **하나만** 만든다. 다 있으면 이 isolate 에서는 다시 묻지 않는다.
+// 결과는 진단용이다 - 만든 것이 없고 남은 것도 없으면 null.
+export async function ensureNewsReadIndexes(env) {
+  const database = env.DB?.__raw || env.DB;
+  if (readIndexesReadyFor === database) return null;
+  try {
+    const existing = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_news_%'").all();
+    const have = new Set((existing?.results || []).map(row => row.name));
+    const missing = NEWS_READ_INDEXES.filter(([name]) => !have.has(name));
+    if (!missing.length) {
+      readIndexesReadyFor = database;
+      return null;
+    }
+    const [name, sql] = missing[0];
+    await env.DB.prepare(sql).run();
+    return { created: name, remaining: missing.length - 1 };
+  } catch (error) {
+    return { error: String(error?.message || error).slice(0, 200) };
+  }
+}
+
 let schemaReadyFor;
 let schemaReadyPromise;
 

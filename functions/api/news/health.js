@@ -1,4 +1,5 @@
 import { json } from '../../_lib/news-db.js';
+import { d1DailyReadLimit, d1RowsReadToday, meterD1 } from '../../_lib/news-d1-meter.js';
 import {
   claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd, koreaDayKey
 } from '../../_lib/news-ai-budget.js';
@@ -22,6 +23,11 @@ const filterHitColumns = CONTENT_QUALITY_FILTERS
   .join(', ');
 
 export async function onRequestGet({ env }) {
+  // health 는 막지 않는다 - 퓨즈가 걸렸는지 알려 주는 곳이 health 다. 대신 자기 읽기도 장부에 넣는다.
+  const d1ReadToday = await d1RowsReadToday(env);
+  const d1ReadLimit = d1DailyReadLimit(env);
+  const meter = meterD1(env);
+  env = meter.env;
   try {
     const [run, automaticRun, counts, missingTime, dateOnlyTime, futureTime, stateRows, exhausted, storageResult, badukStored,
       badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits, brokenUrls] = await Promise.all([
@@ -110,7 +116,9 @@ export async function onRequestGet({ env }) {
         FROM news_articles
         WHERE summary_quality='full' AND category<>'바둑'
           AND datetime(COALESCE(NULLIF(published_at,''),fetched_at))>=datetime('now','-24 hours')
-        ORDER BY id DESC LIMIT 60`).all(),
+        -- +id: 순서는 id 그대로다. 그냥 id 로 두면 SQLite 가 id 순으로 기사 전체를 훑는 길을 고르고,
+        -- 24시간 안 기사가 60건이 안 되는 날은 끝까지 읽는다. +를 붙이면 위 시간 인덱스로 찾고 정렬한다.
+        ORDER BY +id DESC LIMIT 60`).all(),
       // 저장은 됐는데 화면 규칙이 버리는 바둑 기사. 지금까지 어느 검사도 저장과
       // 화면을 견주지 않았다 - health는 DB 건수만 세고, 화면 필터는 읽을 때만
       // 돌기 때문이다. 그래서 사람이 목록을 직접 세어 봐야만 드러났다
@@ -378,6 +386,9 @@ export async function onRequestGet({ env }) {
       claude_under_hard_limit: monthlySpend < claudeMonthlyHardLimitMicroUsd(now),
       // 하루에 새로 재시도 상한에 닿은 건수. 누적이 아니라 속도를 본다(위 쿼리 주석).
       summary_exhausted_below_threshold: Number(exhausted?.count || 0) < 15,
+      // 퓨즈가 걸리면 그날 수집이 멈춘다. 정상 사용량은 한도보다 훨씬 작으므로 걸렸다면
+      // 어딘가 다시 기사 전체를 훑고 있다는 뜻이다(news-d1-meter.js).
+      d1_reads_under_daily_limit: d1ReadToday < d1ReadLimit,
       database_storage_below_70_percent: databaseStoragePercent === null || databaseStoragePercent < 70
     };
     const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
@@ -439,6 +450,9 @@ export async function onRequestGet({ env }) {
         claude_daily_allowance_micro_usd: dailyAllowance,
         summary_exhausted: Number(exhausted?.count || 0),
         database_bytes: databaseBytes || null,
+        // 오늘(UTC) newsbrief 가 D1 에서 읽은 줄 수. 이 health 호출 전까지의 값이다.
+        d1_rows_read_today: d1ReadToday,
+        d1_daily_read_limit: d1ReadLimit,
         database_storage_percent: databaseStoragePercent === null ? null : Number(databaseStoragePercent.toFixed(2))
       }
     // The endpoint itself is reachable and D1 queries succeeded. Content
@@ -450,5 +464,7 @@ export async function onRequestGet({ env }) {
     }, 200);
   } catch (error) {
     return json({ ok: false, failures: ['health_check_error'], error: error.message }, 503);
+  } finally {
+    await meter.save();
   }
 }

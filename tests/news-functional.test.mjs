@@ -1351,7 +1351,9 @@ test('Cloudflare Pages 배포는 유지보수 중인 Wrangler action을 사용�
 
 test('운영 테이블은 장기 실행에도 크기가 제한된다', async () => {
   const collector = await readFile(new URL('../functions/api/news/collect.js', import.meta.url), 'utf8');
-  assert.match(collector, /SELECT id FROM news_runs ORDER BY id DESC LIMIT 500/);
+  // 2026-09-30: NOT IN (... LIMIT 500) 은 표를 두 번 훑어서 경계 id 아래를 지우는 모양으로 바꿨다.
+  // 남는 행이 최근 500건인 것은 news-d1-reads.test.mjs 가 실제로 돌려 확인한다.
+  assert.match(collector, /SELECT id FROM news_runs ORDER BY id DESC LIMIT 1 OFFSET 500/);
   assert.match(collector, /datetime\('now','-60 days'\)/);
 });
 

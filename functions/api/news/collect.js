@@ -2,8 +2,9 @@ import {
   isRejectedTitle, normalizeText, publishableSummary, summaryRejectionReason
 } from '../../_lib/news-summary.js';
 import { makeBestSummary } from '../../_lib/news-ai-summary.js';
+import { d1DailyReadLimit, d1RowsReadToday, meterD1 } from '../../_lib/news-d1-meter.js';
 import {
-  canonicalUrl, ensureNewsDb, isCollectorAuthorized, json, runMessage, sha256
+  canonicalUrl, ensureNewsDb, ensureNewsReadIndexes, isCollectorAuthorized, json, runMessage, sha256
 } from '../../_lib/news-db.js';
 import { recordClaudeUsage } from '../../_lib/news-ai-budget.js';
 import { createCallBudget, SUBREQUESTS_PER_CANDIDATE } from '../../_lib/news-call-budget.js';
@@ -1277,19 +1278,33 @@ async function collect(env, {
 export async function onRequestPost({ request, env }) {
   if (!isCollectorAuthorized(request, env)) return json({ ok: false, error: 'Unauthorized' }, 401);
   let runId;
+  let meter;
   try {
     await ensureNewsDb(env);
+    // D1 하루 읽기 퓨즈(news-d1-meter.js). 넘었으면 오늘은 아무것도 읽지 않고 끝낸다.
+    // 200 으로 돌려준다 - 5xx 면 curl --retry 와 수집 스크립트가 같은 호출을 되풀이한다.
+    const d1ReadToday = await d1RowsReadToday(env);
+    const d1ReadLimit = d1DailyReadLimit(env);
+    if (d1ReadToday >= d1ReadLimit) {
+      return json({ ok: true, status: 'skipped', skipped: 'd1_daily_read_limit', d1_rows_read_today: d1ReadToday, d1_daily_read_limit: d1ReadLimit });
+    }
+    meter = meterD1(env);
+    env = meter.env;
+    const readIndexes = await ensureNewsReadIndexes(env);
     await env.DB.prepare(`UPDATE news_runs SET finished_at=?,status='error',message='이전 수집이 비정상 종료됨'
       WHERE status='running' AND datetime(started_at) < datetime('now','-10 minutes')`).bind(new Date().toISOString()).run();
     // Bound operational tables so years of scheduled runs do not gradually
     // turn every status/popularity query into an ever-growing scan.
     await env.DB.batch([
-      env.DB.prepare(`DELETE FROM news_runs WHERE id NOT IN
-        (SELECT id FROM news_runs ORDER BY id DESC LIMIT 500)`),
+      // 최근 500건보다 오래된 것. NOT IN 은 표를 두 번 훑는다 - 경계 id 하나만 찾아 그 아래를 지운다.
+      env.DB.prepare(`DELETE FROM news_runs WHERE id <=
+        (SELECT id FROM news_runs ORDER BY id DESC LIMIT 1 OFFSET 500)`),
       env.DB.prepare("DELETE FROM news_popularity WHERE datetime(collected_at)<datetime('now','-60 days')"),
       env.DB.prepare("DELETE FROM news_popular_items WHERE datetime(collected_at)<datetime('now','-60 days')"),
-      env.DB.prepare(`DELETE FROM news_summary_attempts WHERE url_key IN
-        (SELECT url_key FROM news_articles WHERE summary_quality='full')`)
+      // 요약이 붙은 기사의 시도 기록. IN (SELECT ... FROM news_articles) 은 매 수집마다
+      // 기사 전체를 훑었다. 시도 기록(수백 건) 쪽에서 기사를 url_key 로 하나씩 찾으면 같은 행이 지워진다.
+      env.DB.prepare(`DELETE FROM news_summary_attempts WHERE EXISTS
+        (SELECT 1 FROM news_articles a WHERE a.url_key=news_summary_attempts.url_key AND a.summary_quality='full')`)
     ]);
     const started = new Date().toISOString();
     const run = await env.DB.prepare("INSERT INTO news_runs(started_at,status) VALUES(?,'running') RETURNING id").bind(started).first();
@@ -1374,6 +1389,7 @@ export async function onRequestPost({ request, env }) {
     const badukOnly = requestUrl.searchParams.get('baduk_only') === '1';
     const result = await collect(env, { backfill, repair, forceRetry, generalBoost, badukOnly, googleDiscoveries });
     result.diagnostics.mode = runSource;
+    if (readIndexes) result.diagnostics.d1_read_index = readIndexes;
     const warnings = Object.entries(result.diagnostics)
       .filter(([key, value]) => /_error$/.test(key) && value)
       .map(([key, value]) => `${key}: ${value}`);
@@ -1389,5 +1405,7 @@ export async function onRequestPost({ request, env }) {
         .bind(new Date().toISOString(), String(error.message || error).slice(0, 500), runId).run();
     }
     return json({ ok: false, error: error.message }, 500);
+  } finally {
+    await meter?.save();
   }
 }

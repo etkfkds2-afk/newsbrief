@@ -199,7 +199,8 @@ export async function repairGeneralArticleTimes(env, limit = 10) {
           AND (TRIM(published_at)='' OR published_at GLOB '????-??-??')
           AND NOT EXISTS(SELECT 1 FROM news_time_checks t WHERE t.url_key=news_articles.url_key))
         OR datetime(published_at)>datetime('now','+2 hours'))
-    ORDER BY id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
+    -- +id: 순서는 같다. 없으면 id 순 전체 훑기를 골라 30일 인덱스를 안 탄다(health.js 같은 이유).
+    ORDER BY +id LIMIT ?`).bind(cursor, Math.min(Math.max(Number(limit) || 10, 1), 10)).all();
   const candidates = rows.results || [];
   if (!candidates.length) {
     await env.DB.prepare(`INSERT INTO news_state(key,value) VALUES(?,0)
