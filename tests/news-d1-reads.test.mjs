@@ -168,9 +168,10 @@ test('하루 읽기 한도에 닿으면 수집과 이슈 분류는 읽지 않고
   assert.notEqual((await raised.json()).skipped, 'd1_daily_read_limit');
 });
 
-test('읽기 인덱스는 수집마다 하나씩 만들고, 만들다 실패해도 수집은 그대로 한다', async () => {
+test('읽기 인덱스는 첫 수집에서 차례로 다 만들고, 만들다 실패해도 수집은 그대로 한다', async () => {
   // 이미 있는 표에 인덱스를 만들면 행 수만큼 쓰기가 잡힌다(무료 하루 10만 줄, 계정 공용).
-  // 한 번에 다 만들다 한도에 걸리면 수집이 매번 실패하며 되풀이된다.
+  // 스키마 묶음에 넣으면 한도에 걸릴 때 묶음 전체가 실패해 수집이 매번 실패한다.
+  // 호출마다 하나씩 만들면 인덱스 없는 상태가 수집 열 번 이어져 그날 퓨즈가 걸릴 수 있다.
   const db = new DatabaseSync(':memory:');
   db.exec(NEWS_SCHEMA);
   const made = () => {
@@ -178,11 +179,9 @@ test('읽기 인덱스는 수집마다 하나씩 만들고, 만들다 실패해�
     return NEWS_READ_INDEXES.filter(([name]) => names.has(name)).length;
   };
   assert.equal(made(), 0);
-  for (let call = 1; call <= NEWS_READ_INDEXES.length; call += 1) {
-    const response = await withNoNetwork(() => collect({ request: collectorRequest('/api/news/collect?source=scheduled'), env: { DB: d1(db, []), NEWSBRIEF_COLLECT_TOKEN: 't' } }));
-    assert.equal(response.status, 200);
-    assert.equal(made(), call, `${call}번째 수집 뒤`);
-  }
+  const firstCollect = await withNoNetwork(() => collect({ request: collectorRequest('/api/news/collect?source=scheduled'), env: { DB: d1(db, []), NEWSBRIEF_COLLECT_TOKEN: 't' } }));
+  assert.equal(firstCollect.status, 200);
+  assert.equal(made(), NEWS_READ_INDEXES.length, '첫 수집 한 번에 다 만든다');
 
   const bare = new DatabaseSync(':memory:');
   bare.exec(NEWS_SCHEMA);
@@ -242,4 +241,61 @@ test('기사 목록은 정렬 값이 같은 기사를 id 오름차순으로 낸�
   assert.ok(items.length > 10);
   const ids = items.map(item => Number(item.id));
   assert.deepEqual(ids, [...ids].sort((left, right) => left - right));
+});
+
+test('인덱스 만들기가 실패하면 그날은 다시 시도하지 않고 다음 날 다시 한다', async () => {
+  // CREATE INDEX 는 표 전체를 읽는다. 쓰기 한도로 실패한 것을 매 수집이 되풀이하면 그날
+  // 읽기가 계속 새고, 실패한 쿼리는 퓨즈 장부에도 안 잡힌다.
+  const db = new DatabaseSync(':memory:');
+  db.exec(NEWS_SCHEMA);
+  let attempts = 0;
+  const failing = d1(db, []);
+  const prepare = failing.prepare;
+  failing.prepare = sql => {
+    const statement = prepare(sql);
+    if (!NEWS_READ_INDEXES.some(([, create]) => create === sql)) return statement;
+    return { ...statement, run: async () => { attempts += 1; throw new Error('D1_ERROR: exceeded daily rows written limit'); } };
+  };
+  const env = { DB: failing };
+  const today = new Date('2026-10-01T03:00:00Z');
+  const first = await ensureNewsReadIndexes(env, today);
+  assert.match(first.error, /rows written/);
+  const again = await ensureNewsReadIndexes(env, new Date('2026-10-01T23:59:00Z'));
+  assert.equal(again.reason, 'failed_today');
+  assert.equal(attempts, 1, '같은 UTC 날에는 한 번만 시도한다');
+  const nextDay = await ensureNewsReadIndexes(env, new Date('2026-10-02T00:01:00Z'));
+  assert.match(nextDay.error, /rows written/);
+  assert.equal(attempts, 2, 'UTC 자정이 지나면 다시 시도한다');
+
+  // "시도했다" 표시조차 못 적으면(쓰기 한도가 이미 찼다) 만들기를 시도하지 않는다.
+  const full = new DatabaseSync(':memory:');
+  full.exec(NEWS_SCHEMA);
+  let created = 0;
+  const writeBlocked = d1(full, []);
+  const prepareBlocked = writeBlocked.prepare;
+  writeBlocked.prepare = sql => {
+    const statement = prepareBlocked(sql);
+    if (/^INSERT INTO news_state/.test(sql)) return { ...statement, bind: () => ({ run: async () => { throw new Error('D1_ERROR: exceeded daily rows written limit'); } }) };
+    if (NEWS_READ_INDEXES.some(([, create]) => create === sql)) return { ...statement, run: async () => { created += 1; } };
+    return statement;
+  };
+  const blocked = await ensureNewsReadIndexes({ DB: writeBlocked }, today);
+  assert.match(blocked.error, /rows written/);
+  assert.equal(created, 0);
+
+  // 앞의 것이 성공하고 중간에 실패하면 거기서 멈추고, 만든 것은 남는다.
+  const partial = new DatabaseSync(':memory:');
+  partial.exec(NEWS_SCHEMA);
+  const breakAt = NEWS_READ_INDEXES[3][1];
+  const midFail = d1(partial, []);
+  const prepareMid = midFail.prepare;
+  midFail.prepare = sql => sql === breakAt
+    ? { ...prepareMid(sql), run: async () => { throw new Error('D1_ERROR: exceeded daily rows written limit'); } }
+    : prepareMid(sql);
+  const stopped = await ensureNewsReadIndexes({ DB: midFail }, today);
+  assert.deepEqual(stopped.created, NEWS_READ_INDEXES.slice(0, 3).map(([name]) => name));
+  assert.match(stopped.error, /rows written/);
+  // 다음 날에는 남은 것을 이어서 만든다.
+  const resumed = await ensureNewsReadIndexes({ DB: d1(partial, []) }, new Date('2026-10-02T00:01:00Z'));
+  assert.deepEqual(resumed.created, NEWS_READ_INDEXES.slice(3).map(([name]) => name));
 });

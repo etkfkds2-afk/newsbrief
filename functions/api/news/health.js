@@ -1,4 +1,4 @@
-import { json } from '../../_lib/news-db.js';
+import { ensureNewsReadIndexes, json } from '../../_lib/news-db.js';
 import { d1DailyReadLimit, d1RowsReadToday, meterD1 } from '../../_lib/news-d1-meter.js';
 import {
   claudeMonthlyHardLimitMicroUsd, claudeMonthlyTargetMicroUsd, dailyAllowanceMicroUsd, koreaDayKey
@@ -29,6 +29,9 @@ export async function onRequestGet({ env }) {
   const meter = meterD1(env);
   env = meter.env;
   try {
+    // 워치독은 수집보다 health 를 먼저 부른다. 인덱스가 아직 없으면 아래 조회가 기사 전체를
+    // 읽으므로 먼저 불린 쪽이 만든다(news-db.js). 실패해도 health 는 그대로 한다.
+    await ensureNewsReadIndexes(env);
     const [run, automaticRun, counts, missingTime, dateOnlyTime, futureTime, stateRows, exhausted, storageResult, badukStored,
       badukPortal, recentRuns, paidSameDay, badukTitles, badukFilterHits, brokenUrls] = await Promise.all([
       env.DB.prepare('SELECT started_at,finished_at,status,message FROM news_runs ORDER BY id DESC LIMIT 1').first(),

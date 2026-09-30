@@ -171,9 +171,9 @@ export function json(data, status = 200) {
 //
 // NEWS_SCHEMA 묶음에 넣지 않는다. 이미 있는 표에 인덱스를 만들면 행 수만큼 **쓰기**가
 // 잡히는데, 무료 쓰기 한도도 계정 전체 하루 10만 줄이다. 묶음에 넣으면 그 한도에 걸릴 때
-// 묶음 전체가 실패하고, 그러면 수집이 매번 실패하며 되풀이된다. 그래서 호출마다 없는
-// 것 하나만 만들고, 실패해도 수집은 그대로 한다(인덱스가 없어도 결과는 같고 느릴 뿐이다).
-// 작은 표부터 만든다.
+// 묶음 전체가 실패하고, 그러면 수집이 매번 실패하며 되풀이된다. 그래서 따로 하나씩
+// 만들고, 실패해도 수집은 그대로 한다(인덱스가 없어도 결과는 같고 느릴 뿐이다).
+// 쓰기가 적은 부분 인덱스부터 만든다.
 export const NEWS_READ_INDEXES = [
   ['idx_news_popularity_collected', 'CREATE INDEX IF NOT EXISTS idx_news_popularity_collected ON news_popularity(datetime(collected_at))'],
   // 수집 첫머리의 "비정상 종료된 실행" 표시가 status='running' 인 행(보통 0~1건)만 읽게 한다.
@@ -196,11 +196,22 @@ export const NEWS_READ_INDEXES = [
 
 let readIndexesReadyFor;
 
-// 없는 읽기 인덱스를 **하나만** 만든다. 다 있으면 이 isolate 에서는 다시 묻지 않는다.
+// 없는 읽기 인덱스를 **차례로 전부** 만든다. 다 있으면 이 isolate 에서는 다시 묻지 않는다.
 // 결과는 진단용이다 - 만든 것이 없고 남은 것도 없으면 null.
-export async function ensureNewsReadIndexes(env) {
+//
+// 한 번에 다 만든다. 인덱스가 없는 동안은 쿼리가 예전처럼 기사 전체를 읽는데, 호출마다
+// 하나씩 만들면 그 상태가 수집 열 번(약 아홉 시간) 이어져 그날 퓨즈(news-d1-meter.js)가
+// 걸리고 수집이 멈출 수 있다.
+//
+// 실패하면 거기서 멈추고, 실패한 인덱스는 그날(UTC) 다시 시도하지 않는다. CREATE INDEX 는
+// 표 전체를 읽으므로, 쓰기 한도에 걸려 실패한 것을 매 수집이 되풀이하면 그날 읽기가 계속
+// 샌다(실패한 쿼리는 퓨즈 장부에도 안 잡힌다). "오늘 시도했다"는 표시는 만들기 **전에**
+// 적는다 - 쓰기 한도로 실패했다면 실패 뒤의 쓰기도 실패하기 때문이다. 표시를 못 적으면
+// (이미 쓰기 한도가 찼다) 만들지 않는다. D1 한도는 UTC 자정에 풀리므로 날짜도 UTC 로 센다.
+export async function ensureNewsReadIndexes(env, now = new Date()) {
   const database = env.DB?.__raw || env.DB;
   if (readIndexesReadyFor === database) return null;
+  const created = [];
   try {
     const existing = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_news_%'").all();
     const have = new Set((existing?.results || []).map(row => row.name));
@@ -209,11 +220,25 @@ export async function ensureNewsReadIndexes(env) {
       readIndexesReadyFor = database;
       return null;
     }
-    const [name, sql] = missing[0];
-    await env.DB.prepare(sql).run();
-    return { created: name, remaining: missing.length - 1 };
+    const today = Number(now.toISOString().slice(0, 10).replaceAll('-', ''));
+    for (const [name, sql] of missing) {
+      const attemptKey = `read_index_attempt:${name}`;
+      const attempt = await env.DB.prepare('SELECT value FROM news_state WHERE key=?').bind(attemptKey).first();
+      if (Number(attempt?.value) === today) {
+        return { created, skipped: name, reason: 'failed_today', remaining: missing.length - created.length };
+      }
+      await env.DB.prepare('INSERT INTO news_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+        .bind(attemptKey, today).run();
+      // 만드는 읽기는 퓨즈 장부에 넣지 않는다(감싸기 전 DB 로 돌린다). 한 번만 드는 비용이라
+      // 기사가 많으면 이것만으로 첫날 퓨즈를 절반 넘게 먹어, 정상인데 수집이 멈출 수 있다.
+      // 퓨즈는 매일 되풀이되는 폭주를 막는 것이다.
+      await database.prepare(sql).run();
+      created.push(name);
+    }
+    readIndexesReadyFor = database;
+    return { created, remaining: 0 };
   } catch (error) {
-    return { error: String(error?.message || error).slice(0, 200) };
+    return { created, error: String(error?.message || error).slice(0, 200) };
   }
 }
 
