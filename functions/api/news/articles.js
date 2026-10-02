@@ -1,5 +1,5 @@
 import { json, userId } from '../../_lib/news-db.js';
-import { normalizeText, reorderGeneralSummary } from '../../_lib/news-summary.js';
+import { normalizeText as normalizeTextUncached, reorderGeneralSummary as reorderGeneralSummaryUncached } from '../../_lib/news-summary.js';
 import { isBadukDisplayRelevant, isBadukRelevant } from '../../_lib/baduk-relevance.js';
 import {
   isSameIssueTitle, isSameStoryPrepared, sharesKeywordsPrepared, storyFingerprint
@@ -9,6 +9,34 @@ import {
   BADUK_PROMO_OUTLETS, BADUK_PROMO_TITLE_PATTERNS, BLOCKED_HOST_SQL_FILTERS
 } from '../../_lib/news-blocklist.js';
 import { hasLegalCaseConflict, isStandaloneEventArticle, standaloneBadukIssueTitle } from '../../_lib/news-issue-classify.js';
+
+// 같은 입력이면 같은 출력인 두 함수를 isolate 안에서 기억해 둔다. 목록 요청마다 같은 기사
+// 수백 건의 제목·요약에 정규식 수십 개를 다시 돌리는 것이 이 API CPU 의 4할이었다
+// (2026-10-02 프로파일). 무료 요금제의 요청당 CPU 10ms 를 넘으면 Cloudflare 가 요청을 끊고,
+// 화면은 몇 분 동안 목록을 못 받는다. 결과는 그대로이고 CPU 만 준다. 크기는 묶어 둔다.
+const MEMO_LIMIT = 6000;
+const memo = compute => {
+  const cache = new Map();
+  return key => {
+    if (cache.has(key)) return cache.get(key);
+    const value = compute(key);
+    if (cache.size >= MEMO_LIMIT) cache.clear();
+    cache.set(key, value);
+    return value;
+  };
+};
+const normalizeTextMemo = memo(normalizeTextUncached);
+// 문자열일 때만 기억을 쓴다. 다른 값은 원래 함수가 받는 그대로 넘긴다.
+const normalizeText = value => typeof value === 'string' ? normalizeTextMemo(value) : normalizeTextUncached(value);
+// 키 = 제목 길이:제목+요약. 길이를 앞에 두어 키에서 둘을 정확히 되살린다.
+const reorderMemo = memo(key => {
+  const colon = key.indexOf(':');
+  const end = colon + 1 + Number(key.slice(0, colon));
+  return reorderGeneralSummaryUncached(key.slice(end), key.slice(colon + 1, end));
+});
+const reorderGeneralSummary = (summary, title) => typeof summary === 'string' && typeof title === 'string'
+  ? reorderMemo(`${title.length}:${title}${summary}`)
+  : reorderGeneralSummaryUncached(summary, title);
 
 const CATEGORIES = new Set(['정치', '경제', '사회', '생활/문화', '세계', '바둑', '기타']);
 
